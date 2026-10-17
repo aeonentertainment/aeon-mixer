@@ -32,7 +32,7 @@ jobs:
   review:
     # Drafts get no review, and a fork's PR has no secrets to review with.
     if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     permissions:
       contents: read # actions/checkout
@@ -54,7 +54,7 @@ jobs:
       # The action fetches the PR branch with the token checkout leaves in the
       # working tree before it installs its own, so checkout must persist it.
       - if: steps.token.outputs.present == 'true'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: useblacksmith/checkout@v1 # v6
       - if: steps.token.outputs.present == 'true'
         uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1
         with:
