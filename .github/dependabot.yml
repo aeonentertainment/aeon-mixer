@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dev:
+        dependency-type: development
+    # Matches pnpm's minimumReleaseAge: a release must be a day old first.
+    cooldown:
+      default-days: 1
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,43 @@
+{
+  "name": "@aeon/mixer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Low-latency LAN audio mixer for Aeon Karaoke: phone and house mics, a backing track, one mix to the room.",
+  "bugs": {
+    "url": "https://github.com/aeonentertainment/aeon-mixer/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aeonentertainment/aeon-mixer.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "vp check",
+    "test": "vp test",
+    "prepare": "vp config --no-agent"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vite-plus": "catalog:"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.14.0",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": "^24.0.0"
+  }
+}

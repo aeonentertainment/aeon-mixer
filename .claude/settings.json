@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(vp check)",
+      "Bash(vp check *)",
+      "Bash(vp test)",
+      "Bash(vp test *)",
+      "Bash(vp lint *)",
+      "Bash(vp fmt *)",
+      "Bash(vp pack)",
+      "Bash(vp install)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh issue view *)"
+    ],
+    "ask": ["Bash(rm -rf *)", "Bash(git push *)"],
+    "deny": ["Read(./.env)", "Read(./.env.*)", "Bash(git push --force *)", "Bash(git push -f *)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-file.sh",
+            "args": [],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

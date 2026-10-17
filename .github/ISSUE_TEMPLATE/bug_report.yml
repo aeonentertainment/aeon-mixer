@@ -1,0 +1,41 @@
+name: Bug report
+description: Broken behaviour, a regression, a crash, or audio that is wrong.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A minimal, deterministic repro. For audio, name the ingest kind and the fixture.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include a measurement when the bug is latency or timing.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: main @ abc1234
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS 26, Node 24.12, device or desktop, network
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant output only. Redact anything private.
+      render: shell

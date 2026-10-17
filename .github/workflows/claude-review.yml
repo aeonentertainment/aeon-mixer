@@ -1,0 +1,69 @@
+# Claude reviews each ready pull request against AGENTS.md, on the author's own
+# Claude subscription, by running the repo's /pr-review skill. The same skill
+# runs locally as /pr-review <number>.
+#
+# Both actions are pinned to reviewed commits because this job holds an
+# author's personal token, and the session can only write through the action's
+# comment tools, which redact secrets. Tag mode also grants file edits, git and
+# a push wrapper; --disallowedTools takes them back, and deny beats allow. The
+# wrapper's path names the pinned SHA, so update it with the pin.
+#
+# One review per PR: it runs when the PR opens, leaves draft or is reopened,
+# never on a push. Close and reopen a PR to review it again.
+#
+# Required repo secrets, one per author, each from `claude setup-token` run by
+# that person: CLAUDE_CODE_OAUTH_TOKEN_<github login>, looked up
+# case-insensitively. A PR whose author has none is skipped with a notice,
+# never failed. A login with a hyphen cannot be a secret name and needs a
+# mapping here first.
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  review:
+    # Drafts get no review, and a fork's PR has no secrets to review with.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read # actions/checkout
+      pull-requests: write # the review comments
+      issues: read # the linked issue
+      id-token: write # the action's GitHub App token exchange
+    steps:
+      - id: token
+        env:
+          TOKEN: ${{ secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', github.event.pull_request.user.login)] }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No CLAUDE_CODE_OAUTH_TOKEN_${AUTHOR} secret, so no Claude review for this PR."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      # The action fetches the PR branch with the token checkout leaves in the
+      # working tree before it installs its own, so checkout must persist it.
+      - if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - if: steps.token.outputs.present == 'true'
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', github.event.pull_request.user.login)] }}
+          # Tag mode: the action opens the Claude comment the summary is written into.
+          track_progress: true
+          prompt: "/pr-review ${{ github.event.pull_request.number }}"
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 40
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment"
+            --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash(git:*),Bash(/home/runner/work/_actions/anthropics/claude-code-action/f27be6b65a4652f08a2ba3cff79114829b588967/scripts/git-push.sh:*),mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files"

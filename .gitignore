@@ -1,0 +1,18 @@
+node_modules
+dist
+*.log
+*.tsbuildinfo
+.DS_Store
+
+# Vite+ generated hook dispatcher; vp config recreates it.
+.vite-hooks/_
+
+# Secrets and personal config stay local.
+.env
+.env.*
+!.env.example
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Agent scratch never ships. Keep plans in issues.
+.plans/
