@@ -1,12 +1,11 @@
 # Aeon Mixer
 
 A low-latency audio mixer for [Aeon Karaoke](https://github.com/aeonentertainment/aeon-karaoke).
-Phones on the LAN are the microphones. The mixer takes those mic streams, house mics and a
-backing track, and plays one mix to the room. Aeon Karaoke's device service will depend on this
-package in place of its GStreamer engine, so the public API here is a contract, not an experiment.
-
-This file is the entry point for any agent working here. The repo is at the design stage: `src/`
-holds a stub, and the first real work is the design decision in `docs/decisions/`.
+Aeon Karaoke can use both wired and wireless microphones, but introduces a new concept of being
+able to use a mobile device on the LAN as microphones. The mixer takes those mic streams, house
+mics and a backing track, and plays one mix to the room. Aeon Karaoke's device service will depend
+on this package in place of its GStreamer engine, so the public API here is a contract, not an
+experiment.
 
 ## Glossary
 
