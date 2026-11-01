@@ -16,9 +16,9 @@ One process hosts one engine. The engine opens the audio device once, runs the a
 and renders one block at a time for as long as the process lives. A mixer is the graph for one
 song: slots for the singers, a backing path for the stems, a master that sums them. The
 control thread builds a mixer, hands it to the audio thread, and the audio thread fades it in
-at a block boundary. When the song ends the control thread hands over the silent graph, or the
-next song's, and gets the old one back to drop. Between songs the engine still renders, so
-reaction sounds play and the device never reopens.
+at a block boundary. When the song ends the control thread hands over the silent graph and gets
+the old one back to drop; the next song's graph comes in the same way when its start is called.
+Between songs the engine still renders, so reaction sounds play and the device never reopens.
 
 ```
 control thread (Node)                                  audio thread (OS callback)
@@ -48,27 +48,33 @@ Three other threads exist and are not special: the network thread owns the UDP s
 worker thread decodes stems and runs the pre-render, the events thread drains the event queue
 into Node.
 
-Everything that crosses between the control thread and the audio thread crosses one of four
-ways.
+Everything that crosses to or from the audio thread crosses one of five ways. Every ring has one
+producer and one consumer.
 
-| Crossing   | Mechanism                              | Direction        | Carries                                                                                     |
-| ---------- | -------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------- |
-| Parameters | triple buffer of a fixed-size `Params` | control to audio | gains, pans, mute, solo, effect knobs, stem gains, guide offset                             |
-| Commands   | SPSC ring of `Command`                 | control to audio | `Swap(Box<Graph>)`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt`, each with an id |
-| Events     | SPSC ring of `Event`                   | audio to control | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`      |
-| Retired    | SPSC ring of `Box<Graph>`              | audio to control | graphs the audio thread no longer holds, dropped on the control thread                      |
+| Crossing   | Mechanism                              | Direction                                                         | Carries                                                                                                    |
+| ---------- | -------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Parameters | triple buffer of a fixed-size `Params` | control to audio                                                  | gains, pans, mute, solo, effect knobs, stem gains, guide offsets                                           |
+| Commands   | SPSC ring of `Command`                 | control to audio                                                  | `Swap`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt` with an id; `SetGuide`, `ResetSlot` without |
+| Events     | SPSC ring of `Event`                   | audio to control                                                  | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`                     |
+| Retired    | SPSC ring of `Retired`                 | audio to control                                                  | graphs and guides the audio thread no longer holds, dropped on the control thread                          |
+| Audio      | SPSC rings of f32 blocks               | control to audio for push voices, audio to network for the return | PCM, one block at a time                                                                                   |
 
 Rules that follow:
 
 - `Params` is `Copy` and fixed-size, arrays not vectors, so the triple buffer never allocates.
   The audio thread reads it once at the top of a block and ramps every gain across the block.
-- A command carries an id. The audio thread acknowledges it in the event ring with the backing
-  position at the block it took effect. The control thread resolves the promise on the ack.
-  Every async method in the TypeScript API is this pattern.
-- A full event ring drops the event and counts the drop. It never blocks.
-- The events thread drains the ring every 5 ms and calls one napi threadsafe function per batch.
-  Only the `node` crate knows this thread exists. Tests drain the ring directly.
-- A `Box<Graph>` moves through a ring as a pointer. The audio thread never drops one.
+- A command with an id is acknowledged in the event ring with the backing position at the block
+  it took effect, and the control thread resolves the promise on the ack. Every async method in
+  the TypeScript API is this pattern. `SetGuide` and `ResetSlot` carry no id and their methods
+  return at once.
+- A full ring drops what the producer would have pushed and counts the drop. It never blocks,
+  and a producer never touches the consumer's index.
+- The events thread drains the event ring every 5 ms and calls one napi threadsafe function per
+  batch. Only the `node` crate knows this thread exists. Tests drain the ring directly.
+- Render progress is the worker thread's, not the audio thread's, so it stays off the event
+  ring: the job writes an atomic fraction the events thread reads on each drain.
+- A `Box<Graph>` or `Box<Guide>` moves through a ring as a pointer. The audio thread never drops
+  one.
 - A panic inside render is caught at the callback boundary. The block is silence, a `Fault`
   event is sent, and the engine refuses further commands until the host closes it.
 
@@ -222,9 +228,9 @@ pub struct OfflineDriver;              // pump(blocks) -> Vec<f32>, interleaved 
 
 // engine/src/params.rs
 #[derive(Clone, Copy)]
-pub struct Params { pub slots: [SlotParams; MAX_SLOTS], pub stems: StemGains, pub guide_offset_ms: f32 }
+pub struct Params { pub slots: [SlotParams; MAX_SLOTS], pub stems: StemGains }
 #[derive(Clone, Copy)]
-pub struct SlotParams { pub gain: f32, pub pan: f32, pub mute: bool, pub solo: bool, pub effects: EffectParams }
+pub struct SlotParams { pub gain: f32, pub pan: f32, pub mute: bool, pub solo: bool, pub effects: EffectParams, pub guide_offset_ms: f32 }
 #[derive(Clone, Copy)]
 pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams }
 
@@ -237,6 +243,8 @@ pub enum Command {
     Resume { id: u32 },
     SetKey { id: u32, semitones: i8 },
     StopAt { id: u32, at_frame: u64, fade_frames: u32 },
+    SetGuide { slot: u8, guide: Option<Box<Guide>> },
+    ResetSlot { slot: u8 },
 }
 #[derive(Clone, Copy)]
 pub enum Event {
@@ -245,10 +253,10 @@ pub enum Event {
     Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32 },
     Position { frames: u64 },
     BackingEnded,
-    RenderProgress { fraction: f32 },
     Underrun,
     Fault,
 }
+pub enum Retired { Graph(Box<Graph>), Guide(Box<Guide>) }
 
 // engine/src/graph.rs
 pub struct Graph { /* slots, backing, master; built on the control thread */ }
@@ -256,6 +264,10 @@ impl Graph {
     /// One block. Reads `params` once, writes `out`, pushes events. Allocation-free.
     pub fn render(&mut self, params: &Params, out: Stereo<'_>, events: &mut EventProducer);
 }
+
+// engine/src/slot/
+pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16 }   // built on the control thread, followed on the audio thread
+pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
 
 // engine/src/ingest/
 pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
@@ -267,7 +279,7 @@ pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub concea
 // engine/src/backing/
 pub struct Stems { pub instrumental: Planar, pub guide: Option<Planar>, pub frames: u64 }   // 48 kHz, planar f32
 pub struct Playhead;       // frames, playing, seek(to), pause(), resume(), stop_at(at, fade)
-pub struct RenderJob;      // control thread starts it on the worker thread; yields Stems and progress
+pub struct RenderJob;      // control thread starts it on the worker thread; yields Stems; progress is an AtomicU32 fraction
 pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the first change
 
 // kernels/src/
@@ -347,7 +359,7 @@ export interface Mixer {
   pause(): Promise<void>;
   resume(): Promise<{ positionMs: number }>;
   setBackingKey(semitones: number): Promise<void>;
-  setStemGain(kind: StemKind, gain: number): Promise<void>;
+  setStemGain(kind: StemKind, gain: number): void;
   on(event: "level", listener: (slot: number, rmsDb: number, peakDb: number) => void): () => void;
   on(
     event: "pitch",
@@ -368,6 +380,15 @@ public types above are inferred from the implementation wherever TypeScript can 
 ## 8. Modules
 
 Each module names its purpose, the rules beyond section 2 that bind it, and what done means.
+
+### 8.0 Skeleton: `native/Cargo.toml`, `native/engine/src/{lib,block,driver}.rs`, `native/node`, `package.json`, `vite.config.ts`, `.github/workflows`, `src/native.ts`
+
+The workspace, the binding that loads, the offline driver, and CI. It is what every other
+module plugs into.
+
+Done when: `vp check`, `vp test` and `cargo test` pass on macOS, Windows and Linux in CI; a
+TypeScript test pumps one silent block through the offline engine; prebuilt addons publish per
+platform as optional dependencies.
 
 ### 8.1 Graph: `engine/src/{graph,params,command,master}.rs`, `engine/src/slot/`
 
@@ -479,10 +500,12 @@ pitch event cadence is 10 ms.
 The master pushes every rendered block into a stereo f32 ring. The network thread pops, gathers
 480 frames, encodes one Opus frame with in-band FEC, wraps it in RTP with the configured SSRC
 and payload type, and sends it. Pacing is the output clock, because blocks arrive at the
-device's rate. If the ring fills, the oldest block is dropped and counted.
+device's rate. If the ring is full, the audio thread drops the block it would have pushed and
+counts it. The packetizer, from ring to RTP bytes, is separate from the socket that sends them.
 
-Done when: on the offline driver pumping at a known rate, packets leave at 10 ms spacing with
-monotonic sequence numbers and timestamps advancing 480 per packet.
+Done when: on the offline driver, the packetizer fed from the ring produces one packet per 480
+rendered frames, with monotonic sequence numbers and timestamps advancing 480 per packet. The
+socket send is the one step the test leaves out.
 
 ### 8.8 Binding and API: `node/`, `src/`, `tests/`
 
@@ -503,11 +526,20 @@ Scripts a person runs on real hardware. `measure-sink` is in `devices`. `measure
 plays a click through a slot and records it at the output to give the mic-path number. Their
 output is the evidence a PR quotes.
 
+### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
+
+The class behind Aeon Karaoke's mixing-engine port that drives this package, beside the
+GStreamer one, chosen by a flag.
+
+Done when: the engine runs a session behind the flag; the latency e2e passes at the new number;
+GStreamer and the `aeonpitch` element are deleted in a later PR.
+
 ## 9. Verification
 
 - The offline driver is the clock in every engine test. No test opens a device or a socket.
-- Every realtime `process` and `render` runs under an allocation guard in tests, a global
-  allocator that panics on allocation inside a guarded region.
+- Every realtime `process` and `render` runs under the `assert_no_alloc` guard in tests. Its
+  allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
+  so the engine does not.
 - DSP tests feed known signals and assert within tolerances named in the test.
 - Timing claims carry a number from `tools/` or `measure-sink`, and the number goes in the PR
   and, when it decides something, in `docs/decisions`.
@@ -517,24 +549,21 @@ output is the evidence a PR quotes.
 ## 10. Workstreams and ownership
 
 Work is split so that agents run in parallel without touching the same files. A workstream
-owns the paths in its row. Shared files are `native/Cargo.toml`, `native/engine/src/lib.rs`
-and `src/index.ts`: add your own line, leave the rest. Each row is an issue; each issue is one
-or more PRs.
+owns the paths named in the module sections in its row. Shared files are `native/Cargo.toml`,
+`native/engine/src/lib.rs` and `src/index.ts`: add your own line, leave the rest. Each row is a
+GitHub issue, which carries what it is blocked by; each issue is one or more PRs.
 
-| #   | Workstream          | Owns                                                                                                                                                               | Needs                              | Done when                                                                                                                                                                                |
-| --- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0   | Skeleton            | `native/Cargo.toml`, `native/engine/src/{lib,block,driver}.rs`, `native/node` loading only, `package.json`, `vite.config.ts`, `.github/workflows`, `src/native.ts` | nothing                            | `vp check`, `vp test` and `cargo test` pass on macOS, Windows and Linux in CI; a TypeScript test pumps one silent block through the offline engine; prebuilt addons publish per platform |
-| 1   | Graph               | 8.1, 8.2                                                                                                                                                           | 0                                  | section 8.1 and 8.2 done                                                                                                                                                                 |
-| 2   | Devices             | 8.3, decision 0003                                                                                                                                                 | 0                                  | section 8.3 done                                                                                                                                                                         |
-| 3   | Ingest              | 8.4                                                                                                                                                                | 0, 1                               | section 8.4 done                                                                                                                                                                         |
-| 4   | Backing             | 8.5                                                                                                                                                                | 0, 1, 5 for the live key           | section 8.5 done                                                                                                                                                                         |
-| 5   | Kernels and effects | 8.6                                                                                                                                                                | 0                                  | section 8.6 done                                                                                                                                                                         |
-| 6   | Return branch       | 8.7                                                                                                                                                                | 0, 1                               | section 8.7 done                                                                                                                                                                         |
-| 7   | Binding and API     | 8.8, 8.9                                                                                                                                                           | 0, then each of 1 to 6 as it lands | section 8.8 done                                                                                                                                                                         |
-| 8   | Adapter             | Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`                                                                                                    | 7                                  | the engine runs behind a flag beside GStreamer; the latency e2e passes at the new number; GStreamer and the `aeonpitch` element are deleted in a later PR                                |
-
-After workstream 0 lands, 1, 2 and 5 start at once. 3, 4 and 6 start when 1 lands. 7 grows
-beside all of them.
+| #   | Workstream          | Owns               |
+| --- | ------------------- | ------------------ |
+| 0   | Skeleton            | 8.0                |
+| 1   | Graph               | 8.1, 8.2           |
+| 2   | Devices             | 8.3, decision 0003 |
+| 3   | Ingest              | 8.4                |
+| 4   | Backing             | 8.5                |
+| 5   | Kernels and effects | 8.6                |
+| 6   | Return branch       | 8.7                |
+| 7   | Binding and API     | 8.8, 8.9           |
+| 8   | Adapter             | 8.10               |
 
 ## 11. Divergences from the contract document
 

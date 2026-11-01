@@ -37,6 +37,18 @@ graph is a fixed topology: slots, a backing path, a master.
 - A fixed topology because the karaoke graph is known. A general graph engine is machinery with
   no customer.
 
+## The invariants this changes
+
+AGENTS.md's never-compromise list changes in two places with this decision.
+
+- **The latency budget binds the mic path, not the whole audio path.** The backing path runs on
+  its own playhead and the engine reports its offset, so latency there is compensated by the
+  lyric clock rather than heard. Key shift, time stretch and fades may cost latency on that
+  path. Nothing on a slot's path may.
+- **The audio thread allocates nothing, locks nothing, calls nothing in the OS and never
+  panics.** Owning the callback only delivers the budget if the callback always returns in
+  time. An allocation or a lock in it is a glitch waiting for a busy moment.
+
 ## Alternatives
 
 - **Keep GStreamer and tune it.** Its sink and jitter buffer have floors a launch string cannot
