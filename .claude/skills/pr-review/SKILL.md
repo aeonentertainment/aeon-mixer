@@ -13,19 +13,26 @@ they break a rule below; the rules are the review.
    `gh pr diff $ARGUMENTS`. When the body links an issue, `gh issue view` it for scope. Read
    the code around a hunk whenever the diff alone cannot settle a rule.
 2. Judge the PR against each rule, in this order:
-   - Things we never compromise: a buffer, queue or resample added to the audio path without
-     a measurement in the body; a network call beyond the LAN, a credential or telemetry; a
-     breaking change to an exported type or behaviour without a major bump and a decision
-     record; `any`.
+   - Things we never compromise: a buffer, queue or resample added to the mic path without a
+     measurement in the body; code the audio thread runs that allocates, locks, calls the OS or
+     can panic, or audio crossing to JavaScript; a network call beyond the LAN, a credential or
+     telemetry; a breaking change to an exported type or behaviour without a major bump and a
+     decision record; `any`.
    - Verifying: a DSP change without a test that feeds a known buffer and asserts the output;
-     a timing claim without a number; a test that sleeps or polls; a test that asserts wiring.
+     an engine test that opens a device or socket instead of the offline driver; a realtime
+     `process` or `render` tested without the allocation guard; a timing claim without a
+     number; a test that sleeps or polls; a test that asserts wiring.
    - Pull requests: one concern (an "also" is two), a conventional-commit title in plain
      language, a Verified paragraph naming what ran, no committed plans or notes, the model
      and harness line at the end. Branch commits are working notes and are not reviewed.
    - Documentation: a decision that spans files with no file in `docs/decisions/`; a changed
-     decision appended to instead of rewritten; README describing planned work.
+     decision appended to instead of rewritten; a default in AGENTS.md or `docs/design.md`
+     departed from without its line rewritten in the same PR; a contract in `docs/design.md`
+     changed in the same PR as the code that depends on it; README describing planned work.
    - Taste: an annotation where inference already gives the type, a second class in one file,
-     adapter concerns (ingest, devices) leaking into the mixing graph.
+     adapter concerns (sockets, devices, Node) leaking into the engine crate, `unsafe` outside
+     `native/kernels` and `native/devices`, a workstream editing paths another owns in
+     `docs/design.md` section 10. A departure with its default rewritten is not a finding.
 3. In CI, post one inline comment per broken rule, on the line that breaks it, naming the rule
    in AGENTS.md's words and what satisfies it, then write the summary into your Claude comment
    on the PR: one line per rule in step 2, its verdict, and for a broken rule a pointer to its

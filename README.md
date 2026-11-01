@@ -1,11 +1,11 @@
 # Aeon Mixer
 
 A low-latency audio mixer for [Aeon Karaoke](https://github.com/aeonentertainment/aeon-karaoke).
-Phones on the LAN are the microphones. The mixer takes those mic streams, house mics and a backing
-track, and plays one mix to the room.
+Phones on the LAN, wired mics and wireless mics are the microphones. The mixer takes those mic
+streams and a backing track, and plays one mix to the room.
 
-**Status: design stage.** The package exports a stub. The design is being worked out in
-[docs/decisions](docs/decisions).
+**Status: design stage.** The package exports a stub. The design is in
+[docs/design.md](docs/design.md); the reasons are in [docs/decisions](docs/decisions).
 
 ## Development
 
