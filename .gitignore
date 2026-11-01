@@ -16,3 +16,7 @@ CLAUDE.local.md
 
 # Agent scratch never ships. Keep plans in issues.
 .plans/
+
+# Native build output; `vp run build:native` regenerates it
+native/target/
+native/binding/*.node

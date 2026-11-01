@@ -12,7 +12,9 @@
     "url": "git+https://github.com/aeonentertainment/aeon-mixer.git"
   },
   "files": [
-    "dist"
+    "dist",
+    "native/binding/index.js",
+    "native/binding/*.node"
   ],
   "type": "module",
   "exports": {
@@ -21,11 +23,13 @@
   },
   "scripts": {
     "build": "vp pack",
+    "build:native": "napi build --platform --release --manifest-path native/node/Cargo.toml --output-dir native/binding",
     "check": "vp check",
     "test": "vp test",
     "prepare": "vp config --no-agent"
   },
   "devDependencies": {
+    "@napi-rs/cli": "^3.10.9",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
     "vite-plus": "catalog:"

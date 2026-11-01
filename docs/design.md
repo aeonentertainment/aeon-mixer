@@ -195,6 +195,7 @@ native/
   transport/            the network thread: UDP receive into packet rings, RTP return sender
   devices/              Driver implementations: coreaudio, wasapi, alsa; the measure-sink binary
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
+  binding/              where `vp run build:native` writes the addon and its generated loader and types
 ```
 
 Dependencies point one way: `node` uses `engine`, `transport` and `devices`; `transport` and
@@ -381,7 +382,7 @@ public types above are inferred from the implementation wherever TypeScript can 
 
 Each module names its purpose, the rules beyond section 2 that bind it, and what done means.
 
-### 8.0 Skeleton: `native/Cargo.toml`, `native/engine/src/{lib,block,driver}.rs`, `native/node`, `package.json`, `vite.config.ts`, `.github/workflows`, `src/native.ts`
+### 8.0 Skeleton: `native/Cargo.toml`, `native/engine/src/{lib,block,driver}.rs`, `native/node`, `native/binding`, `package.json`, `vite.config.ts`, `.github/workflows`, `src/native.ts`
 
 The workspace, the binding that loads, the offline driver, and CI. It is what every other
 module plugs into.

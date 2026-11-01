@@ -1,1 +1,2 @@
-export const PACKAGE_NAME = "@aeon/mixer";
+export { openEngine } from "./engine.ts";
+export type { Capability, Engine, OpenEngineOptions } from "./engine.ts";
