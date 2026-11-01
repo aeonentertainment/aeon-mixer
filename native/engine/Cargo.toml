@@ -1,0 +1,12 @@
+[package]
+name = "engine"
+description = "The mixer's pure core: what the audio thread runs, with no device, socket or Node in it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+assert_no_alloc = "1.1"

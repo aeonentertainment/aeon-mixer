@@ -1,0 +1,6 @@
+{
+  "name": "@aeon/mixer-binding",
+  "private": true,
+  "description": "Where `vp run build:native` writes the addon and its loader. Not published on its own.",
+  "type": "commonjs"
+}
