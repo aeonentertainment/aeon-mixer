@@ -4,9 +4,11 @@
 
 ## Decision
 
-Aeon Mixer is a TypeScript package. One tool, Vite+ (`vp`), owns formatting (Oxfmt), linting
-(Oxlint), type checking (tsgo), tests (Vitest) and the build (tsdown). CI runs `vp check`,
-`vp test` and `vp pack`, and the pre-commit hook runs `vp check --fix` on staged files.
+Aeon Mixer is a TypeScript package. One tool, Vite+ (`vp`), owns the TypeScript side:
+formatting (Oxfmt), linting (Oxlint), type checking (tsgo), tests (Vitest) and the build
+(tsdown). CI runs `vp check`, `vp test` and `vp pack`, and the pre-commit hook runs
+`vp check --fix` on staged files. The native core under `native/` is Cargo's, since
+[0002](0002-native-engine.md).
 
 ## Why
 
@@ -17,8 +19,7 @@ Aeon Mixer is a TypeScript package. One tool, Vite+ (`vp`), owns formatting (Oxf
 - Oxlint and Oxfmt are fast enough to run on every edit, so a hook can format and lint without
   slowing a session.
 
-## What this does not decide
+## What this left open
 
-The DSP engine. Today's mixer in Aeon Karaoke is GStreamer driven from TypeScript. Whether this
-package drives a native engine (GStreamer, a Rust core over napi, or similar) or mixes in process
-is the next decision, and it is bounded by the latency budget in AGENTS.md, not by this one.
+The DSP engine. [0002](0002-native-engine.md) decided it: a native core in Rust behind napi-rs,
+bounded by the latency budget in AGENTS.md, not by this decision.

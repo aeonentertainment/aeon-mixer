@@ -1,52 +1,85 @@
 # Aeon Mixer
 
 A low-latency audio mixer for [Aeon Karaoke](https://github.com/aeonentertainment/aeon-karaoke).
-Aeon Karaoke can use both wired and wireless microphones, but introduces a new concept of being
-able to use a mobile device on the LAN as microphones. The mixer takes those mic streams, house
-mics and a backing track, and plays one mix to the room. Aeon Karaoke's device service will depend
-on this package in place of its GStreamer engine, so the public API here is a contract, not an
-experiment.
+Phones on the LAN, wired mics and wireless mics are the microphones. The mixer takes those mic
+streams and a backing track and plays one mix to the room. Aeon Karaoke's device service will
+depend on this package in place of its GStreamer engine, so the public API here is a contract,
+not an experiment.
+
+The engine is a native core that owns the audio device's output callback, behind a TypeScript
+API. [docs/design.md](docs/design.md) is the design: read its shared sections once, then the
+section for the module you are changing. [docs/decisions](docs/decisions) holds the reasons.
+
+Below the never-compromise list, every rule here and every number and mechanism in
+docs/design.md is a default with its reason. When a change makes the mixer better, now or in a
+year, make it and rewrite the default in the same PR, saying why. A contract other workstreams
+build against lands first, in its own PR, so they follow. The never-compromise list moves with
+a decision record and the developer's agreement.
 
 ## Glossary
 
-- **Mixer**: one mixing graph for one performance. Channels in, one mix out.
-- **Channel**: one audio source in the mix with its own gain and pan.
-- **Ingest kind**: how a channel's audio arrives. `rtp` is a phone sending Opus over LAN UDP,
-  `local` is a wired or USB mic on the device, `webrtc` is the fallback relayed path.
-- **Backing track**: the instrumental the singers perform over. It is a channel like any other.
+- **Engine**: the process-lifetime owner of the audio device and the audio thread. It hosts one
+  mixer at a time and plays the room's reaction sounds between songs.
+- **Mixer**: one mixing graph for one performance. Slots in, one mix out. It is swapped into the
+  running engine with a fade, never by reopening the device.
+- **Slot**: one mic input with its own decoder, effect chain, gain and pan. Aeon Karaoke binds a
+  channel to a slot.
+- **Ingest kind**: how a slot's audio arrives. `rtp` is Opus over LAN UDP from a phone or from
+  mediasoup, `l16` is raw PCM over loopback from a house mic, `push` is PCM the host hands in.
+- **Backing path**: the stems a singer performs over, on their own playhead. Key, speed, guide
+  vocal, seek and fades live here and may add latency. The mic path may not.
+- **Audio thread**: the OS callback that renders one block. **Control thread**: Node's event
+  loop, where every API call runs.
+- **Block**: 128 frames at 48 kHz, 2.67 ms. The unit of every render and every ramp.
+- **Offline driver**: the test clock. It calls render in a loop with no device and no socket.
+- **Kernel**: a C++ DSP leaf compiled into the addon: the pitch corrector, the stretcher.
 - **Latency budget**: mouth-to-speaker time. Target 40 to 60 ms; under 30 ms the singer's own
   voice fuses with the room and the echo disappears.
-- **Device**: the LAN box or desktop app that runs a karaoke session and hosts the mixer.
+- **Device**: the LAN box or desktop app that hosts the engine.
 
 ## Things we never compromise
 
-1. **The latency budget.** Every buffer, queue and resample in the audio path is a cost against
+1. **The latency budget.** Every buffer, queue and resample on the mic path is a cost against
    40 to 60 ms. Add one only with a measurement that shows the budget still holds.
-2. **The mixer runs with no network beyond the LAN.** No cloud calls, no credentials, no
+2. **The audio thread allocates nothing, locks nothing, calls nothing in the OS and never
+   panics.** Audio never crosses to JavaScript. How parameters, commands and events cross is
+   docs/design.md section 2.
+3. **The mixer runs with no network beyond the LAN.** No cloud calls, no credentials, no
    telemetry. Anything the cloud needs to know is Aeon Karaoke's job.
-3. **The public API is versioned.** A breaking change to an exported type or behaviour is a
+4. **The public API is versioned.** A breaking change to an exported type or behaviour is a
    deliberate major bump with a note in the decision log, never a side effect of a refactor.
-4. **No `any`.** Inferred types first, annotations where inference cannot reach.
+5. **No `any`.** Inferred types first, annotations where inference cannot reach.
 
 ## Ways to hurt yourself
 
 1. **Killing by pattern.** Never `pkill -f` or kill a PID found by name. Kill only a PID you
    captured at spawn.
-2. **Grabbing the developer's audio device.** Tests and tools never open the default input or
-   output device. Audio in tests comes from fixtures and deterministic buffers.
+2. **Grabbing the developer's audio device.** Tests run on the offline driver. Only the
+   measurement tools in `tools/` open a real device, and only when a person runs them.
+3. **Blocking the control thread.** A wait on the audio thread or on a render job holds Node's
+   event loop and starves the device service. Await the event or promise instead.
+4. **Editing another workstream's files.** Parallel work is split by directory in
+   docs/design.md section 10. In a shared file, add your own line and leave the rest.
 
 ## Commands
 
 - `vp install` after cloning or pulling.
-- `vp check` formats, lints and type-checks. `vp test` runs the suite; `vp test <file>` runs one.
-- Both are cheap. Run both before calling work done, and quote the output in the PR.
+- `vp check` formats, lints and type-checks the TypeScript. `vp test` runs its suite.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` in
+  `native/` do the same for Rust. The workspace lands with workstream 0 in docs/design.md.
+- All of them are cheap. Run them before calling work done, and quote the output in the PR.
 - `vp <name>` is a built-in; `vp run <name>` is a `package.json` script. They can differ.
 
 ## Verifying
 
 - Test behaviour, not wiring. A DSP test feeds a known buffer and asserts the output within a
   tolerance. No tests that assert a callback was called or mirror the implementation.
-- Timing claims need a number. A latency change ships with the measurement that justifies it.
+- The offline driver is the clock in every engine test. Packets, stems and parameter changes
+  are fixtures; the test pumps blocks and asserts the output.
+- Every realtime `process` and `render` runs under the allocation guard in tests. A guard
+  failure is a bug in the code, never a reason to loosen the guard.
+- Timing claims need a number. A latency change ships with the measurement that justifies it,
+  taken with the tools in `tools/`.
 - Never wait on sleeps or polling in tests. Await the event or promise that marks the milestone.
 
 ## Pull requests
@@ -69,7 +102,10 @@ experiment.
 ## Documentation
 
 - Most code changes need no doc change. Agents can read the code.
-- `docs/decisions/` holds the reasons behind choices that span files: the DSP engine, the
+- `docs/design.md` is the engine's shape and the contracts between its modules. A change to a
+  contract is its own PR, merged before the code that needs it, so parallel workstreams build
+  against one truth.
+- `docs/decisions/` holds the reasons behind choices that span files: the engine, the
   transport, the API shape. One numbered file per decision. When a decision changes, rewrite
   its file; do not append a second account.
 - A comment above a function says how it is used when that is not obvious. Comments say why,
@@ -79,6 +115,8 @@ experiment.
 ## Taste
 
 - Keep things simple. Build the smallest model that makes the correct behaviour unsurprising.
-- Domain-driven design with hexagonal boundaries where it earns its keep: the mixing graph is
-  pure, and ingest kinds and audio devices are adapters at the edge. One class per file.
-- If a rule here fights the task, say so and get a human sign-off before breaking it.
+  The mixer is a fixed topology, not a graph engine.
+- Domain-driven design with hexagonal boundaries where it earns its keep: the engine crate is
+  pure and knows no device, socket or Node; devices, transport and the binding are adapters at
+  the edge. One class per file.
+- `unsafe` lives in `native/kernels` and `native/devices`, beside the foreign code it wraps.
