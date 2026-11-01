@@ -85,12 +85,12 @@ impl OfflineDriver {
     /// so a test runs a whole pump under the guard. Samples past the last whole block are left as
     /// they were.
     pub fn pump_into(&mut self, out: &mut [f32]) {
-        for block in out.chunks_exact_mut(2 * BLOCK) {
+        let (blocks, _short) = out.as_chunks_mut::<{ 2 * BLOCK }>();
+        for block in blocks {
             self.render_block();
-            let frames = block.chunks_exact_mut(2);
+            let (frames, _) = block.as_mut_slice().as_chunks_mut::<2>();
             for ((left, right), frame) in self.left.iter().zip(&self.right).zip(frames) {
-                frame[0] = *left;
-                frame[1] = *right;
+                *frame = [*left, *right];
             }
         }
     }
