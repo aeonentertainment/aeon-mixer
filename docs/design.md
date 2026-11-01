@@ -218,14 +218,17 @@ pub const MAX_SLOTS: usize = 16;
 pub struct Stereo<'a> { pub left: &'a mut [f32], pub right: &'a mut [f32] }   // BLOCK frames each
 
 // engine/src/driver.rs
-/// Whoever owns the clock. The OS backends in `devices` and the offline driver implement it.
+/// An OS audio output, implemented by the backends in `devices`. `start` hands `render` to the
+/// device's callback; dropping the `Running` stops the stream.
 pub trait Driver {
     fn start(self: Box<Self>, render: Render) -> Result<Running, DriverError>;
 }
 pub type Render = Box<dyn FnMut(Stereo<'_>) + Send + 'static>;
 pub struct StreamInfo { pub sample_rate: u32, pub period_frames: u32, pub output_latency_frames: u32 }
 pub struct Running { pub info: StreamInfo, /* stop() on drop */ }
-pub struct OfflineDriver;              // pump(blocks) -> Vec<f32>, interleaved stereo, in tests only
+/// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
+/// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
+pub struct OfflineDriver;
 
 // engine/src/params.rs
 #[derive(Clone, Copy)]
@@ -385,7 +388,8 @@ Each module names its purpose, the rules beyond section 2 that bind it, and what
 ### 8.0 Skeleton: `native/Cargo.toml`, `native/engine/src/{lib,block,driver}.rs`, `native/node`, `native/binding`, `package.json`, `vite.config.ts`, `.github/workflows`, `src/native.ts`
 
 The workspace, the binding that loads, the offline driver, and CI. It is what every other
-module plugs into.
+module plugs into. It also writes the first `src/engine.ts` and `tests/engine.test.ts`, which
+8.8 inherits.
 
 Done when: `vp check`, `vp test` and `cargo test` pass on macOS, Windows and Linux in CI; a
 TypeScript test pumps one silent block through the offline engine; prebuilt addons publish per

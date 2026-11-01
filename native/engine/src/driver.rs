@@ -16,8 +16,8 @@ pub struct StreamInfo {
     pub output_latency_frames: u32,
 }
 
-/// An OS audio output. `start` hands `render` to the device's callback and returns once the
-/// stream runs. Dropping the `Running` stops it.
+/// An OS audio output, implemented by the backends in `devices`. `start` hands `render` to the
+/// device's callback and returns once the stream runs. Dropping the `Running` stops it.
 pub trait Driver {
     fn start(self: Box<Self>, render: Render) -> Result<Running, DriverError>;
 }
@@ -58,8 +58,9 @@ impl fmt::Display for DriverError {
 
 impl std::error::Error for DriverError {}
 
-/// The test clock. It calls `render` on the caller's thread, one block per step, with no device
-/// and no socket, and hands the blocks back interleaved so a test can assert on samples.
+/// The test clock. Its caller pumps it, so it is not a `Driver`: it calls `render` on the
+/// caller's thread, one block at a time, with no device and no socket, and hands the blocks back
+/// interleaved so a test can assert on samples.
 pub struct OfflineDriver {
     render: Render,
     left: [f32; BLOCK],
@@ -80,17 +81,24 @@ impl OfflineDriver {
         self.frames_rendered
     }
 
-    /// Renders `blocks` blocks and returns them interleaved. The output buffer is the caller's;
-    /// the renders themselves allocate nothing.
-    pub fn pump(&mut self, blocks: usize) -> Vec<f32> {
-        let mut out = Vec::with_capacity(blocks * BLOCK * 2);
-        for _ in 0..blocks {
+    /// Renders into `out`, interleaved, one block per `2 * BLOCK` samples, and allocates nothing,
+    /// so a test runs a whole pump under the guard. Samples past the last whole block are left as
+    /// they were.
+    pub fn pump_into(&mut self, out: &mut [f32]) {
+        for block in out.chunks_exact_mut(2 * BLOCK) {
             self.render_block();
-            for (left, right) in self.left.iter().zip(&self.right) {
-                out.push(*left);
-                out.push(*right);
+            let frames = block.chunks_exact_mut(2);
+            for ((left, right), frame) in self.left.iter().zip(&self.right).zip(frames) {
+                frame[0] = *left;
+                frame[1] = *right;
             }
         }
+    }
+
+    /// `pump_into` with a buffer of its own: the binding's convenience, on the control thread.
+    pub fn pump(&mut self, blocks: usize) -> Vec<f32> {
+        let mut out = vec![0.0; blocks * 2 * BLOCK];
+        self.pump_into(&mut out);
         out
     }
 
@@ -114,13 +122,13 @@ mod tests {
     #[test]
     fn silence_renders_zeros_without_allocating() {
         let mut driver = OfflineDriver::new(silent_render());
-        assert_no_alloc(|| driver.render_block());
-        assert!(driver.left.iter().chain(&driver.right).all(|s| *s == 0.0));
-
-        let out = driver.pump(3);
-        assert_eq!(out.len(), 3 * BLOCK * 2);
+        let mut out = [1.0f32; 3 * 2 * BLOCK];
+        assert_no_alloc(|| driver.pump_into(&mut out));
         assert!(out.iter().all(|s| *s == 0.0));
-        assert_eq!(driver.frames_rendered(), 4 * BLOCK as u64);
+        assert_eq!(driver.frames_rendered(), 3 * BLOCK as u64);
+
+        // The binding's path: the same samples in a buffer of its own
+        assert_eq!(driver.pump(1), vec![0.0; 2 * BLOCK]);
     }
 
     #[test]
@@ -136,11 +144,17 @@ mod tests {
                 }
             })
         };
-        let first = OfflineDriver::new(counting()).pump(2);
-        let second = OfflineDriver::new(counting()).pump(2);
+        let mut a = OfflineDriver::new(counting());
+        let mut b = OfflineDriver::new(counting());
+        let mut first = [0.0f32; 2 * 2 * BLOCK];
+        let mut second = [0.0f32; 2 * 2 * BLOCK];
+        assert_no_alloc(|| {
+            a.pump_into(&mut first);
+            b.pump_into(&mut second);
+        });
         assert_eq!(first, second);
         assert_eq!(first[0..4], [0.0, -0.0, 1.0, -1.0]);
-        assert_eq!(first[2 * BLOCK * 2 - 2], (2 * BLOCK - 1) as f32);
+        assert_eq!(first[first.len() - 2], (2 * BLOCK - 1) as f32);
     }
 
     #[test]
