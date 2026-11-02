@@ -53,6 +53,8 @@ impl Stats {
     }
 
     /// Marks one device callback, called first thing in it. Returns the time since the last one.
+    /// Its clock read stays in userspace: the vDSO on Linux, mach_absolute_time on macOS and
+    /// QueryPerformanceCounter on Windows.
     pub fn callback(&self) -> Option<Duration> {
         let now = self.epoch.elapsed().as_nanos() as u64;
         self.callbacks.fetch_add(1, Relaxed);

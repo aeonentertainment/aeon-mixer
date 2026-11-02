@@ -11,7 +11,8 @@ period and latency it got in `StreamInfo`.
   `kAudioDevicePropertyBufferFrameSize` set to the period. No AudioUnit sits between.
 - **Windows: WASAPI through Microsoft's `windows` crate, event-driven, shared by default.**
   IAudioClient3's shared stream at the nearest period the shared engine allows. Exclusive opens
-  when asked for, or when shared cannot open at all because the mix format is not f32 at 48 kHz.
+  when asked for, or when the shared stream cannot open at all: a mix format other than f32 at
+  48 kHz, no IAudioClient3, or an engine that refuses the stream.
 - **Linux: ALSA on the `hw:` device through our own bindings to libasound, loaded with
   `dlopen`.** An explicit period in a ring of two, written by an audio thread of ours that asks
   for SCHED_FIFO.

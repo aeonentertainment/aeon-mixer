@@ -42,6 +42,9 @@ impl Feed {
 
     /// `take` into one interleaved buffer of `channels` channels.
     pub fn fill<S: Sample>(&mut self, out: &mut [S], channels: usize) {
+        if channels == 0 {
+            return;
+        }
         self.take(out.len() / channels, |at, left, right| {
             let span = at * channels..(at + left.len()) * channels;
             interleave(left, right, &mut out[span], channels, 0);
@@ -66,7 +69,7 @@ impl Feed {
 
 /// Writes planar stereo into an interleaved buffer that carries `channels` of the device's
 /// channels, the first of them channel `first`. Device channel 0 is left, 1 is right, and any
-/// others are silent.
+/// others are silent. A buffer with no channels, which an OS can hand over, is left alone.
 pub fn interleave<S: Sample>(
     left: &[f32],
     right: &[f32],
@@ -74,6 +77,9 @@ pub fn interleave<S: Sample>(
     channels: usize,
     first: usize,
 ) {
+    if channels == 0 {
+        return;
+    }
     for ((frame, l), r) in out.chunks_exact_mut(channels).zip(left).zip(right) {
         for (channel, sample) in (first..).zip(frame.iter_mut()) {
             *sample = match channel {
@@ -133,6 +139,9 @@ mod tests {
         let mut right = [0i32; 2];
         interleave(&[0.0, 0.0], &[1.0, -1.0], &mut right, 1, 1);
         assert_eq!(right, [i32::MAX, i32::MIN]);
+
+        // A buffer with no channels is skipped, never a panic on the audio thread
+        interleave::<f32>(&[1.0], &[1.0], &mut [], 0, 0);
     }
 
     #[test]
