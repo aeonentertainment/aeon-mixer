@@ -274,11 +274,9 @@ impl Graph {
     pub fn render(&mut self, params: &Params, out: Stereo<'_>, events: &mut EventProducer);
 }
 
-// engine/src/slot/effects/
-pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16, /* edges */ }   // Guide::new(notes, key_mask) on the control thread, followed on the audio thread
+// engine/src/slot/
+pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16 }   // built on the control thread, followed on the audio thread
 pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
-pub struct CorrectorParams { pub enabled: bool, pub strength: f32, pub retune_ms: f32 }
-pub struct ReverbParams { pub enabled: bool, pub room_size: f32, pub mix: f32 }
 
 // engine/src/ingest/
 pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
@@ -502,11 +500,11 @@ signalsmith-stretch. The reverb is a Rust port of Freeverb. Each C++ kernel gets
   every note edge so the target changes on the sample the guide names, and posts a reading
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
 - At strength zero the corrector is bypassed with no delay and still reads pitch.
-- The slot drives two stages from `slot::effects`. `Corrector::process(params, frame, semitones,
-  block, on_reading)` takes the guide-clock frame of the block's first sample and the backing's
-  key shift, works in place, and calls `on_reading` per reading for the slot to push as
-  `Event::Pitch`. `set_guide` hands back the guide it replaces, for the retired ring.
-  `Reverb::process(params, block)` works in place too.
+- The slot drives two stages from `slot::effects`, each in place on its mono block.
+  `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
+  guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
+  calls `on_reading` per reading for the slot to push as `Event::Pitch`.
+  `Reverb::process(params, block)` takes the reverb knobs.
 
 Done when: the corrector through its shim pulls harmonic tones from 82 to 880 Hz onto the asked
 pitch class within the tolerances the C++ tests use; the stretcher moves a tone by the asked

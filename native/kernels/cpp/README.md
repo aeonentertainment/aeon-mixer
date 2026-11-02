@@ -18,7 +18,7 @@ Notes on the copies:
   the version signalsmith-stretch's `main` pins (its header is unchanged since tag 1.4.0).
   Two copies would be an ODR violation waiting to happen.
 - `MelodyGuide.{h,cpp}` are copied with the rest but not compiled. The guide is ported to Rust
-  in `engine/src/slot/effects/guide.rs`, on frames instead of milliseconds, so the audio thread
+  in `engine/src/slot/effects/melody.rs`, on frames instead of milliseconds, so the audio thread
   never parses text.
 - The C++ kernels allocate only when built. The tests' `assert_no_alloc` guard sees Rust's
   allocator, not C++'s, so that rests on the code: the corrector documents it, and
