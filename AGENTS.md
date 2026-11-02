@@ -87,6 +87,8 @@ a decision record and the developer's agreement.
 
 - Never open a PR unless the developer asks.
 - One concern per PR. If the description needs "also", split it.
+- One thread is one PR. A thread starts in its own worktree from `main`, carries one issue to
+  one merged PR, and ends. More work is a new thread, so a review of either stays small.
 - Titles are conventional commits in plain language: `fix(rtp): jitter buffer no longer drops
   late frames`.
 - Body: the problem in a sentence or two, how it was fixed, then a "Verified" paragraph naming
@@ -96,9 +98,10 @@ a decision record and the developer's agreement.
   title and body become the one commit on `main`.
 - Work is tracked in GitHub issues. The merged PR is the record. Do not commit plans, notes or
   checklists.
-- When babysitting a PR: poll checks and comments newer than the last push, verify each bot
-  finding against the source, fix real ones, dismiss false positives with a written reason.
-  Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
+- When babysitting: watch the PR and end the turn; the harness wakes you on checks, comments
+  and conflicts. Verify each bot finding against the source, fix real ones, dismiss false
+  positives with a written reason. Stay quiet when nothing is new. Stop when the bots are
+  green on the latest commit.
 
 ## Documentation
 
