@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["engine", "node"]
+members = ["engine", "kernels", "node"]
 
 [workspace.package]
 version = "0.0.0"
@@ -10,3 +10,4 @@ publish = false
 
 [workspace.dependencies]
 engine = { path = "engine" }
+kernels = { path = "kernels" }

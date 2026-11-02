@@ -294,7 +294,8 @@ pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the f
 // kernels/src/
 pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples()
 pub struct Stretch;         // new(channels, rate, preset), set_transpose_semitones(f32), process(planar in, planar out), latency_frames()
-pub struct Reverb;          // new(rate), set(room_size, mix), process(stereo in place)
+pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
+pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
 ```
 
 ### 7.2 TypeScript
@@ -492,13 +493,18 @@ within 5 cents after the crossfade.
 
 The C++ leaves and the Rust stages that drive them. The corrector's sources come from Aeon
 Karaoke's `lib/dsp/pitch-corrector` at a named commit, with its vendored FFT. The stretcher is
-signalsmith-stretch. The reverb is freeverb or a port of it. Each gets an `extern "C"` shim
-and a safe Rust wrapper; the shim is the only `unsafe`.
+signalsmith-stretch. The reverb is a Rust port of Freeverb. Each C++ kernel gets an
+`extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 
 - The guide follower is the Rust port of what the GStreamer element did: it splits a block at
   every note edge so the target changes on the sample the guide names, and posts a reading
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
 - At strength zero the corrector is bypassed with no delay and still reads pitch.
+- The slot drives two stages from `slot::effects`, each in place on its mono block.
+  `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
+  guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
+  calls `on_reading` per reading for the slot to push as `Event::Pitch`.
+  `Reverb::process(params, block)` takes the reverb knobs.
 
 Done when: the corrector through its shim pulls harmonic tones from 82 to 880 Hz onto the asked
 pitch class within the tolerances the C++ tests use; the stretcher moves a tone by the asked

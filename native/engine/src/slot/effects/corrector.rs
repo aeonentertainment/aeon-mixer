@@ -1,0 +1,192 @@
+use kernels::{EVERY_PITCH_CLASS, PitchCorrector};
+
+use crate::block::{BLOCK, RATE};
+use crate::params::CorrectorParams;
+use crate::slot::effects::{Reading, Target, melody};
+use crate::slot::guide::Guide;
+
+/// With no guide every class is a target, so a voice goes to its nearest semitone.
+const CHROMATIC: Target = Target { mask: EVERY_PITCH_CLASS, midi: None };
+
+/// The slot's pitch corrector, following the song's melody guide: Aeon Karaoke's `aeonpitch`
+/// element, ported off GStreamer. It splits a run at every note edge, so the target changes on
+/// the sample the guide names, and at every detector reading, so each one is published. The
+/// slot owns the guide and lends it to each `process`.
+pub struct Corrector {
+    kernel: PitchCorrector,
+    /// The kernel reads and writes separate buffers; the slot's block is copied through this.
+    scratch: [f32; BLOCK],
+}
+
+impl Corrector {
+    pub fn new() -> Self {
+        Self { kernel: PitchCorrector::new(RATE), scratch: [0.0; BLOCK] }
+    }
+
+    /// Forgets the singer it was hearing, for a new stream on the slot.
+    pub fn reset(&mut self) {
+        self.kernel.reset();
+    }
+
+    /// How far the voice trails its input now; 0 while bypassed.
+    pub fn latency_frames(&self) -> usize {
+        self.kernel.latency_samples()
+    }
+
+    /// One run of the slot's voice, in place, following `guide` when there is one. `frame` is
+    /// where its first sample sits on the guide's clock, which docs/design.md section 3 derives
+    /// from the playhead, and `semitones` the backing's key shift, which the guide follows.
+    /// `on_reading` hears every 10 ms reading.
+    pub fn process(
+        &mut self,
+        params: &CorrectorParams,
+        guide: Option<&Guide>,
+        frame: i64,
+        semitones: i8,
+        block: &mut [f32],
+        mut on_reading: impl FnMut(Reading),
+    ) {
+        let strength = if params.enabled { params.strength } else { 0.0 };
+        let mut done = 0;
+        while done < block.len() {
+            let at = frame + done as i64;
+            let (target, next_edge) = match guide {
+                Some(guide) => {
+                    (melody::target_at(guide, at, semitones), melody::next_edge_after(guide, at))
+                }
+                None => (CHROMATIC, None),
+            };
+            self.kernel.set_target(target.mask, strength, params.retune_ms);
+
+            let until_reading = self.kernel.frames_until_reading();
+            let mut frames = (block.len() - done).min(until_reading).min(BLOCK);
+            if let Some(edge) = next_edge {
+                // An edge is always after `at`, so a run is never empty
+                frames = frames.min(usize::try_from(edge - at).unwrap_or(usize::MAX));
+            }
+            let run = &mut block[done..done + frames];
+            self.scratch[..frames].copy_from_slice(run);
+            self.kernel.process(&self.scratch[..frames], run);
+            done += frames;
+
+            if frames == until_reading {
+                let pitch = self.kernel.detected();
+                let centre = at + frames as i64 - self.kernel.reading_lag_samples() as i64;
+                let position_ms = centre as f64 * 1000.0 / f64::from(RATE);
+                on_reading(Reading { position_ms, hz: pitch.hz, confidence: pitch.confidence });
+            }
+        }
+    }
+}
+
+impl Default for Corrector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::PI;
+
+    use assert_no_alloc::assert_no_alloc;
+
+    use super::*;
+    use crate::slot::guide::Note;
+
+    const ON: CorrectorParams = CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
+    const C_MAJOR: u16 = 0b1010_1011_0101;
+
+    /// Twelve harmonics at `midi`, the buzz of a sung vowel.
+    fn tone(midi: f64, frames: usize) -> Vec<f32> {
+        let hz = 440.0 * 2f64.powf((midi - 69.0) / 12.0);
+        (0..frames)
+            .map(|i| {
+                let t = i as f64 / f64::from(RATE);
+                let sample: f64 =
+                    (1..=12).map(|h| (2.0 * PI * hz * h as f64 * t).sin() / h as f64).sum();
+                (0.25 * sample) as f32
+            })
+            .collect()
+    }
+
+    // The done-when: a voice between A and B flat is pulled to A in C major's key and to B flat
+    // while the guide's B flat sounds. Each block is checked after it renders, so the block that
+    // holds an edge must already have turned to the new target.
+    #[test]
+    fn the_target_changes_within_one_block_of_each_edge() {
+        let (start, end) = (30_000 + 37, 60_000 + 101);
+        let note = Note { midi: 70, start_frame: start, end_frame: end };
+        let guide = Guide { notes: vec![note], key_mask: C_MAJOR };
+        let mut corrector = Corrector::new();
+
+        let mut voice = tone(69.3, 90_000);
+        let mut errors = Vec::with_capacity(voice.len() / BLOCK);
+        assert_no_alloc(|| {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                let frame = (index * BLOCK) as i64;
+                corrector.process(&ON, Some(&guide), frame, 0, block, |_| {});
+                errors.push((frame as u64, corrector.kernel.error_semitones()));
+            }
+        });
+
+        // Skip the first 50 ms, before the detector has heard the voice
+        for (first, error) in errors.into_iter().filter(|(first, _)| *first >= 2400) {
+            let last = first + BLOCK as u64 - 1;
+            let toward_b_flat = (start..end).contains(&last);
+            let expected = if toward_b_flat { 0.7 } else { -0.3 };
+            assert!(
+                (error - expected).abs() < 0.05,
+                "block at {first}: error {error}, expected {expected}"
+            );
+        }
+    }
+
+    // Readings every 10 ms, each placed at the centre of the window it read
+    #[test]
+    fn readings_come_every_10_ms_at_their_centre() {
+        let mut corrector = Corrector::new();
+        let mut voice = tone(57.0, RATE as usize);
+        let mut readings = Vec::with_capacity(200);
+        let start = 4_800;
+        assert_no_alloc(|| {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                corrector.process(&ON, None, start + (index * BLOCK) as i64, 0, block, |r| {
+                    readings.push(r)
+                });
+            }
+        });
+
+        // 375 blocks of 128 frames hold 100 hops of 480
+        assert_eq!(readings.len(), 100);
+        let lag_ms = 1024.0 / 48.0;
+        assert!((readings[0].position_ms - (100.0 + 10.0 - lag_ms)).abs() < 1e-9);
+        for pair in readings.windows(2) {
+            assert!((pair[1].position_ms - pair[0].position_ms - 10.0).abs() < 1e-9);
+        }
+        let heard = readings.last().unwrap();
+        assert!(
+            (heard.hz - 220.0).abs() < 0.5 && heard.confidence > 0.9,
+            "read {heard:?} for 220 Hz"
+        );
+    }
+
+    // Off is the singer's own voice, with no delay, and the readings still come
+    #[test]
+    fn off_is_the_voice_itself_and_still_reads() {
+        let mut corrector = Corrector::new();
+        let input = tone(69.4, 120 * BLOCK);
+        let mut voice = input.clone();
+        let mut read = 0;
+        let off = CorrectorParams { enabled: false, ..ON };
+        assert_no_alloc(|| {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                corrector.process(&off, None, (index * BLOCK) as i64, 0, block, |_| read += 1);
+            }
+        });
+        assert_eq!(voice, input);
+        assert_eq!(corrector.latency_frames(), 0);
+        // 120 blocks of 128 frames hold 32 hops of 480
+        assert_eq!(read, 32);
+    }
+}
