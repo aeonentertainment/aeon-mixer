@@ -1,0 +1,224 @@
+//! One mixing graph for one performance: slots into a stereo bus, through the master. Built on
+//! the control thread, rendered on the audio thread, and dropped on the control thread again
+//! once it comes back through the retired ring.
+
+use crate::block::{MAX_SLOTS, Stereo};
+use crate::command::EventProducer;
+use crate::master::Master;
+use crate::params::Params;
+use crate::slot::Slot;
+use crate::slot::guide::Guide;
+
+pub struct Graph {
+    slots: Vec<Slot>,
+    master: Master,
+}
+
+impl Graph {
+    /// At most `MAX_SLOTS` slots, since `Params` carries that many.
+    pub fn new(slots: Vec<Slot>) -> Self {
+        assert!(slots.len() <= MAX_SLOTS, "a graph holds at most {MAX_SLOTS} slots");
+        Self { slots, master: Master::new() }
+    }
+
+    /// What the engine renders between songs.
+    pub fn silent() -> Self {
+        Self::new(Vec::new())
+    }
+
+    /// One block. Reads `params` once, writes `out`, pushes events. Allocation-free.
+    pub fn render(&mut self, params: &Params, mut out: Stereo<'_>, events: &mut EventProducer) {
+        out.silence();
+        let any_solo = params.slots[..self.slots.len()].iter().any(|slot| slot.solo);
+        for (index, (slot, slot_params)) in self.slots.iter_mut().zip(&params.slots).enumerate() {
+            slot.render(index as u8, slot_params, any_solo, &mut out, events);
+        }
+        self.master.process(&mut out, events);
+    }
+
+    /// The backing playhead, which acks report. Zero until the backing path (8.5) lands.
+    pub fn position_frames(&self) -> u64 {
+        0
+    }
+
+    /// Gives `guide` to a slot and returns what must be retired: the guide it displaced, or
+    /// `guide` itself when there is no such slot.
+    pub fn set_guide(&mut self, slot: u8, guide: Option<Box<Guide>>) -> Option<Box<Guide>> {
+        match self.slots.get_mut(usize::from(slot)) {
+            Some(slot) => slot.set_guide(guide),
+            None => guide,
+        }
+    }
+
+    pub fn reset_slot(&mut self, slot: u8) {
+        if let Some(slot) = self.slots.get_mut(usize::from(slot)) {
+            slot.reset();
+        }
+    }
+
+    pub fn slots(&self) -> &[Slot] {
+        &self.slots
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_no_alloc::assert_no_alloc;
+
+    use super::*;
+    use crate::block::BLOCK;
+    use crate::command::{Event, EventConsumer, event_ring};
+    use crate::master::KNEE;
+    use crate::slot::meter::WINDOW_FRAMES;
+    use crate::slot::source::fixtures::{Constant, Sine};
+
+    const CENTRE: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+    struct Bench {
+        graph: Graph,
+        params: Params,
+        events: EventProducer,
+        drain: EventConsumer,
+        left: [f32; BLOCK],
+        right: [f32; BLOCK],
+    }
+
+    impl Bench {
+        fn new(graph: Graph) -> Self {
+            let (events, drain) = event_ring();
+            Self {
+                graph,
+                params: Params::default(),
+                events,
+                drain,
+                left: [0.0; BLOCK],
+                right: [0.0; BLOCK],
+            }
+        }
+
+        fn render(&mut self) {
+            let Self { graph, params, events, left, right, .. } = self;
+            assert_no_alloc(|| graph.render(params, Stereo { left, right }, events));
+        }
+
+        fn render_blocks(&mut self, blocks: usize) {
+            for _ in 0..blocks {
+                self.render();
+            }
+        }
+
+        fn levels(&mut self) -> Vec<Event> {
+            std::iter::from_fn(|| self.drain.pop())
+                .filter(|event| matches!(event, Event::Level { .. }))
+                .collect()
+        }
+    }
+
+    fn graph_of(sources: impl IntoIterator<Item = f32>) -> Graph {
+        Graph::new(sources.into_iter().map(|dc| Slot::new(Box::new(Constant(dc)))).collect())
+    }
+
+    fn assert_close(actual: f32, expected: f32, tolerance: f32, what: &str) {
+        assert!((actual - expected).abs() <= tolerance, "{what}: {actual} vs {expected}");
+    }
+
+    #[test]
+    fn gain_and_the_pan_law_shape_a_dc_source() {
+        let mut bench = Bench::new(graph_of([1.0]));
+        bench.params.slots[0].gain = 0.5;
+        bench.render();
+        assert_close(bench.left[BLOCK - 1], 0.5 * CENTRE, 1e-6, "centre left");
+        assert_close(bench.right[BLOCK - 1], 0.5 * CENTRE, 1e-6, "centre right");
+
+        bench.params.slots[0].pan = -1.0;
+        bench.render_blocks(2);
+        assert_close(bench.left[0], 0.5, 1e-6, "hard left, left");
+        assert_close(bench.right[0], 0.0, 1e-6, "hard left, right");
+    }
+
+    #[test]
+    fn a_gain_change_ramps_across_exactly_one_block() {
+        let mut bench = Bench::new(graph_of([0.5]));
+        bench.params.slots[0].pan = -1.0;
+        bench.render();
+        bench.params.slots[0].gain = 0.0;
+        bench.render();
+        let step = 0.5 / BLOCK as f32;
+        for (i, sample) in bench.left.iter().enumerate() {
+            assert_close(*sample, 0.5 - step * (i + 1) as f32, 1e-5, "ramp sample");
+        }
+        bench.render();
+        assert!(bench.left.iter().all(|s| *s == 0.0), "the block after the ramp is silent");
+    }
+
+    #[test]
+    fn mute_reaches_silence_inside_one_block_and_leaves_the_meter_alone() {
+        let mut bench = Bench::new(graph_of([1.0]));
+        bench.render();
+        bench.params.slots[0].mute = true;
+        bench.render();
+        assert!(bench.left[0] < CENTRE && bench.left[0] > 0.0, "the ramp has begun");
+        assert_close(bench.left[BLOCK - 1], 0.0, 1e-5, "silent by the last frame");
+        bench.render_blocks(WINDOW_FRAMES as usize / BLOCK);
+        assert!(bench.left.iter().chain(&bench.right).all(|s| *s == 0.0));
+        let levels = bench.levels();
+        assert!(!levels.is_empty());
+        for level in levels {
+            let Event::Level { slot: 0, peak_db, .. } = level else { panic!("{level:?}") };
+            assert_close(peak_db, 0.0, 0.01, "a muted slot still meters its singer");
+        }
+    }
+
+    #[test]
+    fn solo_silences_the_unsoloed_and_mute_wins() {
+        let mut bench = Bench::new(graph_of([0.5, 0.5, 0.5]));
+        bench.params.slots[0].pan = -1.0;
+        bench.params.slots[1].pan = 1.0;
+        bench.params.slots[2].pan = 1.0;
+        bench.params.slots[1].solo = true;
+        bench.render();
+        assert_close(bench.left[BLOCK - 1], 0.0, 1e-6, "the unsoloed slot is silent");
+        assert_close(bench.right[BLOCK - 1], 0.5, 1e-6, "only the soloed slot plays");
+
+        bench.params.slots[1].mute = true;
+        bench.render_blocks(2);
+        assert!(bench.left.iter().chain(&bench.right).all(|s| *s == 0.0), "mute wins over solo");
+    }
+
+    #[test]
+    fn meters_read_a_known_sine_within_a_tenth_of_a_decibel_at_ten_hertz() {
+        let mut bench = Bench::new(Graph::new(vec![Slot::new(Box::new(Sine::new(1000.0, 0.5)))]));
+        let blocks_per_second = (crate::block::RATE as usize).div_ceil(BLOCK);
+        bench.render_blocks(blocks_per_second);
+        let levels = bench.levels();
+        assert_eq!(levels.len(), 10, "ten readings in a second");
+        for level in levels {
+            let Event::Level { slot: 0, rms_db, peak_db } = level else { panic!("{level:?}") };
+            assert_close(rms_db, -9.03, 0.1, "rms");
+            assert_close(peak_db, -6.02, 0.1, "peak");
+        }
+    }
+
+    #[test]
+    fn the_clipper_bounds_a_hot_sum_and_passes_half_scale_untouched() {
+        let mut hot = Bench::new(graph_of([1.0, 1.0]));
+        hot.render();
+        assert!(hot.left.iter().all(|s| *s > KNEE && *s < 1.0), "a 1.41 sum is bent under 1.0");
+
+        let mut half = Bench::new(graph_of([0.5 / CENTRE]));
+        half.render();
+        let error_db = 20.0 * (half.left[BLOCK - 1] / 0.5).log10();
+        assert!(error_db.abs() < 0.01, "half scale moved by {error_db} dB");
+    }
+
+    #[test]
+    fn a_guide_goes_to_its_slot_or_comes_straight_back() {
+        let mut graph = graph_of([0.0]);
+        let guide = Box::new(Guide { notes: Vec::new(), key_mask: 0b1010_1011_0101 });
+        assert!(graph.set_guide(0, Some(guide)).is_none());
+        assert_eq!(graph.slots()[0].guide().map(|g| g.key_mask), Some(0b1010_1011_0101));
+        let displaced = graph.set_guide(0, None).expect("the old guide comes back");
+        assert_eq!(displaced.key_mask, 0b1010_1011_0101);
+        assert!(graph.set_guide(7, Some(displaced)).is_some(), "no slot 7, so it comes back");
+    }
+}

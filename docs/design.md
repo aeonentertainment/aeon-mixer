@@ -67,8 +67,11 @@ Rules that follow:
   it took effect, and the control thread resolves the promise on the ack. Every async method in
   the TypeScript API is this pattern. `SetGuide` and `ResetSlot` carry no id and their methods
   return at once.
-- A full ring drops what the producer would have pushed and counts the drop. It never blocks,
-  and a producer never touches the consumer's index.
+- A full ring never blocks, and a producer never touches the consumer's index. What becomes of
+  the item depends on who can afford to lose it: an event is dropped and counted; a command is
+  handed back to the control thread as an error, since dropping a `Swap` would lose a graph; a
+  command that carries a box waits in its ring until the retired ring has room for what it
+  displaces, so the audio thread is never left holding a box it cannot hand back.
 - The events thread drains the event ring every 5 ms and calls one napi threadsafe function per
   batch. Only the `node` crate knows this thread exists. Tests drain the ring directly.
 - Render progress is the worker thread's, not the audio thread's, so it stays off the event
@@ -184,6 +187,7 @@ native/
     src/driver.rs       Driver trait, StreamInfo, the offline driver
     src/params.rs       Params and the triple buffer
     src/command.rs      Command, Event and the rings
+    src/audio_thread.rs the callback's body: drain commands, render, fade a swap, catch a panic
     src/graph.rs        Graph: render one block
     src/slot/           Slot, its source, the effect chain, the meter
     src/ingest/         packet ring, jitter buffer, Opus and L16 decoding, push input
@@ -254,6 +258,7 @@ pub enum Command {
 pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
+    MasterLevel { rms_db: f32, peak_db: f32 },
     Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32 },
     Position { frames: u64 },
     BackingEnded,
@@ -395,7 +400,7 @@ Done when: `vp check`, `vp test` and `cargo test` pass on macOS, Windows and Lin
 TypeScript test pumps one silent block through the offline engine; prebuilt addons publish per
 platform as optional dependencies.
 
-### 8.1 Graph: `engine/src/{graph,params,command,master}.rs`, `engine/src/slot/`
+### 8.1 Graph: `engine/src/{graph,params,command,master,audio_thread}.rs`, `engine/src/slot/`
 
 The audio thread's whole job. `render` reads the snapshot, pulls one block from every slot's
 source, runs the chain, sums with the backing path and the reaction voices, clips, meters,

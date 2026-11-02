@@ -2,8 +2,14 @@
 //! it. docs/design.md section 6 is the map of what lives here.
 #![forbid(unsafe_code)]
 
+pub mod audio_thread;
 pub mod block;
+pub mod command;
 pub mod driver;
+pub mod graph;
+pub mod master;
+pub mod params;
+pub mod slot;
 
 // Tests wrap every realtime call in `assert_no_alloc`; this allocator is what makes it panic.
 #[cfg(test)]
