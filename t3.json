@@ -3,7 +3,7 @@
   "scripts": [
     {
       "name": "Setup Worktree",
-      "command": "vp install && vp run build:native",
+      "command": "pnpm install && pnpm exec vp run build:native",
       "icon": "configure",
       "runOnWorktreeCreate": true
     }
