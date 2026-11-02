@@ -1,6 +1,7 @@
 //! One mic input: its source, the effect chain, the meter, then gain and pan into the stereo
 //! bus. The order is docs/design.md section 4; the ramps are one block.
 
+pub mod effects;
 pub mod guide;
 pub mod meter;
 pub mod source;
