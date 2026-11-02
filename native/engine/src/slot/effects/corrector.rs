@@ -123,7 +123,7 @@ mod tests {
         let mut voice = tone(69.3, 90_000);
         let mut errors = Vec::with_capacity(voice.len() / BLOCK);
         assert_no_alloc(|| {
-            for (index, block) in voice.chunks_exact_mut(BLOCK).enumerate() {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 let frame = (index * BLOCK) as i64;
                 corrector.process(&ON, Some(&guide), frame, 0, block, |_| {});
                 errors.push((frame as u64, corrector.kernel.error_semitones()));
@@ -150,7 +150,7 @@ mod tests {
         let mut readings = Vec::with_capacity(200);
         let start = 4_800;
         assert_no_alloc(|| {
-            for (index, block) in voice.chunks_exact_mut(BLOCK).enumerate() {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 corrector.process(&ON, None, start + (index * BLOCK) as i64, 0, block, |r| {
                     readings.push(r)
                 });
@@ -180,7 +180,7 @@ mod tests {
         let mut read = 0;
         let off = CorrectorParams { enabled: false, ..ON };
         assert_no_alloc(|| {
-            for (index, block) in voice.chunks_exact_mut(BLOCK).enumerate() {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 corrector.process(&off, None, (index * BLOCK) as i64, 0, block, |_| read += 1);
             }
         });
