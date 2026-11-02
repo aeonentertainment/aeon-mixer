@@ -63,8 +63,9 @@ a decision record and the developer's agreement.
 
 ## Commands
 
-- `vp install` after cloning or pulling, then `vp run build:native`: the TypeScript tests load
-  the addon it builds. A Rust toolchain is the one thing to install yourself.
+- `pnpm install` after cloning or pulling, then `pnpm exec vp run build:native`: the TypeScript
+  tests load the addon it builds. With a global `vp`, `vp install` and `vp run build:native` do the
+  same. pnpm and a Rust toolchain are the things to install yourself.
 - `vp check` formats, lints and type-checks the TypeScript. `vp test` runs its suite.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` in
   `native/` do the same for Rust.
