@@ -42,11 +42,10 @@ impl Stream {
     pub fn open(device: &IMMDevice, asked: u32, mode: WasapiMode) -> Result<Self, DriverError> {
         match mode {
             WasapiMode::Exclusive => Self::exclusive(device, asked),
-            WasapiMode::Shared => Self::shared(device, asked, true),
-            // A room with a slow shared engine and exclusive mode turned off still gets sound
-            WasapiMode::Auto => Self::shared(device, asked, false)
-                .or_else(|_| Self::exclusive(device, asked))
-                .or_else(|exclusive| Self::shared(device, asked, true).map_err(|_| exclusive)),
+            WasapiMode::Shared => Self::shared(device, asked),
+            WasapiMode::Auto => {
+                Self::shared(device, asked).or_else(|_| Self::exclusive(device, asked))
+            }
         }
     }
 
@@ -85,9 +84,8 @@ impl Stream {
     }
 
     // IAudioClient3 at the smallest period the shared engine allows at or above the asked one.
-    // Unless `forced`, a shared engine whose smallest period is longer than the asked one cannot
-    // reach the budget, and that is an error so the caller falls back to exclusive.
-    fn shared(device: &IMMDevice, asked: u32, forced: bool) -> Result<Self, DriverError> {
+    // The engine never resamples, so a mix format other than f32 at 48 kHz is an error.
+    fn shared(device: &IMMDevice, asked: u32) -> Result<Self, DriverError> {
         // SAFETY: COM is initialised on this thread; every out-pointer below is a local.
         unsafe {
             let client: IAudioClient3 =
@@ -107,11 +105,6 @@ impl Stream {
                         &mut max,
                     )
                     .map_err(failed("read the shared engine's periods"))?;
-                if min > asked && !forced {
-                    return Err(DriverError::Backend(format!(
-                        "the shared engine's shortest period is {min} frames"
-                    )));
-                }
                 let step = fundamental.max(1);
                 let period = (asked.div_ceil(step) * step).clamp(min, max);
                 client
@@ -232,7 +225,8 @@ impl Stream {
         stop: &AtomicBool,
     ) -> windows::core::Result<()> {
         let target = if self.shared { self.most_queued() } else { self.buffer };
-        // A wake this late in exclusive mode missed the flip: the device replayed or went silent.
+        // Exclusive mode reports no underruns, so a wake this late counts as one: it has usually
+        // missed the flip. A driver that signals in bursts makes this overcount.
         let late = Duration::from_secs_f64(1.5 * f64::from(self.period) / f64::from(RATE));
         self.write::<S>(feed, target)?;
         // SAFETY: the client is initialised and its first buffer written.

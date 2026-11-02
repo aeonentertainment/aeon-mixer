@@ -22,8 +22,8 @@ usage: measure-sink [--list] [--device ID] [--period FRAMES] [--seconds N] [--to
   --period N    the hardware period to ask for, in frames (default 128)
   --seconds N   how long to play (default 60)
   --tone        play a quiet 440 Hz tone instead of silence
-  --shared      WASAPI: IAudioClient3 shared low-latency, at the nearest period it allows
-  --exclusive   WASAPI: exclusive mode (default: shared when it reaches the period, else exclusive)";
+  --shared      WASAPI: IAudioClient3 shared, at the nearest period it allows
+  --exclusive   WASAPI: exclusive (default: shared, exclusive only if shared cannot open)";
 
 struct Args {
     list: bool,

@@ -15,11 +15,11 @@ use crate::feed::Feed;
 use crate::request::Request;
 use crate::stats::Stats;
 
-/// WASAPI, event-driven. `Auto` tries IAudioClient3's shared low-latency path first, because
-/// exclusive mode silences every other app on the device, and falls back to exclusive when the
-/// shared engine cannot run at the asked period, then to shared at its own period if exclusive is
-/// refused. The audio thread is ours, registered with MMCSS as Pro Audio; it opens the device
-/// too, so COM lives on one thread from open to close.
+/// WASAPI, event-driven. `Auto` opens IAudioClient3's shared stream at the nearest period the
+/// shared engine allows, and opens exclusive only when shared cannot open at all. Exclusive
+/// silences every other app on the device, and on the laptop decision 0003 measured it ran in
+/// bursts; it stays available on request. The audio thread is ours, registered with MMCSS as
+/// Pro Audio; it opens the device too, so COM lives on one thread from open to close.
 pub struct WasapiDriver {
     request: Request,
     mode: WasapiMode,
