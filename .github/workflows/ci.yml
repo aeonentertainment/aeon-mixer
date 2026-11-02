@@ -50,6 +50,12 @@ jobs:
         working-directory: native
       - run: cargo test
         working-directory: native
+      # The device backends sit behind a feature and no runner has a sound card, so CI lints them
+      # and links measure-sink on each OS without running either
+      - run: cargo clippy -p devices --all-targets --features hardware -- -D warnings
+        working-directory: native
+      - run: cargo build -p devices --features hardware --bin measure-sink
+        working-directory: native
       - run: vp run build:native
       - run: vp check
       - run: vp test

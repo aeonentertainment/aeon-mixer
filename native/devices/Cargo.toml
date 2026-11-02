@@ -1,0 +1,61 @@
+[package]
+name = "devices"
+description = "The engine's Driver for each OS: CoreAudio, WASAPI and ALSA, and the measure-sink tool."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The OS backends. Off by default so the workspace builds and tests with no audio stack; CI turns
+# it on to compile and lint them on every OS.
+hardware = [
+  "dep:libc",
+  "dep:objc2-core-audio",
+  "dep:objc2-core-audio-types",
+  "dep:objc2-core-foundation",
+  "dep:windows",
+]
+
+[dependencies]
+engine = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-audio = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "AudioHardware",
+  "objc2-core-audio-types",
+] }
+objc2-core-audio-types = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "CoreAudioBaseTypes",
+] }
+objc2-core-foundation = { version = "0.3", optional = true, default-features = false, features = [
+  "std",
+  "CFString",
+] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Threading",
+  "Win32_System_Variant",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_Media_KernelStreaming",
+  "Win32_Media_Multimedia",
+  "Win32_Security",
+] }
+
+[dev-dependencies]
+assert_no_alloc = "1.1"
+
+[[bin]]
+name = "measure-sink"
+required-features = ["hardware"]
