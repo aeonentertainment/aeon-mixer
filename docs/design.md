@@ -133,7 +133,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | -------------------- | -------------------------------------------- | ---------------------------------------------------------------------- |
 | Sample rate          | 48 000 Hz                                    | Opus's native rate; no resampling anywhere                             |
 | Block                | 128 frames, 2.67 ms                          | the output quantum and every ramp's unit                               |
-| Hardware period      | 64 to 128 frames, measured per OS            | decision 0003 records what each OS gives                               |
+| Hardware period      | 128 frames, 64 on request                    | 64 ran clean only on macOS; decision 0003 has every OS's numbers       |
 | Internal format      | f32, planar                                  | slots mono, buses stereo; the device crate interleaves at the edge     |
 | Slots per engine     | fixed at open, default 8, at most 16         | `Params` is fixed-size                                                 |
 | Playout delay        | 15 ms, set at open                           | fixed and shallow; the singer notices a moving delay more than a click |
@@ -429,10 +429,12 @@ Done when: `OfflineDriver::pump` renders a known graph deterministically, twice 
 
 ### 8.3 Devices: `devices/`, `tools/measure-sink`
 
-One `Driver` per OS. CoreAudio with an explicit buffer frame size. WASAPI event-driven, trying
-the IAudioClient3 shared low-latency path first, because exclusive mode silences every other
-app, and falling back to exclusive when shared cannot reach the budget. ALSA direct on the
-hardware device with an explicit period. Each reports what it got in `StreamInfo`.
+One `Driver` per OS. CoreAudio with an explicit buffer frame size. WASAPI event-driven on
+IAudioClient3's shared stream at the shortest period the shared engine allows; exclusive only
+when asked or when shared cannot open, because it silences every other app and ran in bursts on
+the laptop decision 0003 measured. ALSA direct on the hardware device with an explicit period,
+and a realtime audio thread where the host grants one. Each reports what it got in
+`StreamInfo`.
 
 - `measure-sink` opens the device, runs for a minute, and prints the period, the reported
   latency, the callback timing distribution and the underrun count. Those numbers go into
@@ -605,8 +607,6 @@ Each is deliberate and here so no one reverts it by accident.
 
 ## 12. Decided later
 
-- Device backend crates per OS, and shared versus exclusive on Windows: decision 0003, from
-  the measure-sink numbers.
 - Echo cancellation: the stage exists in the chain; the calibration probe decides whether a
   phone at the mouth needs it before the WebRTC canceller is linked.
 - The offline stretcher: signalsmith at a quality setting first, an A/B against Rubber Band on
