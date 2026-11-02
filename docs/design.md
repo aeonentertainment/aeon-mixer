@@ -184,6 +184,7 @@ native/
     src/driver.rs       Driver trait, StreamInfo, the offline driver
     src/params.rs       Params and the triple buffer
     src/command.rs      Command, Event and the rings
+    src/audio_thread.rs the callback's body: drain commands, render, fade a swap, catch a panic
     src/graph.rs        Graph: render one block
     src/slot/           Slot, its source, the effect chain, the meter
     src/ingest/         packet ring, jitter buffer, Opus and L16 decoding, push input
@@ -254,6 +255,7 @@ pub enum Command {
 pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
+    MasterLevel { rms_db: f32, peak_db: f32 },
     Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32 },
     Position { frames: u64 },
     BackingEnded,
@@ -395,7 +397,7 @@ Done when: `vp check`, `vp test` and `cargo test` pass on macOS, Windows and Lin
 TypeScript test pumps one silent block through the offline engine; prebuilt addons publish per
 platform as optional dependencies.
 
-### 8.1 Graph: `engine/src/{graph,params,command,master}.rs`, `engine/src/slot/`
+### 8.1 Graph: `engine/src/{graph,params,command,master,audio_thread}.rs`, `engine/src/slot/`
 
 The audio thread's whole job. `render` reads the snapshot, pulls one block from every slot's
 source, runs the chain, sums with the backing path and the reaction voices, clips, meters,

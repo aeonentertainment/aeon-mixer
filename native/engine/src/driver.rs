@@ -108,7 +108,7 @@ impl OfflineDriver {
     }
 }
 
-/// What the engine renders between songs, and all it renders until the graph workstream lands.
+/// A render of nothing: what the binding plays until it hosts an `AudioThread` (8.8).
 pub fn silent_render() -> Render {
     Box::new(|mut out: Stereo<'_>| out.silence())
 }
