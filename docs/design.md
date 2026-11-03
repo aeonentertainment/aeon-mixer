@@ -492,6 +492,9 @@ ring into the jitter buffer at the top of each block.
   A stream quiet for a second stops concealing, so an idle slot costs no decodes.
 - Decoding happens in the callback, bounded to the packets due this block. The decoder is
   created on the control thread; libopus allocates nothing after that.
+- A slot's first pull discards what its ring already holds. A mixer is armed, and its ports
+  handed to the phones, before it starts; a stream anchored on that backlog would play behind
+  real time for good.
 - At the 15 ms playout delay, in-band FEC helps frames of 10 ms and shorter. The packet after
   a lost 20 ms frame arrives 5 ms after that frame falls due, so mediasoup's 20 ms streams get
   the decoder's own concealment.
