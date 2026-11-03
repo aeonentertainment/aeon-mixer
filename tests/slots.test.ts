@@ -54,7 +54,7 @@ test("rtp and l16 slots listen on their own ports, push slots on none", async ()
 
   const held = await bindAgain(ports[0] ?? 0);
   expect(held).toMatchObject({ code: "EADDRINUSE" });
-  await destroyLive(engine, mixer);
+  await mixer.destroy();
   await engine.close();
 });
 

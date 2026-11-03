@@ -64,7 +64,8 @@ export class Engine {
 
   constructor(options: OpenEngineOptions) {
     this.#slots = integerIn("slots", options.slots ?? 8, 1, 16);
-    // The jitter buffer holds 64 packets ahead of its cursor, 160 ms of the phone's shortest frame
+    // The jitter buffer holds 64 packets ahead of its cursor, 160 ms of the phone's shortest
+    // frame; under 5 ms, two blocks, that frame has no slack and ordinary jitter is all late packets
     const playoutDelayFrames = msToFrames(
       finiteIn("playoutDelayMs", options.playoutDelayMs ?? 15, 5, 100),
     );
