@@ -30,7 +30,6 @@ export interface MixerHost extends RenderHost {
 
 type Phase = "armed" | "starting" | "live" | "destroyed";
 
-
 function defaultSlotParams(): SlotParamsInput {
   return {
     gain: 1,

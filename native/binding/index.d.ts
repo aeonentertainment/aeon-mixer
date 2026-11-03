@@ -24,6 +24,11 @@ export declare class Engine {
    * every batch it drains.
    */
   constructor(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void)
+  /**
+   * Builds a mixer with one slot per kind, in order: `"rtp"`, `"l16"` or `"push"`. The rtp
+   * and l16 slots bind their ports here and report them through `Mixer.port`.
+   */
+  createMixer(kinds: Array<string>): Mixer
   get output(): OutputInfo
   /** The outputs this OS offers, the default marked. Empty on the offline clock. */
   outputs(): Array<OutputEntry>
@@ -57,22 +62,30 @@ export declare class Engine {
   resetSlot(slot: number): void
   /** Plays interleaved stereo on a free reaction voice; false when four already play. */
   playReaction(stereo: Float32Array): boolean
-  /** Stops the clock, then the events thread. Whatever graph is live is dropped here. */
+  /**
+   * Stops the clock, then the network thread with every port still on it, then the events
+   * thread. Whatever graph is live is dropped here.
+   */
   close(): void
 }
 
 export declare class Mixer {
-  /** `push_slots` push slots, in order. The other kinds arrive with the ingest workstream. */
-  constructor(pushSlots: number)
+  /** Moves a finished render's stems into the graph as its backing path, before `swap`. */
+  installBacking(render: BackingRender): void
+  /** The UDP port a slot listens on, or null for a push slot. */
+  port(index: number): number | null
   /**
    * Hands interleaved stereo PCM to a push slot, which folds it to mono as every slot is
    * (docs/design.md 8.4), and returns how many frames it took.
    */
   push(index: number, stereo: Float32Array): number
-  /** How many times a push slot dropped its oldest audio to stay within the depth. */
-  resyncs(index: number): number
-  /** Moves a finished render's stems into the graph as its backing path, before `swap`. */
-  installBacking(render: BackingRender): void
+  /** Every slot's ingest counters, as the audio thread last published them. */
+  stats(): Array<SlotStatsInfo>
+  /**
+   * The end of the mixer on this thread: closes the slots' ports and drops the push feeds,
+   * and a graph that never started.
+   */
+  release(): void
 }
 
 export interface BackingInput {
@@ -121,6 +134,8 @@ export interface OpenOptions {
   /** An id from `outputs`, or the default output. */
   device?: string
   periodFrames: number
+  /** The jitter buffer's playout delay for every `rtp` and `l16` slot. */
+  playoutDelayFrames: number
 }
 
 export interface OutputEntry {
@@ -151,6 +166,16 @@ export interface SlotParamsInput {
   corrector: CorrectorInput
   reverb: ReverbInput
   guideOffsetMs: number
+}
+
+/** `SlotStats` as JavaScript reads it. */
+export interface SlotStatsInfo {
+  pushed: number
+  lost: number
+  late: number
+  concealed: number
+  resyncs: number
+  jitterMs: number
 }
 
 export interface StemGainsInput {
