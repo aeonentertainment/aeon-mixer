@@ -125,10 +125,10 @@ impl Drain {
         self.renders.retain_mut(|watch| {
             let guard = lock(&watch.job);
             let Some(job) = guard.as_ref() else { return false };
+            // Finished is read first, so the fraction beside it is the worker's last word; and
+            // once it reads true, the join `installBacking` does returns without blocking
+            let finished = job.is_finished();
             let fraction = job.progress();
-            // The worker writes 1 as its last act, so a full fraction is the job finishing; the
-            // join `installBacking` does then waits only for the thread to exit
-            let finished = fraction >= 1.0 || job.is_finished();
             if fraction != watch.last {
                 watch.last = fraction;
                 batch.push(NativeEvent::RenderProgress {

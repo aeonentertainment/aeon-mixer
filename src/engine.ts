@@ -94,6 +94,7 @@ export class Engine {
       swapIn: (mixer, graph, events) => this.#swapIn(mixer, graph, events),
       swapOut: (mixer) => this.#swapOut(mixer),
       isLive: (mixer) => this.#live?.mixer === mixer,
+      anyLive: () => this.#live !== null,
       underruns: () => this.#underruns,
     };
   }

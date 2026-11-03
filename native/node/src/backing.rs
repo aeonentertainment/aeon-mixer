@@ -73,9 +73,9 @@ impl BackingRender {
         Arc::clone(&self.job)
     }
 
-    /// The rendered stems as a backing path, once. `src/` calls this after the events thread
-    /// reported the job finished, so the join only waits for the worker to exit; a failed render
-    /// is the engine's message, repeated on every later call.
+    /// The rendered stems as a backing path, once. `src/` calls this after the events thread saw
+    /// the worker finish, so the join reaps the thread without blocking; a failed render is the
+    /// engine's message, repeated on every later call.
     pub(crate) fn take_backing(&mut self) -> Result<Backing> {
         if let Some(reason) = &self.failed {
             return Err(Error::from_reason(reason.clone()));

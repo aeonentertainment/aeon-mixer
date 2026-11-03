@@ -34,6 +34,7 @@ export class Backing {
   /** Resolves when the render job is done, with stems or an error that `install` reports. */
   readonly rendered: Promise<void>;
   #rendering = true;
+  #installed = false;
   #fraction = 0;
   #stemGains: StemGainsInput;
   readonly #render: NativeBackingRender;
@@ -75,9 +76,14 @@ export class Backing {
     return this.#stemGains;
   }
 
-  /** Moves the rendered stems into `graph`. Throws the engine's message when the render failed. */
+  /**
+   * Moves the rendered stems into `graph`, once; the graph keeps them through a refused swap.
+   * Throws the engine's message when the render failed.
+   */
   install(graph: NativeMixer) {
+    if (this.#installed) return;
     graph.installBacking(this.#render);
+    this.#installed = true;
   }
 
   setStemGain(kind: StemKind, gain: number) {

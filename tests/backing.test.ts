@@ -270,6 +270,27 @@ test("pause holds the playhead in silence and resume plays on from where it held
   await engine.close();
 });
 
+test("a start refused by a live mixer leaves it untouched, and succeeds once it is gone", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const live = await engine.createMixer({ slots: [], backing: backing(constant(0.5, 2)) });
+  await rendered(live);
+  await startLive(engine, live);
+  const next = await engine.createMixer({
+    slots: [],
+    backing: backing(constant(0.5, 2), { stemGains: { instrumental: 0.5, guideVocals: 1 } }),
+  });
+  await rendered(next);
+  await expect(next.start()).rejects.toThrow(/another mixer is live/);
+  engine.pump(STEM_RAMP_BLOCKS);
+  expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.5) < 1e-3)).toBe(true);
+
+  await destroyLive(engine, live);
+  await startLive(engine, next);
+  expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.25) < 1e-3)).toBe(true);
+  await destroyLive(engine, next);
+  await engine.close();
+});
+
 test("a stem gain is held while armed, then ramps over 50 ms when changed live", async () => {
   const engine = await openEngine({ output: { offline: true } });
   const mixer = await engine.createMixer({

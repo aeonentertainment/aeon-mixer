@@ -25,6 +25,7 @@ export interface MixerHost extends RenderHost {
   /** Swaps the silent graph back in; resolves once the mixer's graph is back and dropped. */
   swapOut(mixer: Mixer): Promise<void>;
   isLive(mixer: Mixer): boolean;
+  anyLive(): boolean;
   underruns(): number;
 }
 
@@ -155,7 +156,8 @@ export class Mixer {
 
   /**
    * Waits for the backing's render, installs it, and swaps the graph in. With the render already
-   * done, the swap is sent before this returns to the caller.
+   * done, the swap is sent before this returns to the caller. Nothing is written to the engine
+   * while another mixer is live, so a refused start leaves the song playing untouched.
    */
   async start() {
     if (this.#phase !== "armed") {
@@ -165,6 +167,7 @@ export class Mixer {
     let swapped: Promise<number>;
     try {
       if (this.#backing?.rendering) await this.#backing.rendered;
+      if (this.#host.anyLive()) throw new Error("another mixer is live; destroy it first");
       this.#backing?.install(this.#native);
       this.#params.forEach((params, slot) => {
         this.#host.native.setSlotParams(slot, params);
