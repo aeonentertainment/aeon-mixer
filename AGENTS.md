@@ -65,7 +65,8 @@ a decision record and the developer's agreement.
 
 - `pnpm install` after cloning or pulling, then `pnpm exec vp run build:native`: the TypeScript
   tests load the addon it builds. With a global `vp`, `vp install` and `vp run build:native` do the
-  same. pnpm and a Rust toolchain are the things to install yourself.
+  same. pnpm, a Rust toolchain and cmake are the things to install yourself: `opusic-sys`
+  builds libopus from source with cmake.
 - `vp check` formats, lints and type-checks the TypeScript. `vp test` runs its suite.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` in
   `native/` do the same for Rust.

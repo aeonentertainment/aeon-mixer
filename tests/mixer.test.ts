@@ -1,0 +1,265 @@
+import { expect, test, vi } from "vite-plus/test";
+import { type Mixer, type OfflineEngine, openEngine } from "../src/index.ts";
+
+const BLOCK = 128;
+/** The swap fade is 5 ms, under two blocks; the third block is clean. */
+const FADE_BLOCKS = 3;
+const CENTRE = Math.SQRT1_2;
+
+/** Interleaved stereo at one level, which folds to that level. */
+function constant(level: number, blocks = 1) {
+  return new Float32Array(2 * BLOCK * blocks).fill(level);
+}
+
+function left(interleaved: Float32Array): number[] {
+  return Array.from(interleaved.filter((_, i) => i % 2 === 0));
+}
+
+function right(interleaved: Float32Array): number[] {
+  return Array.from(interleaved.filter((_, i) => i % 2 === 1));
+}
+
+function onceLevel(mixer: Mixer): Promise<[slot: number, rmsDb: number, peakDb: number]> {
+  return new Promise((resolve) => {
+    const off = mixer.on("level", (slot, rmsDb, peakDb) => {
+      off();
+      resolve([slot, rmsDb, peakDb]);
+    });
+  });
+}
+
+/** Starts the mixer, pumping the offline clock through the swap fade so the acks arrive. */
+async function startLive(engine: OfflineEngine, mixer: Mixer) {
+  const started = mixer.start();
+  engine.pump(FADE_BLOCKS);
+  return started;
+}
+
+async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
+  const destroyed = mixer.destroy();
+  engine.pump(FADE_BLOCKS);
+  await destroyed;
+}
+
+test("a push slot plays what the host pushes, through its gain and the pan law", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }, { kind: "push" }] });
+  expect(mixer.slots).toEqual([
+    { index: 0, kind: "push", port: null },
+    { index: 1, kind: "push", port: null },
+  ]);
+  mixer.setSlot(0, { gain: 0.5, pan: -1 });
+  mixer.setSlot(1, { gain: 0.5 });
+  await startLive(engine, mixer);
+
+  expect(mixer.push(0, constant(0.5))).toBe(BLOCK);
+  expect(mixer.push(1, constant(0.5))).toBe(BLOCK);
+  const out = engine.pump(1);
+  for (const sample of left(out)) expect(sample).toBeCloseTo(0.25 + 0.25 * CENTRE, 5);
+  for (const sample of right(out)) expect(sample).toBeCloseTo(0.25 * CENTRE, 5);
+
+  expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
+  // A slot's ring holds 100 ms; the rest is the host's to hand in again, and the count says so
+  expect(mixer.push(1, constant(1, 400))).toBe(4800);
+  expect(mixer.stats()).toEqual({
+    slots: [
+      { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 },
+      { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 },
+    ],
+    underruns: 0,
+  });
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("start resolves on the acks, reports the output latency, and refuses a second live mixer", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  const before = Date.now();
+  const started = await startLive(engine, mixer);
+  expect(started.startedAt).toBeGreaterThanOrEqual(before);
+  expect(started.startedAt).toBeLessThanOrEqual(Date.now() + engine.output.latencyMs);
+  expect(started.backingOffsetMs).toBe(engine.output.latencyMs);
+  expect(started.speedFactor).toBe(1);
+
+  await expect(mixer.start()).rejects.toThrow(/cannot start: it is live/);
+  const next = await engine.createMixer({ slots: [{ kind: "push" }] });
+  await expect(next.start()).rejects.toThrow(/another mixer is live/);
+  await destroyLive(engine, mixer);
+  await startLive(engine, next);
+  await destroyLive(engine, next);
+  await engine.close();
+});
+
+test("settings on an armed mixer wait for its start and never touch the live one", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const live = await engine.createMixer({ slots: [{ kind: "push" }] });
+  await startLive(engine, live);
+  const armed = await engine.createMixer({ slots: [{ kind: "push" }] });
+  armed.setSlot(0, { mute: true });
+  armed.setSlotEffects(0, [{ kind: "reverb", enabled: false, roomSize: 0.5, mix: 0.2 }]);
+
+  live.push(0, constant(0.5));
+  expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.5 * CENTRE) < 1e-5)).toBe(true);
+
+  await destroyLive(engine, live);
+  await startLive(engine, armed);
+  armed.push(0, constant(0.5));
+  expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
+  armed.setSlot(0, { mute: false });
+  armed.push(0, constant(0.5, 2));
+  engine.pump(1);
+  expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.5 * CENTRE) < 1e-5)).toBe(true);
+
+  // Enabled live, the reverb is in the chain and the slot no longer plays the dry level
+  armed.setSlotEffects(0, [{ kind: "reverb", enabled: true, roomSize: 0.5, mix: 0.2 }]);
+  armed.push(0, constant(0.5, 4));
+  engine.pump(3);
+  expect(left(engine.pump(1)).some((sample) => Math.abs(sample - 0.5 * CENTRE) > 1e-3)).toBe(true);
+  await destroyLive(engine, armed);
+  await engine.close();
+});
+
+test("level events read the slot's RMS and peak within a tenth of a decibel", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  // A host pushes as it captures, a block ahead of the clock; the meter sits before gain, so it
+  // reads the sine through the swap fade too
+  let frame = 0;
+  const sineBlock = () => {
+    const block = new Float32Array(2 * BLOCK);
+    for (let i = 0; i < BLOCK; i += 1, frame += 1) {
+      const sample = 0.5 * Math.sin((2 * Math.PI * 1000 * frame) / 48000);
+      block[2 * i] = sample;
+      block[2 * i + 1] = sample;
+    }
+    return block;
+  };
+  const level = onceLevel(mixer);
+  for (let i = 0; i < FADE_BLOCKS; i += 1) mixer.push(0, sineBlock());
+  await startLive(engine, mixer);
+  const blocks = Math.ceil(4800 / BLOCK);
+  for (let i = FADE_BLOCKS; i < blocks; i += 1) {
+    mixer.push(0, sineBlock());
+    engine.pump(1);
+  }
+  const [slot, rmsDb, peakDb] = await level;
+  expect(slot).toBe(0);
+  expect(rmsDb).toBeCloseTo(-9.03, 1);
+  expect(peakDb).toBeCloseTo(-6.02, 1);
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("destroy swaps silence in, resolves once the graph is back, and the mixer refuses after", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  await startLive(engine, mixer);
+  mixer.push(0, constant(1, 8));
+  expect(engine.pump(1).some((sample) => sample !== 0)).toBe(true);
+
+  await destroyLive(engine, mixer);
+  expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
+  expect(() => mixer.push(0, constant(1))).toThrow(/destroyed/);
+  await mixer.destroy();
+  await engine.close();
+});
+
+test("resetSlot forgets what the host pushed, and a guide can be set and cleared live", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  mixer.setSlotGuide(0, {
+    notes: [{ midi: 60, startMs: 0, endMs: 500 }],
+    keyMask: 0b1010_1011_0101,
+  });
+  await startLive(engine, mixer);
+  mixer.setSlotGuide(0, { notes: [{ midi: 62, startMs: 500, endMs: 1000 }], keyMask: 0b101 }, 20);
+  mixer.setSlotGuide(0, null);
+
+  mixer.push(0, constant(0.5, 3));
+  mixer.resetSlot(0);
+  expect(engine.pump(3).every((sample) => sample === 0)).toBe(true);
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("a push slot plays at most 30 ms behind the newest frame, dropping the oldest and counting it", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  mixer.setSlot(0, { pan: -1 });
+  await startLive(engine, mixer);
+
+  // 50 ms of one level, then exactly 30 ms of another: the first level is what gets dropped
+  mixer.push(0, new Float32Array(2 * 2400).fill(0.25));
+  mixer.push(0, new Float32Array(2 * 1440).fill(0.5));
+  expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.5) < 1e-6)).toBe(true);
+  expect(mixer.stats().slots[0]?.resyncs).toBe(1);
+  // Within the depth nothing more is dropped
+  expect(left(engine.pump(10)).every((sample) => Math.abs(sample - 0.5) < 1e-6)).toBe(true);
+  expect(mixer.stats().slots[0]?.resyncs).toBe(1);
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("a command the clock never serves rejects after a second with the engine's state", async () => {
+  vi.useFakeTimers();
+  try {
+    const engine = await openEngine({ output: { offline: true } });
+    const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+    const started = mixer.start();
+    vi.advanceTimersByTime(1000);
+    await expect(started).rejects.toThrow(/not acknowledged within 1000 ms; the engine is running/);
+    const closing = engine.close();
+    engine.pump(FADE_BLOCKS);
+    await closing;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ranges are checked before anything crosses", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  await expect(
+    engine.createMixer({
+      slots: [],
+      backing: {
+        stems: [],
+        key: 0,
+        speed: 1,
+        stemGains: { instrumental: 1, guideVocals: 1 },
+      },
+    }),
+  ).rejects.toThrow(/backing/);
+  await expect(
+    engine.createMixer({ slots: Array.from({ length: 9 }, () => ({ kind: "push" })) }),
+  ).rejects.toThrow(RangeError);
+
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }, { kind: "push" }] });
+  expect(() => mixer.setSlot(2, { gain: 1 })).toThrow(RangeError);
+  expect(() => mixer.setSlot(0, { gain: -1 })).toThrow(RangeError);
+  expect(() => mixer.setSlot(0, { gain: 5 })).toThrow(RangeError);
+  expect(() => mixer.setSlot(0, { pan: 2 })).toThrow(RangeError);
+  expect(() => mixer.setSlot(0, { pan: Number.NaN })).toThrow(TypeError);
+  expect(() =>
+    mixer.setSlotEffects(0, [
+      { kind: "pitch-correction", enabled: true, strength: 2, retuneMs: 0 },
+    ]),
+  ).toThrow(RangeError);
+  expect(() =>
+    mixer.setSlotEffects(0, [{ kind: "reverb", enabled: true, roomSize: 0.5, mix: -0.1 }]),
+  ).toThrow(RangeError);
+  expect(() =>
+    mixer.setSlotGuide(0, { notes: [{ midi: 128, startMs: 0, endMs: 1 }], keyMask: 0 }),
+  ).toThrow(RangeError);
+  expect(() =>
+    mixer.setSlotGuide(0, { notes: [{ midi: 60, startMs: 10, endMs: 5 }], keyMask: 0 }),
+  ).toThrow(RangeError);
+  expect(() => mixer.setSlotGuide(0, { notes: [], keyMask: 4096 })).toThrow(RangeError);
+  expect(() => mixer.setSlotGuide(0, null, 5000)).toThrow(RangeError);
+  expect(() => mixer.push(0, new Float32Array(0))).toThrow(TypeError);
+  expect(() => mixer.push(0, new Float32Array(3))).toThrow(RangeError);
+  await expect(mixer.seek(1000)).rejects.toThrow(/backing/);
+  await expect(mixer.setBackingKey(2)).rejects.toThrow(/backing/);
+  expect(() => mixer.setStemGain("instrumental", 0.5)).toThrow(/backing/);
+  await engine.close();
+});

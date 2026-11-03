@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["engine", "kernels", "node", "devices"]
+members = ["engine", "kernels", "node", "devices", "transport"]
 
 [workspace.package]
 version = "0.0.0"
@@ -9,5 +9,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+devices = { path = "devices" }
 engine = { path = "engine" }
 kernels = { path = "kernels" }
+transport = { path = "transport" }

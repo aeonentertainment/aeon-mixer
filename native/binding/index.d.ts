@@ -9,17 +9,176 @@
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
-/** An engine on the offline driver: the test clock, pumped from JavaScript. */
-export declare class OfflineEngine {
-  constructor()
+/**
+ * A song's stems being decoded and rendered for one mixer. JavaScript holds it from
+ * `createMixer` until `start` installs it.
+ */
+export declare class BackingRender {
+  /** The id the events thread's `renderProgress` and `renderFinished` events carry. */
+  get id(): number
+}
+
+export declare class Engine {
+  /**
+   * Starts the clock on the silent graph and the events thread, which calls `on_events` with
+   * every batch it drains.
+   */
+  constructor(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void)
+  /**
+   * Builds a mixer with one slot per kind, in order: `"rtp"`, `"l16"` or `"push"`. The rtp
+   * and l16 slots bind their ports here and report them through `Mixer.port`.
+   */
+  createMixer(kinds: Array<string>): Mixer
   get output(): OutputInfo
-  /** Renders `blocks` blocks and returns them as interleaved stereo. */
+  /** The outputs this OS offers, the default marked. Empty on the offline clock. */
+  outputs(): Array<OutputEntry>
+  /** Offline clock only: renders `blocks` blocks and returns them as interleaved stereo. */
   pump(blocks: number): Float32Array
+  /** Writes one slot of the snapshot and publishes the whole of it. */
+  setSlotParams(index: number, params: SlotParamsInput): void
+  /**
+   * Moves `mixer`'s graph to the audio thread and returns the swap's id. The graph it replaces
+   * comes back through the retired ring as a `retired` event.
+   */
+  swap(mixer: Mixer): number
+  /** Swaps the silent graph in: the end of a mixer. */
+  swapSilent(): number
+  start(): number
+  /**
+   * Starts decoding and rendering a song's stems on the worker thread. The events thread
+   * reports the job's progress under the id the result carries.
+   */
+  startRender(input: BackingInput): BackingRender
+  seek(toFrame: number): number
+  pause(): number
+  resume(): number
+  setKey(semitones: number): number
+  stopAt(atFrame: number, fadeFrames: number): number
+  /** Writes the stem gains of the snapshot and publishes the whole of it. */
+  setStemGains(gains: StemGainsInput): void
+  /** Gives the live graph's slot a guide, or takes it away with nothing. No ack. */
+  setGuide(slot: number, guide?: GuideInput | undefined | null): void
+  /** The live graph's slot forgets the stream it was hearing. No ack. */
+  resetSlot(slot: number): void
+  /** Plays interleaved stereo on a free reaction voice; false when four already play. */
+  playReaction(stereo: Float32Array): boolean
+  /**
+   * Stops the clock, then the network thread with every port still on it, then the events
+   * thread. Whatever graph is live is dropped here.
+   */
   close(): void
+}
+
+export declare class Mixer {
+  /** Moves a finished render's stems into the graph as its backing path, before `swap`. */
+  installBacking(render: BackingRender): void
+  /** The UDP port a slot listens on, or null for a push slot. */
+  port(index: number): number | null
+  /**
+   * Hands interleaved stereo PCM to a push slot, which folds it to mono as every slot is
+   * (docs/design.md 8.4), and returns how many frames it took.
+   */
+  push(index: number, stereo: Float32Array): number
+  /** Every slot's ingest counters, as the audio thread last published them. */
+  stats(): Array<SlotStatsInfo>
+  /**
+   * The end of the mixer on this thread: closes the slots' ports and drops the push feeds,
+   * and a graph that never started.
+   */
+  release(): void
+}
+
+export interface BackingInput {
+  instrumental: string
+  guide?: string
+  /** The armed key, rendered before start. */
+  semitones: number
+  /** The armed speed factor, rendered before start. */
+  speed: number
+}
+
+export interface CorrectorInput {
+  enabled: boolean
+  strength: number
+  retuneMs: number
+}
+
+export interface GuideInput {
+  notes: Array<NoteInput>
+  /** The key's pitch classes as bits, C in bit 0. */
+  keyMask: number
+}
+
+export type NativeEvent =
+  | { kind: 'ack'; id: number; positionFrames: number }
+  | { kind: 'level'; slot: number; rmsDb: number; peakDb: number }
+  | { kind: 'masterLevel'; rmsDb: number; peakDb: number }
+  | { kind: 'pitch'; slot: number; positionMs: number; hz: number; confidence: number }
+  | { kind: 'position'; frames: number }
+  | { kind: 'backingEnded' }
+  | { kind: 'underrun' }
+  | { kind: 'fault' }
+  | { kind: 'retired' }
+  | { kind: 'renderProgress'; job: number; fraction: number }
+  | { kind: 'renderFinished'; job: number }
+
+export interface NoteInput {
+  midi: number
+  startFrame: number
+  endFrame: number
+}
+
+export interface OpenOptions {
+  /** The offline driver, pumped from JavaScript, instead of a device. */
+  offline: boolean
+  /** An id from `outputs`, or the default output. */
+  device?: string
+  periodFrames: number
+  /** The jitter buffer's playout delay for every `rtp` and `l16` slot. */
+  playoutDelayFrames: number
+}
+
+export interface OutputEntry {
+  id: string
+  name: string
+  isDefault: boolean
 }
 
 export interface OutputInfo {
   sampleRate: number
   periodFrames: number
   latencyMs: number
+}
+
+export interface ReverbInput {
+  enabled: boolean
+  roomSize: number
+  mix: number
+}
+
+export interface SlotParamsInput {
+  /** Linear amplitude. */
+  gain: number
+  /** -1 left to 1 right. */
+  pan: number
+  mute: boolean
+  solo: boolean
+  corrector: CorrectorInput
+  reverb: ReverbInput
+  guideOffsetMs: number
+}
+
+/** `SlotStats` as JavaScript reads it. */
+export interface SlotStatsInfo {
+  pushed: number
+  lost: number
+  late: number
+  concealed: number
+  resyncs: number
+  jitterMs: number
+}
+
+export interface StemGainsInput {
+  instrumental: number
+  guide: number
 }

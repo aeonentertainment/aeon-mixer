@@ -1,0 +1,15 @@
+[package]
+name = "transport"
+description = "The network thread: UDP receive into the engine's packet rings, and the RTP return sender."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+engine = { workspace = true }
+mio = { version = "1.2.4", features = ["os-poll", "net"] }
+opus = "0.4.0"
+
+[dev-dependencies]
+assert_no_alloc = "1.1"

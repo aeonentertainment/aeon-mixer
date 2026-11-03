@@ -57,7 +57,7 @@ producer and one consumer.
 | Commands   | SPSC ring of `Command`                 | control to audio                                                  | `Swap`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt` with an id; `SetGuide`, `ResetSlot` without |
 | Events     | SPSC ring of `Event`                   | audio to control                                                  | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`                     |
 | Retired    | SPSC ring of `Retired`                 | audio to control                                                  | graphs and guides the audio thread no longer holds, dropped on the control thread                          |
-| Audio      | SPSC rings of f32 blocks               | control to audio for push voices, audio to network for the return | PCM, one block at a time                                                                                   |
+| Audio      | SPSC rings of stereo f32 frames        | control to audio for push voices, audio to network for the return | PCM; the audio thread pushes or pulls one block at a time                                                  |
 
 Rules that follow:
 
@@ -111,16 +111,19 @@ What the engine reports so the rest of the device can follow:
 The topology is fixed. Adding a feature means adding a stage to a chain, a stem to the backing
 path or an output to the master, never a general graph.
 
-**A slot**, in order: source, meter, echo cancel when compiled in, pitch corrector, reverb,
-gain and pan into the stereo bus. The meter sits after the corrector and before gain, so the
-level words tell the singer about their singing, and mute never changes them. The source is a
+**A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, reverb,
+gain and pan into the stereo bus. The meter sits after the corrector and before the reverb and
+gain, so the level words tell the singer about their singing, not the room, and mute never
+changes them. The corrector runs bypassed for now: engaged, its shifter delays the voice by up
+to 15 ms for a low voice, which breaks the latency budget on slower devices. It reads pitch
+with no delay until `measure-latency` shows engaged correction fits the budget. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots. Slots are
 mono and pan with a constant-power law into the stereo bus.
 
 **The backing path**: planar stereo stems in memory, decoded and pre-rendered at the armed key
 and speed before start, read by one playhead. Each stem has a gain with a 50 ms ramp. A live
 key change engages a stretcher on the summed stems with a 50 ms crossfade. Seek fades out over
-20 ms, jumps, fades in over 20 ms. Pause holds the playhead. `stopAt` ramps the stems to
+20 ms, jumps, fades in over 20 ms. Pause fades out the same way and holds the playhead. `stopAt` ramps the stems to
 silence over its `fadeMs` and then raises `BackingEnded`, as reaching the end of the stems does.
 A live key change also transposes the melody guide every corrector follows, by the same
 semitones, and so does the armed key.
@@ -147,8 +150,8 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | Slot gain, pan, mute, solo | one block                         |
 | Stem gain                  | 50 ms                             |
 | Live key crossfade         | 50 ms                             |
-| Seek fade out and in       | 20 ms each                        |
-| Graph swap fade            | 5 ms                              |
+| Seek and pause fades       | 20 ms each way                    |
+| Graph swap fade            | 5 ms, linear                      |
 | `stopAt`                   | its `fadeMs`, 3 s from the device |
 
 ## 5. Lifecycle
@@ -169,7 +172,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   live, slots still open, until the host destroys it: people talk through the mics after the
   song.
 - **Destroy.** `destroy` swaps the silent graph in and resolves when the old graph arrives on
-  the retired ring and is dropped. Slot ports close.
+  the retired ring and is dropped. Slot ports close within the network thread's next tick after
+  that, since that thread owns the sockets and `destroy` only queues their removal. Nothing
+  waits for it: the ports are ephemeral and no caller binds one again.
 - **Close.** `close` destroys any live mixer, stops the driver, joins the threads.
 - **Faults.** A device loss or a caught panic emits `fault` on the engine. The host closes and
   reopens; nothing inside tries to recover.
@@ -192,7 +197,8 @@ native/
     src/slot/           Slot, its source, the effect chain, the meter
     src/ingest/         packet ring, jitter buffer, Opus and L16 decoding, push input
     src/backing/        Stems, playhead, stem gains, live key, render job
-    src/master.rs       sum, soft clipper, master meter, return ring producer
+    src/master.rs       sum, soft clipper, master meter, push into the return ring
+    src/return_ring.rs  the return branch's ring: whole blocks in, any number of frames out
   kernels/              C++ leaves behind extern "C": corrector, stretcher, reverb
     build.rs            cc compiles cpp/
     cpp/                vendored sources with licences and the commit they came from
@@ -204,8 +210,8 @@ native/
 
 Dependencies point one way: `node` uses `engine`, `transport` and `devices`; `transport` and
 `devices` use `engine`; `engine` uses `kernels`; `kernels` uses nothing. `unsafe` lives in
-`kernels` and `devices` only. Opus comes into `engine` through a maintained Rust binding to
-libopus, chosen by the ingest workstream and named in its PR.
+`kernels` and `devices` only. Opus comes into `engine` through `opus` (opus-rs), the safe binding
+over `opusic-sys`, which builds its bundled libopus with cmake.
 
 ## 7. Contracts
 
@@ -281,9 +287,18 @@ pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
 // engine/src/ingest/
 pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
 pub fn packet_ring(capacity: usize) -> (PacketProducer, PacketConsumer);   // SPSC, fixed-size
-pub struct JitterBuffer;   // new(playout_delay_frames); push(Packet); pull one block of f32 mono; stats()
-pub struct PushVoice;      // SPSC f32 stereo ring the control thread fills; silence when empty
+pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder, on the control thread
+pub struct JitterBuffer;   // new(playout_delay_frames, codec); push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
+pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
+pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
 pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32 }
+
+// transport/src/
+/// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
+pub trait Task: Send + 'static { fn register(&mut self, registry: &Registry, token: Token) -> io::Result<()>; fn deregister(&mut self, registry: &Registry) -> io::Result<()>; fn ready(&mut self); fn tick(&mut self) {} }
+pub struct Network;        // spawn(); add(impl Task) -> TaskHandle, whose drop removes the task; drop stops the thread
+pub struct Receiver;       // a Task: bind(port: Option<u16>, PacketProducer); port()
+pub struct Header { pub marker: bool, pub payload_type: u8, pub seq: u16, pub timestamp: u32, pub ssrc: u32 }   // rtp.rs: parse(&[u8]) -> Option<(Header, &[u8])>; write(&mut [u8; 12])
 
 // engine/src/backing/
 pub struct Stems { pub instrumental: Planar, pub guide: Option<Planar>, pub frames: u64 }   // 48 kHz, planar f32
@@ -364,6 +379,11 @@ export interface Mixer {
   setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number): void;
   /** Forget the stream a slot was hearing; the next packets are a new singer. */
   resetSlot(index: number): void;
+  /**
+   * Interleaved stereo for a `push` slot, folded to mono. Returns the frames taken; the rest did
+   * not fit. Throws on a slot of another kind or a buffer that is not whole frames.
+   */
+  push(index: number, pcm: Float32Array): number;
   start(): Promise<{ startedAt: number; backingOffsetMs: number; speedFactor: number }>;
   seek(toMs: number): Promise<{ positionMs: number }>;
   pause(): Promise<void>;
@@ -410,6 +430,10 @@ writes the device buffer and the return ring, and pushes events.
 - Solo: when any slot is soloed, every unsoloed slot's effective gain is zero. Mute wins over
   solo. The effective gain ramps across the block like any other gain change.
 - Meters publish RMS and peak over the last 100 ms at 10 Hz, from after the corrector.
+- The reaction voices are the engine's, not a graph's. The audio thread renders them once a
+  block, and every graph rendering in that block sums them ahead of its master through
+  `Graph::render_with`, so a reaction plays straight through a swap fade and is clipped and
+  metered with the mix.
 - The soft clipper is transparent below its knee and never hard-clips. Its curve and knee are
   the implementer's, tested by feeding a sum above full scale and asserting no sample exceeds
   1.0 and a sum at half scale passes unchanged within 0.01 dB.
@@ -449,21 +473,41 @@ a feature so CI without hardware still compiles them.
 
 The network thread owns one UDP socket per `rtp` and `l16` slot, so today's grant flow and the
 mediasoup loopback keep working unchanged, polls them with a timeout, parses the RTP header and
-pushes fixed-size packets into the slot's ring. The audio thread drains the ring into the
-jitter buffer at the top of each block.
+pushes fixed-size packets into the slot's ring. The RTCP mediasoup multiplexes onto the same
+port is dropped by its payload type, RFC 5761's reserved range. The audio thread drains the
+ring into the jitter buffer at the top of each block.
 
 - The jitter buffer anchors the first packet's RTP timestamp to the output clock plus the
-  playout delay and never moves that anchor while the stream lives. A missing packet at its
-  due time is concealed by the decoder, with in-band FEC from the next packet when present. A
-  packet that arrives after its time is counted late and dropped; it never silences or resets
-  the stream. Clock skew between phone and device is corrected by dropping or concealing one
-  frame when the decoded FIFO drifts a frame from its target, and counted as a resync.
-- A new SSRC, a gap longer than a second, or `resetSlot` starts a new stream: the buffer
-  re-anchors and the slot's corrector resets.
+  playout delay, and jitter never moves that anchor. A missing packet at its due time is
+  concealed by the decoder, with in-band FEC from the next packet when that is already in
+  hand. A packet that arrives after its time is counted late and dropped; it never silences or
+  resets the stream.
+- Skew moves the anchor one frame at a time. Once a second the buffer looks at how early the
+  last second's packets arrived against their due times. When every one came at least a frame
+  early, the anchor moves a frame earlier and that frame is dropped; when every one came a
+  frame late, or half the delay late when a frame is longer than that, it moves a frame later
+  and that frame is concealed. Either counts as a resync. Arrival slack is the measure rather
+  than the decoded FIFO's fill, because decoding on demand keeps the FIFO at one frame.
+- A new SSRC, a gap over a second on either clock, or `resetSlot` starts a new stream: the
+  buffer re-anchors and the slot's corrector resets. A gap is a second without a packet, or a
+  timestamp a second away from where the stream is; the second one is a sender that paused.
+  A stream quiet for a second stops concealing, so an idle slot costs no decodes.
 - Decoding happens in the callback, bounded to the packets due this block. The decoder is
   created on the control thread; libopus allocates nothing after that.
+- A slot's first pull discards what its ring already holds. A mixer is armed, and its ports
+  handed to the phones, before it starts; a stream anchored on that backlog would play behind
+  real time for good.
+- At the 15 ms playout delay, in-band FEC helps frames of 10 ms and shorter. The packet after
+  a lost 20 ms frame arrives 5 ms after that frame falls due, so mediasoup's 20 ms streams get
+  the decoder's own concealment.
 - `l16` slots take stereo 16-bit big-endian at 48 kHz, as the house-mic sender sends today, and
-  fold to mono. `push` voices take stereo f32 from the control thread.
+  fold to mono. `push` slots take interleaved stereo f32 from the control thread and fold to
+  mono too. The ring holds 100 ms, and `push` returns how many frames fit; the rest is the
+  host's to hand in again. The slot plays at most 30 ms behind the newest frame it holds: a pull
+  that finds more drops the oldest down to 30 ms and counts a resync, so a host on another
+  clock, or one catching up after a stall, is pulled back inside the budget instead of drifting
+  out of it. 30 ms is three 10 ms chunks, room for a host two chunks late, and is a default
+  until `measure-latency` (8.9) gives the push path a number.
 
 Done when: a test feeds synthetic RTP with reordering, 30 ms jitter spikes and 5 percent loss
 through the offline driver and the output matches the source within the concealment's expected
@@ -475,14 +519,21 @@ growing delay.
 
 Stems in memory, one playhead, gains, fades, the live key, and the render job.
 
-- The worker thread decodes stems with a pure Rust decoder to planar f32 at 48 kHz. With an
-  armed key or speed it renders them through the stretcher at a quality setting before
-  `start`. `createMixer` resolves when the graph is built; `start` waits for the render.
+- The worker thread decodes stems with Symphonia, a pure Rust decoder, to planar f32 at 48 kHz,
+  resampling any other rate with Rubato's FFT resampler. With an armed key or speed it renders
+  them through one stretcher at signalsmith's default preset, both stems together so they stay
+  aligned, trimming the stretcher's lead and flushing its tail. `createMixer` resolves when the
+  graph is built; `start` waits for the render, then installs the backing with
+  `Graph::set_backing`.
 - The playhead advances a block per render while playing, holds on pause, jumps on seek with
-  its fades, and stops at `stopAt` with its fade. Both raise `BackingEnded` once.
+  its fades, and stops at `stopAt` with its fade. Both raise `BackingEnded` once. A seek or
+  pause acks when it takes effect, once its fade out is done, so the ack carries the frame it
+  landed on; a pause fades because a hard stop clicks. The `stopAt` fade is applied before the
+  live key, so it is silent at its frame on the reported clock.
 - The live key holds two pre-allocated stretchers. Until the first live change the stems pass
-  through dry. A change engages a stretcher with a crossfade; the next change crossfades to the
-  other. Reported position subtracts the engaged stretcher's latency.
+  through dry. A change resets the idle stretcher at the new key and feeds it for its latency,
+  so the crossfade never fades into its silent start, then crossfades to it; the next change
+  does the same with the other. Reported position subtracts the engaged stretcher's latency.
 - The armed key plus the live key is the total transposition the correctors' guides follow.
 
 Done when: a seek lands within one block of the asked frame and its ack reports it; a track
@@ -513,7 +564,7 @@ pitch class within the tolerances the C++ tests use; the stretcher moves a tone 
 semitones; the follower changes target within one block of each edge of a known guide; the
 pitch event cadence is 10 ms.
 
-### 8.7 Return branch: the ring in `engine/src/master.rs`, `transport/src/send.rs`
+### 8.7 Return branch: `engine/src/return_ring.rs`, the push in `engine/src/master.rs`, `transport/src/{packetizer,send}.rs`
 
 The master pushes every rendered block into a stereo f32 ring. The network thread pops, gathers
 480 frames, encodes one Opus frame with in-band FEC, wraps it in RTP with the configured SSRC
@@ -521,11 +572,16 @@ and payload type, and sends it. Pacing is the output clock, because blocks arriv
 device's rate. If the ring is full, the audio thread drops the block it would have pushed and
 counts it. The packetizer, from ring to RTP bytes, is separate from the socket that sends them.
 
+The ring holds frames, not blocks, because 480 is not a multiple of 128: the master writes a
+whole block or drops it, and the packetizer takes 480 frames once they are there. The graph
+owns its master, so this workstream also owns `Graph::set_return` in `graph.rs`, the one way a
+return ring reaches a master before the graph goes live.
+
 Done when: on the offline driver, the packetizer fed from the ring produces one packet per 480
 rendered frames, with monotonic sequence numbers and timestamps advancing 480 per packet. The
 socket send is the one step the test leaves out.
 
-### 8.8 Binding and API: `node/`, `src/`, `tests/`
+### 8.8 Binding and API: `node/`, `src/`, `tests/`, `engine/src/reactions.rs`
 
 The `node` crate exposes the engine to Node through napi-rs: open, create, the parameter
 setters, the commands as promises, the events thread. `src/` turns that into the API in
@@ -554,7 +610,10 @@ GStreamer and the `aeonpitch` element are deleted in a later PR.
 
 ## 9. Verification
 
-- The offline driver is the clock in every engine test. No test opens a device or a socket.
+- The offline driver is the clock in every engine test. No test opens a device. A test that
+  creates an `rtp` or `l16` slot binds that slot's ephemeral port, because the port is what it
+  checks, and may bind it again to see it held; no test sends a datagram, since nothing marks
+  one's arrival to await, and the packet path is proven in Rust on the offline driver.
 - Every realtime `process` and `render` runs under the `assert_no_alloc` guard in tests. Its
   allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
   so the engine does not.

@@ -10,9 +10,12 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+# The OS backends: the addon is what opens the room's output.
+devices = { workspace = true, features = ["hardware"] }
 engine = { workspace = true }
 napi = { version = "3", default-features = false, features = ["napi9"] }
 napi-derive = "3"
+transport = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"

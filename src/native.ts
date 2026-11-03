@@ -5,5 +5,16 @@ import type * as Binding from "../native/binding/index.js";
 
 const binding: typeof Binding = createRequire(import.meta.url)("../native/binding/index.js");
 
-export const { OfflineEngine } = binding;
-export type { OutputInfo } from "../native/binding/index.js";
+export const NativeEngine = binding.Engine;
+export type NativeEngine = Binding.Engine;
+export type NativeMixer = Binding.Mixer;
+export type NativeBackingRender = Binding.BackingRender;
+export type {
+  BackingInput,
+  GuideInput,
+  NativeEvent,
+  OutputEntry,
+  OutputInfo as NativeOutputInfo,
+  SlotParamsInput,
+  StemGainsInput,
+} from "../native/binding/index.js";

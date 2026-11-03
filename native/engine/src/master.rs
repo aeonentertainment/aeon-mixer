@@ -1,8 +1,9 @@
 //! The end of the graph: the bus through a soft clipper with no lookahead, then the master
-//! meter. The return ring producer (docs/design.md 8.7) joins this file with its workstream.
+//! meter, then the device and, when the mixer has one, the return ring (docs/design.md 8.7).
 
 use crate::block::Stereo;
 use crate::command::{Event, EventProducer};
+use crate::return_ring::ReturnProducer;
 use crate::slot::meter::Meter;
 
 /// Below this magnitude the clipper is the identity. Four singers over a backing track at
@@ -11,11 +12,17 @@ pub const KNEE: f32 = 0.75;
 
 pub struct Master {
     meter: Meter,
+    return_ring: Option<ReturnProducer>,
 }
 
 impl Master {
     pub fn new() -> Self {
-        Self { meter: Meter::new() }
+        Self { meter: Meter::new(), return_ring: None }
+    }
+
+    /// Sends every block from here on down the return branch as well as to the device.
+    pub fn set_return(&mut self, ring: ReturnProducer) {
+        self.return_ring = Some(ring);
     }
 
     pub fn process(&mut self, out: &mut Stereo<'_>, events: &mut EventProducer) {
@@ -27,6 +34,9 @@ impl Master {
                 events
                     .push(Event::MasterLevel { rms_db: reading.rms_db, peak_db: reading.peak_db });
             }
+        }
+        if let Some(ring) = &mut self.return_ring {
+            ring.push(out);
         }
     }
 }
@@ -51,7 +61,12 @@ pub fn soft_clip(sample: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use assert_no_alloc::assert_no_alloc;
+
     use super::*;
+    use crate::block::BLOCK;
+    use crate::command::event_ring;
+    use crate::return_ring::return_ring;
 
     #[test]
     fn the_clipper_passes_the_knee_and_bounds_everything_above() {
@@ -64,5 +79,23 @@ mod tests {
             assert_eq!(soft_clip(-sample), -clipped);
         }
         assert!(soft_clip(1.0) < soft_clip(1.5), "the curve keeps rising");
+    }
+
+    #[test]
+    fn the_return_ring_carries_the_clipped_block_the_device_gets() {
+        let (ring, mut drain) = return_ring();
+        let (mut events, _) = event_ring();
+        let mut master = Master::new();
+        master.set_return(ring);
+        let mut left: [f32; BLOCK] = std::array::from_fn(|i| i as f32 / 64.0);
+        let mut right = [-2.0; BLOCK];
+        let mut out = Stereo { left: &mut left, right: &mut right };
+        assert_no_alloc(|| master.process(&mut out, &mut events));
+
+        let mut sent = [[0.0; 2]; BLOCK];
+        assert!(drain.pop_exact(&mut sent));
+        let device: Vec<[f32; 2]> = left.iter().zip(&right).map(|(l, r)| [*l, *r]).collect();
+        assert_eq!(sent[..], device[..]);
+        assert!(sent.iter().all(|[_, r]| *r > -1.0), "after the clipper");
     }
 }
