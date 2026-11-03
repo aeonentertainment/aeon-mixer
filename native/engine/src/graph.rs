@@ -51,6 +51,7 @@ impl Graph {
         for (index, (slot, slot_params)) in self.slots.iter_mut().zip(&params.slots).enumerate() {
             slot.render(index as u8, slot_params, any_solo, cue, &mut out, events);
         }
+<<<<<<< HEAD
         /// One block. Reads `params` once, writes `out`, pushes events. Allocation-free.
         pub fn render(&mut self, params: &Params, out: Stereo<'_>, events: &mut EventProducer) {
             self.render_with(params, out, events, |_| {});
@@ -77,6 +78,12 @@ impl Graph {
             add_voices(&mut out);
             self.master.process(&mut out, events);
         }
+=======
+        if let Some(backing) = &mut self.backing {
+            backing.render(&params.stems, &mut out, events);
+        }
+        add_voices(&mut out);
+>>>>>>> 902e476 (rebase: the backing path renders inside render_with too)
         self.master.process(&mut out, events);
     }
 
