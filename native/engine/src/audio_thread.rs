@@ -14,6 +14,7 @@ use crate::command::{
 use crate::driver::Render;
 use crate::graph::Graph;
 use crate::params::{ParamsReader, ParamsWriter, params_channel};
+use crate::reactions::{Reactions, ReactionsFeed, reactions};
 
 /// 5 ms: the graph swap fade of docs/design.md section 4.
 pub const SWAP_FADE_FRAMES: u32 = RATE / 200;
@@ -30,15 +31,21 @@ pub struct AudioThread {
     faded: u32,
     outgoing_left: [f32; BLOCK],
     outgoing_right: [f32; BLOCK],
+    /// The engine's own voices, rendered once a block and summed into every graph that renders
+    /// in it, so a reaction plays straight through a swap fade.
+    reactions: Reactions,
+    reaction_left: [f32; BLOCK],
+    reaction_right: [f32; BLOCK],
     faulted: bool,
 }
 
-/// The control thread's ends of the four crossings.
+/// The control thread's ends of the four crossings, and the feed for the reaction voices.
 pub struct Controls {
     pub params: ParamsWriter,
     pub commands: CommandProducer,
     pub events: EventConsumer,
     pub retired: RetiredConsumer,
+    pub reactions: ReactionsFeed,
 }
 
 impl AudioThread {
@@ -48,6 +55,7 @@ impl AudioThread {
         let (command_producer, commands) = command_ring();
         let (events, event_consumer) = event_ring();
         let (retired, retired_consumer) = retired_ring();
+        let (reactions_feed, reactions) = reactions();
         let audio = Self {
             params,
             commands,
@@ -58,6 +66,9 @@ impl AudioThread {
             faded: 0,
             outgoing_left: [0.0; BLOCK],
             outgoing_right: [0.0; BLOCK],
+            reactions,
+            reaction_left: [0.0; BLOCK],
+            reaction_right: [0.0; BLOCK],
             faulted: false,
         };
         let controls = Controls {
@@ -65,6 +76,7 @@ impl AudioThread {
             commands: command_producer,
             events: event_consumer,
             retired: retired_consumer,
+            reactions: reactions_feed,
         };
         (audio, controls)
     }
@@ -89,14 +101,33 @@ impl AudioThread {
     fn render_block(&mut self, out: &mut Stereo<'_>) {
         self.drain_commands();
         let params = *self.params.latest();
-        self.live.render(&params, Stereo { left: out.left, right: out.right }, &mut self.events);
+        let Self { reactions, reaction_left, reaction_right, live, events, .. } = self;
+        reactions.render(Stereo { left: reaction_left, right: reaction_right });
+        let add_reactions = |bus: &mut Stereo<'_>| {
+            for ((l, r), (left, right)) in bus
+                .left
+                .iter_mut()
+                .zip(bus.right.iter_mut())
+                .zip(reaction_left.iter().zip(reaction_right.iter()))
+            {
+                *l += left;
+                *r += right;
+            }
+        };
+        live.render_with(
+            &params,
+            Stereo { left: out.left, right: out.right },
+            events,
+            add_reactions,
+        );
 
         let Some(outgoing) = &mut self.outgoing else { return };
         if self.faded < SWAP_FADE_FRAMES {
-            outgoing.render(
+            outgoing.render_with(
                 &params,
                 Stereo { left: &mut self.outgoing_left, right: &mut self.outgoing_right },
                 &mut self.events,
+                add_reactions,
             );
             let fade = SWAP_FADE_FRAMES as f32;
             for (i, (left, right)) in out.left.iter_mut().zip(out.right.iter_mut()).enumerate() {
@@ -332,6 +363,26 @@ mod tests {
                 Event::Ack { id: 4, position_frames: 0 }
             ]
         );
+    }
+
+    #[test]
+    fn a_reaction_plays_straight_through_a_swap_and_under_the_clipper() {
+        let (audio, mut controls) = AudioThread::new();
+        let mut driver = OfflineDriver::new(audio.into_render());
+        let blocks = (SWAP_FADE_FRAMES as usize).div_ceil(BLOCK) + 2;
+        assert!(controls.reactions.play(&[0.5, 0.25].repeat(blocks * BLOCK)));
+        controls.commands.push(Command::Swap { id: 1, graph: dc_graph(0.0) }).ok().unwrap();
+        let out = pump(&mut driver, blocks);
+        assert!(out.iter().step_by(2).all(|s| (*s - 0.5).abs() < 1e-6), "no notch on the left");
+        assert!(out.iter().skip(1).step_by(2).all(|s| (*s - 0.25).abs() < 1e-6), "nor the right");
+
+        // A hot reaction over a hot graph goes through the one clipper with it
+        controls.commands.push(Command::Swap { id: 2, graph: dc_graph(1.0) }).ok().unwrap();
+        pump(&mut driver, blocks);
+        assert!(pump(&mut driver, 1).iter().all(|s| (*s - CENTRE).abs() < 1e-6));
+        assert!(controls.reactions.play(&[1.0, 1.0].repeat(BLOCK)));
+        let out = pump(&mut driver, 1);
+        assert!(out.iter().all(|s| *s > CENTRE && *s < 1.0), "{} is the clipped sum", out[0]);
     }
 
     #[test]

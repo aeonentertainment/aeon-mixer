@@ -11,6 +11,7 @@ pub mod graph;
 pub mod ingest;
 pub mod master;
 pub mod params;
+pub mod reactions;
 pub mod slot;
 
 // Tests wrap every realtime call in `assert_no_alloc`; this allocator is what makes it panic.

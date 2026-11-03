@@ -32,15 +32,50 @@ impl Graph {
     }
 
     /// One block. Reads `params` once, writes `out`, pushes events. Allocation-free.
-    pub fn render(&mut self, params: &Params, mut out: Stereo<'_>, events: &mut EventProducer) {
+    pub fn render(&mut self, params: &Params, out: Stereo<'_>, events: &mut EventProducer) {
+        self.render_with(params, out, events, |_| {});
+    }
+
+    /// `render` with `add_voices` summing what the engine owns beyond this graph, its reaction
+    /// voices, into the bus ahead of the master, so they are clipped and metered with the mix.
+    pub fn render_with(
+        &mut self,
+        params: &Params,
+        mut out: Stereo<'_>,
+        events: &mut EventProducer,
+        add_voices: impl FnOnce(&mut Stereo<'_>),
+    ) {
         out.silence();
         let any_solo = params.slots[..self.slots.len()].iter().any(|slot| slot.solo);
         let cue = self.cue();
         for (index, (slot, slot_params)) in self.slots.iter_mut().zip(&params.slots).enumerate() {
             slot.render(index as u8, slot_params, any_solo, cue, &mut out, events);
         }
-        if let Some(backing) = &mut self.backing {
-            backing.render(&params.stems, &mut out, events);
+        /// One block. Reads `params` once, writes `out`, pushes events. Allocation-free.
+        pub fn render(&mut self, params: &Params, out: Stereo<'_>, events: &mut EventProducer) {
+            self.render_with(params, out, events, |_| {});
+        }
+
+        /// `render` with `add_voices` summing what the engine owns beyond this graph, its reaction
+        /// voices, into the bus ahead of the master, so they are clipped and metered with the mix.
+        pub fn render_with(
+            &mut self,
+            params: &Params,
+            mut out: Stereo<'_>,
+            events: &mut EventProducer,
+            add_voices: impl FnOnce(&mut Stereo<'_>),
+        ) {
+            out.silence();
+            let any_solo = params.slots[..self.slots.len()].iter().any(|slot| slot.solo);
+            for (index, (slot, slot_params)) in self.slots.iter_mut().zip(&params.slots).enumerate()
+            {
+                slot.render(index as u8, slot_params, any_solo, &mut out, events);
+            }
+            if let Some(backing) = &mut self.backing {
+                backing.render(&params.stems, &mut out, events);
+            }
+            add_voices(&mut out);
+            self.master.process(&mut out, events);
         }
         self.master.process(&mut out, events);
     }
