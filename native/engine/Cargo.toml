@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 kernels = { workspace = true }
 rtrb = "0.4.1"
+rubato = "5.0.1"
+symphonia = { version = "0.6.1", features = ["all"] }
 triple_buffer = "9.0.0"
 
 [dev-dependencies]

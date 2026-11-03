@@ -5,6 +5,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use crate::backing::Transport;
 use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{
     Command, CommandConsumer, CommandProducer, Event, EventConsumer, EventProducer, Retired,
@@ -138,15 +139,22 @@ impl AudioThread {
                     }
                 }
                 Command::ResetSlot { slot } => self.live.reset_slot(slot),
-                // The backing path (8.5) takes these to its playhead; until it lands they ack.
-                Command::Start { id }
-                | Command::Seek { id, .. }
-                | Command::Pause { id }
-                | Command::Resume { id }
-                | Command::SetKey { id, .. }
-                | Command::StopAt { id, .. } => self.ack(id),
+                Command::Start { id } => self.steer(id, Transport::Start),
+                Command::Seek { id, to_frame } => self.steer(id, Transport::Seek { to_frame }),
+                Command::Pause { id } => self.steer(id, Transport::Pause),
+                Command::Resume { id } => self.steer(id, Transport::Resume),
+                Command::SetKey { id, semitones } => {
+                    self.steer(id, Transport::SetKey { semitones })
+                }
+                Command::StopAt { id, at_frame, fade_frames } => {
+                    self.steer(id, Transport::StopAt { at_frame, fade_frames });
+                }
             }
         }
+    }
+
+    fn steer(&mut self, id: u32, transport: Transport) {
+        self.live.steer(id, transport, &mut self.events);
     }
 
     fn ack(&mut self, id: u32) {

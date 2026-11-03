@@ -2,8 +2,9 @@
 //! the control thread, rendered on the audio thread, and dropped on the control thread again
 //! once it comes back through the retired ring.
 
+use crate::backing::{Backing, Transport};
 use crate::block::{MAX_SLOTS, Stereo};
-use crate::command::EventProducer;
+use crate::command::{Event, EventProducer};
 use crate::master::Master;
 use crate::params::Params;
 use crate::slot::Slot;
@@ -11,6 +12,7 @@ use crate::slot::guide::Guide;
 
 pub struct Graph {
     slots: Vec<Slot>,
+    backing: Option<Backing>,
     master: Master,
 }
 
@@ -18,7 +20,7 @@ impl Graph {
     /// At most `MAX_SLOTS` slots, since `Params` carries that many.
     pub fn new(slots: Vec<Slot>) -> Self {
         assert!(slots.len() <= MAX_SLOTS, "a graph holds at most {MAX_SLOTS} slots");
-        Self { slots, master: Master::new() }
+        Self { slots, backing: None, master: Master::new() }
     }
 
     /// What the engine renders between songs.
@@ -33,12 +35,28 @@ impl Graph {
         for (index, (slot, slot_params)) in self.slots.iter_mut().zip(&params.slots).enumerate() {
             slot.render(index as u8, slot_params, any_solo, &mut out, events);
         }
+        if let Some(backing) = &mut self.backing {
+            backing.render(&params.stems, &mut out, events);
+        }
         self.master.process(&mut out, events);
     }
 
-    /// The backing playhead, which acks report. Zero until the backing path (8.5) lands.
+    /// The backing playhead, which acks report; zero with no backing.
     pub fn position_frames(&self) -> u64 {
-        0
+        self.backing.as_ref().map_or(0, Backing::position_frames)
+    }
+
+    /// Installs the backing path once its render job is done, before the graph goes live.
+    pub fn set_backing(&mut self, backing: Backing) {
+        self.backing = Some(backing);
+    }
+
+    /// A backing command, acked by the backing path when it lands, or at once with no backing.
+    pub fn steer(&mut self, id: u32, transport: Transport, events: &mut EventProducer) {
+        match &mut self.backing {
+            Some(backing) => backing.steer(id, transport, events),
+            None => events.push(Event::Ack { id, position_frames: 0 }),
+        }
     }
 
     /// Gives `guide` to a slot and returns what must be retired: the guide it displaced, or
