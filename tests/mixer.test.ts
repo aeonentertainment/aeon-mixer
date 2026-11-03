@@ -97,7 +97,7 @@ test("settings on an armed mixer wait for its start and never touch the live one
   await startLive(engine, live);
   const armed = await engine.createMixer({ slots: [{ kind: "push" }] });
   armed.setSlot(0, { mute: true });
-  armed.setSlotEffects(0, [{ kind: "reverb", enabled: true, roomSize: 0.5, mix: 0.2 }]);
+  armed.setSlotEffects(0, [{ kind: "reverb", enabled: false, roomSize: 0.5, mix: 0.2 }]);
 
   live.push(0, constant(0.5));
   expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.5 * CENTRE) < 1e-5)).toBe(true);
@@ -110,6 +110,12 @@ test("settings on an armed mixer wait for its start and never touch the live one
   armed.push(0, constant(0.5, 2));
   engine.pump(1);
   expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.5 * CENTRE) < 1e-5)).toBe(true);
+
+  // Enabled live, the reverb is in the chain and the slot no longer plays the dry level
+  armed.setSlotEffects(0, [{ kind: "reverb", enabled: true, roomSize: 0.5, mix: 0.2 }]);
+  armed.push(0, constant(0.5, 4));
+  engine.pump(3);
+  expect(left(engine.pump(1)).some((sample) => Math.abs(sample - 0.5 * CENTRE) > 1e-3)).toBe(true);
   await destroyLive(engine, armed);
   await engine.close();
 });
