@@ -1,5 +1,18 @@
 // Range checks at the edge, so nothing out of range crosses to the native side.
 
+import type { IngestKind } from "./types.ts";
+
+const INGEST_KINDS: ReadonlyArray<IngestKind> = ["rtp", "l16", "push"];
+
+/** A kind as a JavaScript caller may have spelt it, so an unknown one never crosses. */
+export function ingestKind(name: string, value: string) {
+  const kind = INGEST_KINDS.find((known) => known === value);
+  if (kind === undefined) {
+    throw new RangeError(`${name} must be rtp, l16 or push, got ${value}`);
+  }
+  return kind;
+}
+
 export function finiteIn(name: string, value: number, min: number, max: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError(`${name} must be a finite number, got ${String(value)}`);

@@ -15,8 +15,8 @@ import type {
   OpenEngineOptions,
   OutputInfo,
 } from "./types.ts";
-import { framesToMs } from "./units.ts";
-import { finiteIn, integerIn, pcm } from "./validate.ts";
+import { framesToMs, msToFrames } from "./units.ts";
+import { finiteIn, ingestKind, integerIn, pcm } from "./validate.ts";
 
 type State = "running" | "faulted" | "closed";
 
@@ -64,13 +64,19 @@ export class Engine {
 
   constructor(options: OpenEngineOptions) {
     this.#slots = integerIn("slots", options.slots ?? 8, 1, 16);
-    // The jitter buffer's playout delay is checked now and applied when the ingest workstream lands
-    finiteIn("playoutDelayMs", options.playoutDelayMs ?? 15, 1, 500);
+    // The jitter buffer holds 64 packets ahead of its cursor, 160 ms of the phone's shortest
+    // frame; under 5 ms, two blocks, that frame has no slack and ordinary jitter is all late packets
+    const playoutDelayFrames = msToFrames(
+      finiteIn("playoutDelayMs", options.playoutDelayMs ?? 15, 5, 100),
+    );
     const deliver = (batch: NativeEvent[]) => {
       this.#deliver(batch);
     };
     if ("offline" in options.output) {
-      this.#native = new NativeEngine({ offline: true, periodFrames: 128 }, deliver);
+      this.#native = new NativeEngine(
+        { offline: true, periodFrames: 128, playoutDelayFrames },
+        deliver,
+      );
       this.pump = (blocks) => this.#native.pump(integerIn("blocks", blocks, 1, 1 << 20));
     } else {
       const { device, periodFrames = 128 } = options.output;
@@ -78,7 +84,12 @@ export class Engine {
         throw new RangeError(`periodFrames must be 64 or 128, got ${String(periodFrames)}`);
       }
       this.#native = new NativeEngine(
-        { offline: false, periodFrames, ...(device === undefined ? {} : { device }) },
+        {
+          offline: false,
+          periodFrames,
+          playoutDelayFrames,
+          ...(device === undefined ? {} : { device }),
+        },
         deliver,
       );
     }
@@ -123,20 +134,9 @@ export class Engine {
         `the engine has ${this.#slots} slots; the mixer asks for ${config.slots.length}`,
       );
     }
-    for (const { kind } of config.slots) {
-      if (kind !== "push") {
-        throw new Error(
-          `${kind} slots arrive with the ingest workstream; only push slots exist yet`,
-        );
-      }
-    }
+    const kinds = config.slots.map(({ kind }, i) => ingestKind(`slots[${i}].kind`, kind));
     if (config.rtpReturn) throw new Error("the return branch arrives with its workstream");
-    return new Mixer(
-      this.#host,
-      config.slots.map(({ kind }) => kind),
-      new Emitter<MixerEvents>(),
-      config.backing ?? null,
-    );
+    return new Mixer(this.#host, kinds, new Emitter<MixerEvents>(), config.backing ?? null);
   }
 
   on<K extends keyof EngineEvents>(event: K, listener: EngineEvents[K]) {

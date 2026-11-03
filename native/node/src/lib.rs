@@ -9,6 +9,7 @@ mod engine;
 mod event;
 mod events_thread;
 mod guide;
+mod ingest;
 mod mixer;
 mod slot_params;
 
@@ -17,5 +18,6 @@ pub use clock::OutputEntry;
 pub use engine::{Engine, OpenOptions, OutputInfo};
 pub use event::NativeEvent;
 pub use guide::{GuideInput, NoteInput};
+pub use ingest::SlotStatsInfo;
 pub use mixer::Mixer;
 pub use slot_params::{CorrectorInput, ReverbInput, SlotParamsInput};

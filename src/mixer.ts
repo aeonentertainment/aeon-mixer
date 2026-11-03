@@ -1,7 +1,6 @@
 import { Backing, type BackingConfig, type RenderHost, STOP_FADE_MS } from "./backing.ts";
 import type { Emitter } from "./emitter.ts";
-import type { GuideInput, SlotParamsInput } from "./native.ts";
-import { NativeMixer } from "./native.ts";
+import type { GuideInput, NativeMixer, SlotParamsInput } from "./native.ts";
 import type {
   IngestKind,
   MelodyGuide,
@@ -31,11 +30,6 @@ export interface MixerHost extends RenderHost {
 
 type Phase = "armed" | "starting" | "live" | "destroyed";
 
-/** The ingest stats a push slot reports: only its resyncs mean anything until ingest lands. */
-function pushSlotStats(resyncs: number): SlotStats {
-  return { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs, jitterMs: 0 };
-}
-
 function defaultSlotParams(): SlotParamsInput {
   return {
     gain: 1,
@@ -49,10 +43,12 @@ function defaultSlotParams(): SlotParamsInput {
 }
 
 /**
- * One mixing graph for one performance. Settings made while armed are kept here and written to
- * the engine when `start` swaps the graph in, so arming the next song never touches the live one.
+ * One mixing graph for one performance. Its `rtp` and `l16` slots listen on their ports from
+ * here until `destroy`. Settings made while armed are kept here and written to the engine when
+ * `start` swaps the graph in, so arming the next song never touches the live one.
  */
 export class Mixer {
+  /** Each slot's kind and, for `rtp` and `l16`, the UDP port it listens on; `null` for `push`. */
   readonly slots: ReadonlyArray<{ index: number; kind: IngestKind; port: number | null }>;
   readonly #host: MixerHost;
   readonly #native: NativeMixer;
@@ -70,8 +66,8 @@ export class Mixer {
   ) {
     this.#host = host;
     this.#events = events;
-    this.#native = new NativeMixer(kinds.length);
-    this.slots = kinds.map((kind, index) => ({ index, kind, port: null }));
+    this.#native = host.native.createMixer([...kinds]);
+    this.slots = kinds.map((kind, index) => ({ index, kind, port: this.#native.port(index) }));
     this.#params = kinds.map(defaultSlotParams);
     this.#guides = kinds.map(() => null);
     this.#backing =
@@ -134,7 +130,10 @@ export class Mixer {
     }
   }
 
-  /** Forget the stream a slot was hearing; the next audio is a new singer. */
+  /**
+   * Forget the stream a slot was hearing; the next packets, or the next pushed audio, are a new
+   * singer. An armed mixer has heard nothing yet, so there is nothing to forget.
+   */
   resetSlot(index: number) {
     const slot = this.#slot(index);
     if (this.#host.isLive(this)) {
@@ -145,9 +144,14 @@ export class Mixer {
   /**
    * Hands interleaved stereo PCM to a push slot, folded to mono as every slot is. Returns the
    * frames taken; the rest did not fit and is dropped, since late audio is worse than lost audio.
+   * Throws on a slot of another kind.
    */
   push(index: number, stereo: Float32Array) {
     const slot = this.#slot(index);
+    const kind = this.slots[slot]?.kind;
+    if (kind !== "push") {
+      throw new Error(`slot ${slot} is ${String(kind)}; only a push slot takes pushed audio`);
+    }
     if (this.#phase === "destroyed") {
       throw new Error("the mixer is destroyed");
     }
@@ -240,14 +244,15 @@ export class Mixer {
     return this.#events.on(event, listener);
   }
 
+  /** Each slot's ingest counters as the audio thread last published them, and the engine's underruns. */
   stats(): { slots: ReadonlyArray<SlotStats>; underruns: number } {
-    return {
-      slots: this.slots.map((slot) => pushSlotStats(this.#native.resyncs(slot.index))),
-      underruns: this.#host.underruns(),
-    };
+    return { slots: this.#native.stats(), underruns: this.#host.underruns() };
   }
 
-  /** Swaps the silent graph in and resolves once this graph is back and dropped. */
+  /**
+   * Closes the slots' ports, swaps the silent graph in when this one is live, and resolves once
+   * this graph is back and dropped.
+   */
   async destroy() {
     switch (this.#phase) {
       case "destroyed":
@@ -256,9 +261,11 @@ export class Mixer {
         throw new Error("the mixer is starting; await start before destroying it");
       case "armed":
         this.#phase = "destroyed";
+        this.#native.release();
         return;
       case "live":
         this.#phase = "destroyed";
+        this.#native.release();
         await this.#host.swapOut(this);
     }
   }

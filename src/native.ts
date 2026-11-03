@@ -7,7 +7,6 @@ const binding: typeof Binding = createRequire(import.meta.url)("../native/bindin
 
 export const NativeEngine = binding.Engine;
 export type NativeEngine = Binding.Engine;
-export const NativeMixer = binding.Mixer;
 export type NativeMixer = Binding.Mixer;
 export type NativeBackingRender = Binding.BackingRender;
 export type {

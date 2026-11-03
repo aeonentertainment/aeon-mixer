@@ -1,5 +1,7 @@
 //! The source of an `rtp` or `l16` slot: at the top of each block it drains the slot's packet
-//! ring into the jitter buffer, then pulls the block that is due.
+//! ring into the jitter buffer, then pulls the block that is due. Its first pull discards what
+//! the ring already holds: a mixer is armed, and its ports handed to the phones, before it
+//! starts, and a stream anchored on that backlog would play behind real time for good.
 
 use super::jitter::JitterBuffer;
 use super::packet::PacketConsumer;
@@ -8,11 +10,12 @@ use crate::slot::source::Source;
 pub struct PacketSource {
     packets: PacketConsumer,
     jitter: JitterBuffer,
+    pulled: bool,
 }
 
 impl PacketSource {
     pub fn new(packets: PacketConsumer, jitter: JitterBuffer) -> Self {
-        Self { packets, jitter }
+        Self { packets, jitter, pulled: false }
     }
 
     pub fn jitter(&self) -> &JitterBuffer {
@@ -22,7 +25,11 @@ impl PacketSource {
 
 impl Source for PacketSource {
     fn pull(&mut self, out: &mut [f32]) {
-        let Self { packets, jitter } = self;
+        let Self { packets, jitter, pulled } = self;
+        if !*pulled {
+            *pulled = true;
+            while packets.pop_with(|_| {}) {}
+        }
         while packets.pop_with(|packet| jitter.push(packet)) {}
         jitter.pull(out);
     }
@@ -40,9 +47,33 @@ impl Source for PacketSource {
 mod tests {
     use super::super::codec::Codec;
     use super::super::fixtures::*;
+    use super::super::jitter::JitterBuffer;
+    use super::super::packet::{Packet, RING_CAPACITY, packet_ring};
+    use super::PacketSource;
     use crate::block::{BLOCK, RATE};
+    use crate::slot::source::Source;
 
     const SECOND: i64 = RATE as i64;
+
+    /// Packets that arrived while the mixer was armed never reach the jitter buffer; the first
+    /// packet after the slot starts pulling is the one that anchors the stream.
+    #[test]
+    fn the_first_pull_discards_what_arrived_before_the_slot_went_live() {
+        let (mut producer, consumer) = packet_ring(RING_CAPACITY);
+        let mut source = PacketSource::new(consumer, JitterBuffer::new(DELAY, Codec::L16));
+        let stats = source.jitter().shared_stats();
+        let payload = [0u8; 4 * 240];
+        for seq in 0..RING_CAPACITY as u16 + 8 {
+            producer.push(&Packet::new(seq, u32::from(seq) * 240, 7, false, &payload).unwrap());
+        }
+        let mut out = [0.0; BLOCK];
+        source.pull(&mut out);
+        assert_eq!(stats.read().pushed, 0, "the backlog is dropped unseen");
+        producer.push(&Packet::new(100, 100 * 240, 7, false, &payload).unwrap());
+        source.pull(&mut out);
+        assert_eq!(stats.read().pushed, 1);
+        assert_eq!(source.latency_frames(), DELAY + 960, "anchored on the fresh packet");
+    }
 
     /// 8.4's done-when: reordering, 30 ms spikes and 5 percent loss on every frame size. The
     /// concealment's expected error is the clean codec's error plus the signal's own energy over

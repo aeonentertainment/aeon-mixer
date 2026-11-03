@@ -172,7 +172,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   live, slots still open, until the host destroys it: people talk through the mics after the
   song.
 - **Destroy.** `destroy` swaps the silent graph in and resolves when the old graph arrives on
-  the retired ring and is dropped. Slot ports close.
+  the retired ring and is dropped. Slot ports close within the network thread's next tick after
+  that, since that thread owns the sockets and `destroy` only queues their removal. Nothing
+  waits for it: the ports are ephemeral and no caller binds one again.
 - **Close.** `close` destroys any live mixer, stops the driver, joins the threads.
 - **Faults.** A device loss or a caught panic emits `fault` on the engine. The host closes and
   reopens; nothing inside tries to recover.
@@ -492,6 +494,9 @@ ring into the jitter buffer at the top of each block.
   A stream quiet for a second stops concealing, so an idle slot costs no decodes.
 - Decoding happens in the callback, bounded to the packets due this block. The decoder is
   created on the control thread; libopus allocates nothing after that.
+- A slot's first pull discards what its ring already holds. A mixer is armed, and its ports
+  handed to the phones, before it starts; a stream anchored on that backlog would play behind
+  real time for good.
 - At the 15 ms playout delay, in-band FEC helps frames of 10 ms and shorter. The packet after
   a lost 20 ms frame arrives 5 ms after that frame falls due, so mediasoup's 20 ms streams get
   the decoder's own concealment.
@@ -605,7 +610,10 @@ GStreamer and the `aeonpitch` element are deleted in a later PR.
 
 ## 9. Verification
 
-- The offline driver is the clock in every engine test. No test opens a device or a socket.
+- The offline driver is the clock in every engine test. No test opens a device. A test that
+  creates an `rtp` or `l16` slot binds that slot's ephemeral port, because the port is what it
+  checks, and may bind it again to see it held; no test sends a datagram, since nothing marks
+  one's arrival to await, and the packet path is proven in Rust on the offline driver.
 - Every realtime `process` and `render` runs under the `assert_no_alloc` guard in tests. Its
   allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
   so the engine does not.
