@@ -151,7 +151,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | Stem gain                  | 50 ms                             |
 | Live key crossfade         | 50 ms                             |
 | Seek and pause fades       | 20 ms each way                    |
-| Graph swap fade            | 5 ms                              |
+| Graph swap fade            | 5 ms, linear                      |
 | `stopAt`                   | its `fadeMs`, 3 s from the device |
 
 ## 5. Lifecycle
@@ -376,6 +376,11 @@ export interface Mixer {
   setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number): void;
   /** Forget the stream a slot was hearing; the next packets are a new singer. */
   resetSlot(index: number): void;
+  /**
+   * Interleaved stereo for a `push` slot, folded to mono. Returns the frames taken; the rest did
+   * not fit. Throws on a slot of another kind or a buffer that is not whole frames.
+   */
+  push(index: number, pcm: Float32Array): number;
   start(): Promise<{ startedAt: number; backingOffsetMs: number; speedFactor: number }>;
   seek(toMs: number): Promise<{ positionMs: number }>;
   pause(): Promise<void>;
@@ -422,6 +427,10 @@ writes the device buffer and the return ring, and pushes events.
 - Solo: when any slot is soloed, every unsoloed slot's effective gain is zero. Mute wins over
   solo. The effective gain ramps across the block like any other gain change.
 - Meters publish RMS and peak over the last 100 ms at 10 Hz, from after the corrector.
+- The reaction voices are the engine's, not a graph's. The audio thread renders them once a
+  block, and every graph rendering in that block sums them ahead of its master through
+  `Graph::render_with`, so a reaction plays straight through a swap fade and is clipped and
+  metered with the mix.
 - The soft clipper is transparent below its knee and never hard-clips. Its curve and knee are
   the implementer's, tested by feeding a sum above full scale and asserting no sample exceeds
   1.0 and a sum at half scale passes unchanged within 0.01 dB.
@@ -486,7 +495,13 @@ ring into the jitter buffer at the top of each block.
   a lost 20 ms frame arrives 5 ms after that frame falls due, so mediasoup's 20 ms streams get
   the decoder's own concealment.
 - `l16` slots take stereo 16-bit big-endian at 48 kHz, as the house-mic sender sends today, and
-  fold to mono. `push` voices take stereo f32 from the control thread.
+  fold to mono. `push` slots take interleaved stereo f32 from the control thread and fold to
+  mono too. The ring holds 100 ms, and `push` returns how many frames fit; the rest is the
+  host's to hand in again. The slot plays at most 30 ms behind the newest frame it holds: a pull
+  that finds more drops the oldest down to 30 ms and counts a resync, so a host on another
+  clock, or one catching up after a stall, is pulled back inside the budget instead of drifting
+  out of it. 30 ms is three 10 ms chunks, room for a host two chunks late, and is a default
+  until `measure-latency` (8.9) gives the push path a number.
 
 Done when: a test feeds synthetic RTP with reordering, 30 ms jitter spikes and 5 percent loss
 through the offline driver and the output matches the source within the concealment's expected
@@ -555,7 +570,7 @@ Done when: on the offline driver, the packetizer fed from the ring produces one 
 rendered frames, with monotonic sequence numbers and timestamps advancing 480 per packet. The
 socket send is the one step the test leaves out.
 
-### 8.8 Binding and API: `node/`, `src/`, `tests/`
+### 8.8 Binding and API: `node/`, `src/`, `tests/`, `engine/src/reactions.rs`
 
 The `node` crate exposes the engine to Node through napi-rs: open, create, the parameter
 setters, the commands as promises, the events thread. `src/` turns that into the API in
