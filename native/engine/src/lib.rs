@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio_thread;
+pub mod backing;
 pub mod block;
 pub mod command;
 pub mod driver;

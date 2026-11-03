@@ -120,7 +120,7 @@ mono and pan with a constant-power law into the stereo bus.
 **The backing path**: planar stereo stems in memory, decoded and pre-rendered at the armed key
 and speed before start, read by one playhead. Each stem has a gain with a 50 ms ramp. A live
 key change engages a stretcher on the summed stems with a 50 ms crossfade. Seek fades out over
-20 ms, jumps, fades in over 20 ms. Pause holds the playhead. `stopAt` ramps the stems to
+20 ms, jumps, fades in over 20 ms. Pause fades out the same way and holds the playhead. `stopAt` ramps the stems to
 silence over its `fadeMs` and then raises `BackingEnded`, as reaching the end of the stems does.
 A live key change also transposes the melody guide every corrector follows, by the same
 semitones, and so does the armed key.
@@ -147,7 +147,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | Slot gain, pan, mute, solo | one block                         |
 | Stem gain                  | 50 ms                             |
 | Live key crossfade         | 50 ms                             |
-| Seek fade out and in       | 20 ms each                        |
+| Seek and pause fades       | 20 ms each way                    |
 | Graph swap fade            | 5 ms                              |
 | `stopAt`                   | its `fadeMs`, 3 s from the device |
 
@@ -287,9 +287,12 @@ pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub concea
 
 // engine/src/backing/
 pub struct Stems { pub instrumental: Planar, pub guide: Option<Planar>, pub frames: u64 }   // 48 kHz, planar f32
+pub struct Planar { pub left: Vec<f32>, pub right: Vec<f32> }
 pub struct Playhead;       // frames, playing, seek(to), pause(), resume(), stop_at(at, fade)
-pub struct RenderJob;      // control thread starts it on the worker thread; yields Stems; progress is an AtomicU32 fraction
+pub struct RenderJob;      // start(StemFiles, semitones, speed) on the worker thread; progress() -> f32; finish() -> Result<Stems, BackingError>
 pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the first change
+pub struct Backing;        // new(stems, armed_semitones); Graph::set_backing installs it before the graph goes live
+pub enum Transport { Start, Seek { to_frame }, Pause, Resume, SetKey { semitones }, StopAt { at_frame, fade_frames } }   // Graph::steer(id, Transport, events)
 
 // kernels/src/
 pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples()
@@ -475,14 +478,21 @@ growing delay.
 
 Stems in memory, one playhead, gains, fades, the live key, and the render job.
 
-- The worker thread decodes stems with a pure Rust decoder to planar f32 at 48 kHz. With an
-  armed key or speed it renders them through the stretcher at a quality setting before
-  `start`. `createMixer` resolves when the graph is built; `start` waits for the render.
+- The worker thread decodes stems with Symphonia, a pure Rust decoder, to planar f32 at 48 kHz,
+  resampling any other rate with Rubato's FFT resampler. With an armed key or speed it renders
+  them through one stretcher at signalsmith's default preset, both stems together so they stay
+  aligned, trimming the stretcher's lead and flushing its tail. `createMixer` resolves when the
+  graph is built; `start` waits for the render, then installs the backing with
+  `Graph::set_backing`.
 - The playhead advances a block per render while playing, holds on pause, jumps on seek with
-  its fades, and stops at `stopAt` with its fade. Both raise `BackingEnded` once.
+  its fades, and stops at `stopAt` with its fade. Both raise `BackingEnded` once. A seek or
+  pause acks when it takes effect, once its fade out is done, so the ack carries the frame it
+  landed on; a pause fades because a hard stop clicks. The `stopAt` fade is applied before the
+  live key, so it is silent at its frame on the reported clock.
 - The live key holds two pre-allocated stretchers. Until the first live change the stems pass
-  through dry. A change engages a stretcher with a crossfade; the next change crossfades to the
-  other. Reported position subtracts the engaged stretcher's latency.
+  through dry. A change resets the idle stretcher at the new key and feeds it for its latency,
+  so the crossfade never fades into its silent start, then crossfades to it; the next change
+  does the same with the other. Reported position subtracts the engaged stretcher's latency.
 - The armed key plus the live key is the total transposition the correctors' guides follow.
 
 Done when: a seek lands within one block of the asked frame and its ack reports it; a track
