@@ -3,6 +3,7 @@
 //! thread. Audio never comes through here. `src/` in the package root turns this into the public
 //! TypeScript API.
 
+mod backing;
 mod clock;
 mod engine;
 mod event;
@@ -11,6 +12,7 @@ mod guide;
 mod mixer;
 mod slot_params;
 
+pub use backing::{BackingInput, BackingRender, StemGainsInput};
 pub use clock::OutputEntry;
 pub use engine::{Engine, OpenOptions, OutputInfo};
 pub use event::NativeEvent;

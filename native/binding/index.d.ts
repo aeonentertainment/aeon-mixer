@@ -9,6 +9,15 @@
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
+/**
+ * A song's stems being decoded and rendered for one mixer. JavaScript holds it from
+ * `createMixer` until `start` installs it.
+ */
+export declare class BackingRender {
+  /** The id the events thread's `renderProgress` and `renderFinished` events carry. */
+  get id(): number
+}
+
 export declare class Engine {
   /**
    * Starts the clock on the silent graph and the events thread, which calls `on_events` with
@@ -30,6 +39,18 @@ export declare class Engine {
   /** Swaps the silent graph in: the end of a mixer. */
   swapSilent(): number
   start(): number
+  /**
+   * Starts decoding and rendering a song's stems on the worker thread. The events thread
+   * reports the job's progress under the id the result carries.
+   */
+  startRender(input: BackingInput): BackingRender
+  seek(toFrame: number): number
+  pause(): number
+  resume(): number
+  setKey(semitones: number): number
+  stopAt(atFrame: number, fadeFrames: number): number
+  /** Writes the stem gains of the snapshot and publishes the whole of it. */
+  setStemGains(gains: StemGainsInput): void
   /** Gives the live graph's slot a guide, or takes it away with nothing. No ack. */
   setGuide(slot: number, guide?: GuideInput | undefined | null): void
   /** The live graph's slot forgets the stream it was hearing. No ack. */
@@ -50,6 +71,17 @@ export declare class Mixer {
   push(index: number, stereo: Float32Array): number
   /** How many times a push slot dropped its oldest audio to stay within the depth. */
   resyncs(index: number): number
+  /** Moves a finished render's stems into the graph as its backing path, before `swap`. */
+  installBacking(render: BackingRender): void
+}
+
+export interface BackingInput {
+  instrumental: string
+  guide?: string
+  /** The armed key, rendered before start. */
+  semitones: number
+  /** The armed speed factor, rendered before start. */
+  speed: number
 }
 
 export interface CorrectorInput {
@@ -74,6 +106,8 @@ export type NativeEvent =
   | { kind: 'underrun' }
   | { kind: 'fault' }
   | { kind: 'retired' }
+  | { kind: 'renderProgress'; job: number; fraction: number }
+  | { kind: 'renderFinished'; job: number }
 
 export interface NoteInput {
   midi: number
@@ -117,4 +151,9 @@ export interface SlotParamsInput {
   corrector: CorrectorInput
   reverb: ReverbInput
   guideOffsetMs: number
+}
+
+export interface StemGainsInput {
+  instrumental: number
+  guide: number
 }

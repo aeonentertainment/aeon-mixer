@@ -34,6 +34,15 @@ pub enum NativeEvent {
     Fault,
     /// A graph the audio thread handed back has been dropped: what `destroy` waits for.
     Retired,
+    /// A render job on the worker thread moved on: how much of it is done, 0 to 1.
+    RenderProgress {
+        job: u32,
+        fraction: f64,
+    },
+    /// The render job is done: `installBacking` has its stems, or its error.
+    RenderFinished {
+        job: u32,
+    },
 }
 
 impl From<Event> for NativeEvent {

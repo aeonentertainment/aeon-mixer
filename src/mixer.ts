@@ -1,5 +1,6 @@
+import { Backing, type BackingConfig, type RenderHost, STOP_FADE_MS } from "./backing.ts";
 import type { Emitter } from "./emitter.ts";
-import type { GuideInput, NativeEngine, SlotParamsInput } from "./native.ts";
+import type { GuideInput, SlotParamsInput } from "./native.ts";
 import { NativeMixer } from "./native.ts";
 import type {
   IngestKind,
@@ -11,12 +12,11 @@ import type {
   SlotStats,
   StemKind,
 } from "./types.ts";
-import { msToFrames } from "./units.ts";
+import { framesToMs, msToFrames } from "./units.ts";
 import { finiteIn, integerIn, pcm } from "./validate.ts";
 
 /** What a mixer needs from its engine. Internal to the package. */
-export interface MixerHost {
-  readonly native: NativeEngine;
+export interface MixerHost extends RenderHost {
   readonly output: OutputInfo;
   /** Sends a command carrying an id and resolves on its ack with the backing position. */
   command(send: () => number): Promise<number>;
@@ -25,12 +25,11 @@ export interface MixerHost {
   /** Swaps the silent graph back in; resolves once the mixer's graph is back and dropped. */
   swapOut(mixer: Mixer): Promise<void>;
   isLive(mixer: Mixer): boolean;
+  anyLive(): boolean;
   underruns(): number;
 }
 
 type Phase = "armed" | "starting" | "live" | "destroyed";
-
-const NOT_YET = "the backing path arrives with the backing workstream";
 
 /** The ingest stats a push slot reports: only its resyncs mean anything until ingest lands. */
 function pushSlotStats(resyncs: number): SlotStats {
@@ -60,15 +59,27 @@ export class Mixer {
   readonly #events: Emitter<MixerEvents>;
   readonly #params: SlotParamsInput[];
   readonly #guides: Array<GuideInput | null>;
+  readonly #backing: Backing | null;
   #phase: Phase = "armed";
 
-  constructor(host: MixerHost, kinds: ReadonlyArray<IngestKind>, events: Emitter<MixerEvents>) {
+  constructor(
+    host: MixerHost,
+    kinds: ReadonlyArray<IngestKind>,
+    events: Emitter<MixerEvents>,
+    backing: BackingConfig | null,
+  ) {
     this.#host = host;
     this.#events = events;
     this.#native = new NativeMixer(kinds.length);
     this.slots = kinds.map((kind, index) => ({ index, kind, port: null }));
     this.#params = kinds.map(defaultSlotParams);
     this.#guides = kinds.map(() => null);
+    this.#backing =
+      backing === null
+        ? null
+        : new Backing(host, backing, (fraction) => {
+            if (this.#phase !== "destroyed") this.#events.emit("renderProgress", fraction);
+          });
   }
 
   setSlot(index: number, settings: Partial<SlotSettings>) {
@@ -143,6 +154,11 @@ export class Mixer {
     return this.#native.push(slot, pcm("stereo", stereo, 2));
   }
 
+  /**
+   * Waits for the backing's render, installs it, and swaps the graph in. With the render already
+   * done, the swap is sent before this returns to the caller. Nothing is written to the engine
+   * while another mixer is live, so a refused start leaves the song playing untouched.
+   */
   async start() {
     if (this.#phase !== "armed") {
       throw new Error(`the mixer cannot start: it is ${this.#phase}`);
@@ -150,9 +166,13 @@ export class Mixer {
     this.#phase = "starting";
     let swapped: Promise<number>;
     try {
+      if (this.#backing?.rendering) await this.#backing.rendered;
+      if (this.#host.anyLive()) throw new Error("another mixer is live; destroy it first");
+      this.#backing?.install(this.#native);
       this.#params.forEach((params, slot) => {
         this.#host.native.setSlotParams(slot, params);
       });
+      if (this.#backing) this.#host.native.setStemGains(this.#backing.stemGains);
       swapped = this.#host.swapIn(this, this.#native, this.#events);
     } catch (error) {
       this.#phase = "armed";
@@ -164,32 +184,56 @@ export class Mixer {
       if (guide) this.#host.native.setGuide(slot, guide);
     });
     const started = this.#host.command(() => this.#host.native.start());
-    await Promise.all([swapped, started]);
+    const stopAtFrames = this.#backing?.stopAtFrames;
+    const stopping =
+      stopAtFrames === undefined
+        ? undefined
+        : this.#host.command(() =>
+            this.#host.native.stopAt(stopAtFrames, msToFrames(STOP_FADE_MS)),
+          );
+    await Promise.all([swapped, started, stopping]);
     const { latencyMs } = this.#host.output;
-    return { startedAt: Date.now() + latencyMs, backingOffsetMs: latencyMs, speedFactor: 1 };
+    return {
+      startedAt: Date.now() + latencyMs,
+      backingOffsetMs: latencyMs,
+      speedFactor: this.#backing?.speed ?? 1,
+    };
   }
 
-  seek(toMs: number): Promise<{ positionMs: number }> {
-    finiteIn("toMs", toMs, 0, Number.MAX_SAFE_INTEGER);
-    return Promise.reject(new Error(NOT_YET));
+  /** Resolves with the position the seek landed on, once its fade out is done. */
+  async seek(toMs: number) {
+    const toFrame = msToFrames(finiteIn("toMs", toMs, 0, Number.MAX_SAFE_INTEGER));
+    const native = this.#liveBacking();
+    const landed = await this.#host.command(() => native.seek(toFrame));
+    return { positionMs: framesToMs(landed) };
   }
 
-  pause(): Promise<void> {
-    return Promise.reject(new Error(NOT_YET));
+  /** Resolves once the fade out is done and the playhead holds. */
+  async pause() {
+    const native = this.#liveBacking();
+    await this.#host.command(() => native.pause());
   }
 
-  resume(): Promise<{ positionMs: number }> {
-    return Promise.reject(new Error(NOT_YET));
+  async resume() {
+    const native = this.#liveBacking();
+    const position = await this.#host.command(() => native.resume());
+    return { positionMs: framesToMs(position) };
   }
 
-  setBackingKey(semitones: number): Promise<void> {
-    integerIn("semitones", semitones, -12, 12);
-    return Promise.reject(new Error(NOT_YET));
+  /** The live key, on top of the armed one; its crossfade follows the ack. */
+  async setBackingKey(semitones: number) {
+    const checked = integerIn("semitones", semitones, -12, 12);
+    const native = this.#liveBacking();
+    await this.#host.command(() => native.setKey(checked));
   }
 
+  /** A parameter write, held while armed like the slot settings. */
   setStemGain(kind: StemKind, gain: number) {
-    finiteIn(`${kind} gain`, gain, 0, 4);
-    throw new Error(NOT_YET);
+    if (!this.#backing) throw new Error("this mixer has no backing");
+    const gains = this.#backing.setStemGain(kind, gain);
+    if (this.#host.isLive(this)) {
+      this.#host.native.setStemGains(gains);
+    }
   }
 
   on<K extends keyof MixerEvents>(event: K, listener: MixerEvents[K]) {
@@ -221,6 +265,15 @@ export class Mixer {
 
   #slot(index: number) {
     return integerIn("slot", index, 0, this.slots.length - 1);
+  }
+
+  /** The engine, once this mixer's backing is the live one. */
+  #liveBacking() {
+    if (!this.#backing) throw new Error("this mixer has no backing");
+    if (!this.#host.isLive(this)) {
+      throw new Error(`the backing cannot be steered: the mixer is ${this.#phase}`);
+    }
+    return this.#host.native;
   }
 
   #paramsOf(slot: number) {

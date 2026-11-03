@@ -36,8 +36,15 @@ export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
 }
 
 export class Engine {
-  /** What this build can do; the rest arrives with the backing workstream. */
-  readonly capabilities: ReadonlySet<Capability> = new Set<Capability>(["level"]);
+  readonly capabilities: ReadonlySet<Capability> = new Set<Capability>([
+    "guideVocal",
+    "key",
+    "speed",
+    "seek",
+    "shortVersion",
+    "pause",
+    "level",
+  ]);
   readonly output: OutputInfo;
   /** How many slots a mixer may have, fixed at open. */
   readonly #slots: number;
@@ -49,6 +56,8 @@ export class Engine {
   readonly #events = new Emitter<EngineEvents>();
   /** Swaps in flight, oldest first; a `retired` event completes the oldest. */
   readonly #retirements: Array<() => void> = [];
+  /** Render jobs on the worker thread, by the id their progress events carry. */
+  readonly #renders = new Map<number, RenderWatch>();
   #live: { mixer: Mixer; events: Emitter<MixerEvents> } | null = null;
   #underruns = 0;
   #state: State = "running";
@@ -78,9 +87,14 @@ export class Engine {
       native: this.#native,
       output: this.output,
       command: (send) => this.#command(send),
+      watchRender: (id, onProgress) =>
+        new Promise<void>((resolve, reject) => {
+          this.#renders.set(id, { onProgress, resolve, reject });
+        }),
       swapIn: (mixer, graph, events) => this.#swapIn(mixer, graph, events),
       swapOut: (mixer) => this.#swapOut(mixer),
       isLive: (mixer) => this.#live?.mixer === mixer,
+      anyLive: () => this.#live !== null,
       underruns: () => this.#underruns,
     };
   }
@@ -116,12 +130,12 @@ export class Engine {
         );
       }
     }
-    if (config.backing) throw new Error("the backing path arrives with the backing workstream");
     if (config.rtpReturn) throw new Error("the return branch arrives with its workstream");
     return new Mixer(
       this.#host,
       config.slots.map(({ kind }) => kind),
       new Emitter<MixerEvents>(),
+      config.backing ?? null,
     );
   }
 
@@ -137,7 +151,7 @@ export class Engine {
     }
     this.#state = "closed";
     this.#native.close();
-    this.#acks.rejectAll(new Error("the engine is closed"));
+    this.#stop(new Error("the engine is closed"));
   }
 
   #swapIn(mixer: Mixer, graph: NativeMixer, events: Emitter<MixerEvents>) {
@@ -209,6 +223,15 @@ export class Engine {
         case "retired":
           this.#retirements.shift()?.();
           break;
+        case "renderProgress":
+          this.#renders.get(event.job)?.onProgress(event.fraction);
+          break;
+        case "renderFinished": {
+          const render = this.#renders.get(event.job);
+          this.#renders.delete(event.job);
+          render?.resolve();
+          break;
+        }
       }
     }
   }
@@ -218,9 +241,22 @@ export class Engine {
     if (this.#state !== "running") return;
     this.#state = "faulted";
     const error = new Error("the engine has faulted; close it and open it again");
-    this.#acks.rejectAll(error);
+    this.#stop(error);
     this.#events.emit("fault", error);
   }
+
+  /** Nothing in flight will be answered: the commands and the renders waited on reject. */
+  #stop(error: Error) {
+    this.#acks.rejectAll(error);
+    for (const render of this.#renders.values()) render.reject(error);
+    this.#renders.clear();
+  }
+}
+
+interface RenderWatch {
+  onProgress(fraction: number): void;
+  resolve(): void;
+  reject(error: Error): void;
 }
 
 function outputInfo(info: NativeOutputInfo): OutputInfo {

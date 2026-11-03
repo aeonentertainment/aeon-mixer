@@ -1,10 +1,11 @@
 //! The events thread of docs/design.md section 2: every 5 ms it drains the event ring, drops
-//! what the retired ring holds, reads the device's stats, and calls one threadsafe function
-//! with the batch. It is the one consumer of both rings, so the audio thread never shares an
-//! index with anyone else.
+//! what the retired ring holds, reads the device's stats and the render jobs' progress, and
+//! calls one threadsafe function with the batch. It is the one consumer of both rings, so the
+//! audio thread never shares an index with anyone else.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -13,6 +14,7 @@ use engine::command::{EventConsumer, Retired, RetiredConsumer};
 use napi::Status;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 
+use crate::backing::{SharedRenderJob, lock};
 use crate::event::NativeEvent;
 
 pub const DRAIN_INTERVAL: Duration = Duration::from_millis(5);
@@ -22,6 +24,14 @@ pub type Deliver = ThreadsafeFunction<Vec<NativeEvent>, (), Vec<NativeEvent>, St
 pub struct EventsThread {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    watches: Sender<RenderWatch>,
+}
+
+/// A render job the thread reads on each drain: its fraction when it moves, its end once.
+struct RenderWatch {
+    id: u32,
+    job: SharedRenderJob,
+    last: f32,
 }
 
 impl EventsThread {
@@ -34,7 +44,16 @@ impl EventsThread {
         deliver: Deliver,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
-        let mut drain = Drain { events, retired, stats, underruns_seen: 0, failed_seen: false };
+        let (watches, new_watches) = mpsc::channel();
+        let mut drain = Drain {
+            events,
+            retired,
+            stats,
+            underruns_seen: 0,
+            failed_seen: false,
+            new_watches,
+            renders: Vec::new(),
+        };
         let handle = thread::Builder::new()
             .name("aeon-mixer-events".into())
             .spawn({
@@ -50,7 +69,12 @@ impl EventsThread {
                 }
             })
             .expect("the events thread spawns");
-        Self { stop, handle: Some(handle) }
+        Self { stop, handle: Some(handle), watches }
+    }
+
+    /// Reports `job`'s progress under `id` until it finishes or its stems are taken.
+    pub fn watch(&self, id: u32, job: SharedRenderJob) {
+        let _ = self.watches.send(RenderWatch { id, job, last: -1.0 });
     }
 
     /// Ends the loop and waits for it, at most one interval; the threadsafe function is released
@@ -69,6 +93,8 @@ struct Drain {
     stats: Option<Arc<Stats>>,
     underruns_seen: u64,
     failed_seen: bool,
+    new_watches: Receiver<RenderWatch>,
+    renders: Vec<RenderWatch>,
 }
 
 impl Drain {
@@ -95,6 +121,26 @@ impl Drain {
                 batch.push(NativeEvent::Fault);
             }
         }
+        self.renders.extend(self.new_watches.try_iter());
+        self.renders.retain_mut(|watch| {
+            let guard = lock(&watch.job);
+            let Some(job) = guard.as_ref() else { return false };
+            // Finished is read first, so the fraction beside it is the worker's last word; and
+            // once it reads true, the join `installBacking` does returns without blocking
+            let finished = job.is_finished();
+            let fraction = job.progress();
+            if fraction != watch.last {
+                watch.last = fraction;
+                batch.push(NativeEvent::RenderProgress {
+                    job: watch.id,
+                    fraction: f64::from(fraction),
+                });
+            }
+            if finished {
+                batch.push(NativeEvent::RenderFinished { job: watch.id });
+            }
+            !finished
+        });
         batch
     }
 }

@@ -11,6 +11,7 @@ use engine::slot::guide::Guide;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
+use crate::backing::{BackingInput, BackingRender, StemGainsInput};
 use crate::clock::{Clock, OutputEntry};
 use crate::event::NativeEvent;
 use crate::events_thread::EventsThread;
@@ -133,9 +134,51 @@ impl Engine {
 
     #[napi]
     pub fn start(&mut self) -> Result<u32> {
+        self.steer(|id| Command::Start { id })
+    }
+
+    /// Starts decoding and rendering a song's stems on the worker thread. The events thread
+    /// reports the job's progress under the id the result carries.
+    #[napi]
+    pub fn start_render(&mut self, input: BackingInput) -> Result<BackingRender> {
         let id = self.next_id();
-        self.send(Command::Start { id }).map_err(|_| ring_full())?;
-        Ok(id)
+        let events = self.events.as_ref().ok_or_else(closed)?;
+        let render = BackingRender::start(id, input)?;
+        events.watch(id, render.job());
+        Ok(render)
+    }
+
+    #[napi]
+    pub fn seek(&mut self, to_frame: f64) -> Result<u32> {
+        self.steer(|id| Command::Seek { id, to_frame: frames(to_frame) })
+    }
+
+    #[napi]
+    pub fn pause(&mut self) -> Result<u32> {
+        self.steer(|id| Command::Pause { id })
+    }
+
+    #[napi]
+    pub fn resume(&mut self) -> Result<u32> {
+        self.steer(|id| Command::Resume { id })
+    }
+
+    #[napi]
+    pub fn set_key(&mut self, semitones: i32) -> Result<u32> {
+        let semitones = i8::try_from(semitones)
+            .map_err(|_| Error::from_reason("semitones must be between -128 and 127"))?;
+        self.steer(|id| Command::SetKey { id, semitones })
+    }
+
+    #[napi]
+    pub fn stop_at(&mut self, at_frame: f64, fade_frames: u32) -> Result<u32> {
+        self.steer(|id| Command::StopAt { id, at_frame: frames(at_frame), fade_frames })
+    }
+
+    /// Writes the stem gains of the snapshot and publishes the whole of it.
+    #[napi]
+    pub fn set_stem_gains(&mut self, gains: StemGainsInput) {
+        self.params.update(|snapshot| snapshot.stems = gains.into());
     }
 
     /// Gives the live graph's slot a guide, or takes it away with nothing. No ack.
@@ -172,6 +215,13 @@ impl Engine {
         self.clock.as_ref().ok_or_else(closed)
     }
 
+    /// Sends a command built around a fresh id and returns that id, which its ack will carry.
+    fn steer(&mut self, command: impl FnOnce(u32) -> Command) -> Result<u32> {
+        let id = self.next_id();
+        self.send(command(id)).map_err(|_| ring_full())?;
+        Ok(id)
+    }
+
     fn send(&mut self, command: Command) -> std::result::Result<(), Command> {
         if self.clock.is_none() {
             return Err(command);
@@ -190,6 +240,11 @@ fn slot_index(index: u32) -> Result<usize> {
         .ok()
         .filter(|index| *index < MAX_SLOTS)
         .ok_or_else(|| Error::from_reason(format!("slot {index} is past the engine's {MAX_SLOTS}")))
+}
+
+/// `src/` sends whole, finite, non-negative frame counts; the cast saturates on anything else.
+fn frames(count: f64) -> u64 {
+    count as u64
 }
 
 fn closed() -> Error {
