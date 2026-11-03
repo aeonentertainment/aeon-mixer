@@ -9,8 +9,10 @@ use engine::slot::Slot;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-/// A second of mono PCM a push slot may run ahead of the clock. What does not fit is dropped, and
-/// `push` reports how much was taken.
+/// A second of mono PCM a push slot may run ahead of the clock: a bound on a burst, not a buffer
+/// the path waits on. The slot's latency is the fill the host keeps, so a host that pushes a frame
+/// as it captures one adds that frame and nothing more. What does not fit is dropped, and `push`
+/// reports how much was taken.
 pub const PUSH_SLOT_CAPACITY: usize = RATE as usize;
 
 #[napi]
