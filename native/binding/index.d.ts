@@ -9,17 +9,112 @@
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
-/** An engine on the offline driver: the test clock, pumped from JavaScript. */
-export declare class OfflineEngine {
-  constructor()
+export declare class Engine {
+  /**
+   * Starts the clock on the silent graph and the events thread, which calls `on_events` with
+   * every batch it drains.
+   */
+  constructor(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void)
   get output(): OutputInfo
-  /** Renders `blocks` blocks and returns them as interleaved stereo. */
+  /** The outputs this OS offers, the default marked. Empty on the offline clock. */
+  outputs(): Array<OutputEntry>
+  /** Offline clock only: renders `blocks` blocks and returns them as interleaved stereo. */
   pump(blocks: number): Float32Array
+  /** Writes one slot of the snapshot and publishes the whole of it. */
+  setSlotParams(index: number, params: SlotParamsInput): void
+  /**
+   * Moves `mixer`'s graph to the audio thread and returns the swap's id. The graph it replaces
+   * comes back through the retired ring as a `retired` event.
+   */
+  swap(mixer: Mixer): number
+  /** Swaps the silent graph in: the end of a mixer. */
+  swapSilent(): number
+  start(): number
+  /** Gives the live graph's slot a guide, or takes it away with nothing. No ack. */
+  setGuide(slot: number, guide?: GuideInput | undefined | null): void
+  /** The live graph's slot forgets the stream it was hearing. No ack. */
+  resetSlot(slot: number): void
+  /** Plays interleaved stereo on a free reaction voice; false when four already play. */
+  playReaction(stereo: Float32Array): boolean
+  /** Stops the clock, then the events thread. Whatever graph is live is dropped here. */
   close(): void
+}
+
+export declare class Mixer {
+  /** `push_slots` push slots, in order. The other kinds arrive with the ingest workstream. */
+  constructor(pushSlots: number)
+  /**
+   * Hands interleaved stereo PCM to a push slot, which folds it to mono as every slot is
+   * (docs/design.md 8.4), and returns how many frames it took.
+   */
+  push(index: number, stereo: Float32Array): number
+  /** How many times a push slot dropped its oldest audio to stay within the depth. */
+  resyncs(index: number): number
+}
+
+export interface CorrectorInput {
+  enabled: boolean
+  strength: number
+  retuneMs: number
+}
+
+export interface GuideInput {
+  notes: Array<NoteInput>
+  /** The key's pitch classes as bits, C in bit 0. */
+  keyMask: number
+}
+
+export type NativeEvent =
+  | { kind: 'ack'; id: number; positionFrames: number }
+  | { kind: 'level'; slot: number; rmsDb: number; peakDb: number }
+  | { kind: 'masterLevel'; rmsDb: number; peakDb: number }
+  | { kind: 'pitch'; slot: number; positionMs: number; hz: number; confidence: number }
+  | { kind: 'position'; frames: number }
+  | { kind: 'backingEnded' }
+  | { kind: 'underrun' }
+  | { kind: 'fault' }
+  | { kind: 'retired' }
+
+export interface NoteInput {
+  midi: number
+  startFrame: number
+  endFrame: number
+}
+
+export interface OpenOptions {
+  /** The offline driver, pumped from JavaScript, instead of a device. */
+  offline: boolean
+  /** An id from `outputs`, or the default output. */
+  device?: string
+  periodFrames: number
+}
+
+export interface OutputEntry {
+  id: string
+  name: string
+  isDefault: boolean
 }
 
 export interface OutputInfo {
   sampleRate: number
   periodFrames: number
   latencyMs: number
+}
+
+export interface ReverbInput {
+  enabled: boolean
+  roomSize: number
+  mix: number
+}
+
+export interface SlotParamsInput {
+  /** Linear amplitude. */
+  gain: number
+  /** -1 left to 1 right. */
+  pan: number
+  mute: boolean
+  solo: boolean
+  corrector: CorrectorInput
+  reverb: ReverbInput
+  guideOffsetMs: number
 }

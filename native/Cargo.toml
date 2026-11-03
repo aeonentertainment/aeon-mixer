@@ -9,5 +9,6 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+devices = { path = "devices" }
 engine = { path = "engine" }
 kernels = { path = "kernels" }
