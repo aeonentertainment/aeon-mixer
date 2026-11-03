@@ -44,8 +44,8 @@ export declare class Mixer {
   /** `push_slots` push slots, in order. The other kinds arrive with the ingest workstream. */
   constructor(pushSlots: number)
   /**
-   * Hands interleaved stereo PCM to a push slot, folded to mono as a slot is (docs/design.md
-   * 8.4), and returns how many frames it took.
+   * Hands interleaved stereo PCM to a push slot, which folds it to mono as every slot is
+   * (docs/design.md 8.4), and returns how many frames it took.
    */
   push(index: number, stereo: Float32Array): number
   /** How many times a push slot dropped its oldest audio to stay within the depth. */

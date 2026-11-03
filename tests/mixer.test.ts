@@ -59,8 +59,8 @@ test("a push slot plays what the host pushes, through its gain and the pan law",
   for (const sample of right(out)) expect(sample).toBeCloseTo(0.25 * CENTRE, 5);
 
   expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
-  // A slot holds a second ahead of the clock; the rest is dropped and the count says so
-  expect(mixer.push(1, constant(1, 400))).toBe(48_000);
+  // A slot's ring holds 100 ms; the rest is the host's to hand in again, and the count says so
+  expect(mixer.push(1, constant(1, 400))).toBe(4800);
   expect(mixer.stats()).toEqual({
     slots: [
       { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 },
