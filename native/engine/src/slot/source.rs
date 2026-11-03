@@ -8,6 +8,13 @@ pub trait Source: Send {
 
     /// `ResetSlot`: forget the stream and treat the next audio as a new singer.
     fn reset(&mut self) {}
+
+    /// How long ago the singer sang what `pull` hands over: the mic path's delay up to this
+    /// slot, such as a jitter buffer's playout delay and a decoder's frame. The guide clock
+    /// subtracts it (docs/design.md section 3).
+    fn latency_frames(&self) -> u32 {
+        0
+    }
 }
 
 #[cfg(test)]

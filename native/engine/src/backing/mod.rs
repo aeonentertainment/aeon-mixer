@@ -13,7 +13,7 @@ mod ramp;
 mod render_job;
 mod stems;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 mod transport;
 
 pub use backing_error::BackingError;
