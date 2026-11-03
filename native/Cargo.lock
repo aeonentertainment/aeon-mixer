@@ -777,6 +777,7 @@ dependencies = [
 name = "transport"
 version = "0.0.0"
 dependencies = [
+ "assert_no_alloc",
  "engine",
  "mio",
  "opus",

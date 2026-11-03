@@ -57,7 +57,7 @@ producer and one consumer.
 | Commands   | SPSC ring of `Command`                 | control to audio                                                  | `Swap`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt` with an id; `SetGuide`, `ResetSlot` without |
 | Events     | SPSC ring of `Event`                   | audio to control                                                  | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`                     |
 | Retired    | SPSC ring of `Retired`                 | audio to control                                                  | graphs and guides the audio thread no longer holds, dropped on the control thread                          |
-| Audio      | SPSC rings of f32 blocks               | control to audio for push voices, audio to network for the return | PCM, one block at a time                                                                                   |
+| Audio      | SPSC rings of stereo f32 frames        | control to audio for push voices, audio to network for the return | PCM; the audio thread pushes or pulls one block at a time                                                  |
 
 Rules that follow:
 
@@ -195,7 +195,8 @@ native/
     src/slot/           Slot, its source, the effect chain, the meter
     src/ingest/         packet ring, jitter buffer, Opus and L16 decoding, push input
     src/backing/        Stems, playhead, stem gains, live key, render job
-    src/master.rs       sum, soft clipper, master meter, return ring producer
+    src/master.rs       sum, soft clipper, master meter, push into the return ring
+    src/return_ring.rs  the return branch's ring: whole blocks in, any number of frames out
   kernels/              C++ leaves behind extern "C": corrector, stretcher, reverb
     build.rs            cc compiles cpp/
     cpp/                vendored sources with licences and the commit they came from
@@ -558,13 +559,18 @@ pitch class within the tolerances the C++ tests use; the stretcher moves a tone 
 semitones; the follower changes target within one block of each edge of a known guide; the
 pitch event cadence is 10 ms.
 
-### 8.7 Return branch: the ring in `engine/src/master.rs`, `transport/src/send.rs`
+### 8.7 Return branch: `engine/src/return_ring.rs`, the push in `engine/src/master.rs`, `transport/src/{packetizer,send}.rs`
 
 The master pushes every rendered block into a stereo f32 ring. The network thread pops, gathers
 480 frames, encodes one Opus frame with in-band FEC, wraps it in RTP with the configured SSRC
 and payload type, and sends it. Pacing is the output clock, because blocks arrive at the
 device's rate. If the ring is full, the audio thread drops the block it would have pushed and
 counts it. The packetizer, from ring to RTP bytes, is separate from the socket that sends them.
+
+The ring holds frames, not blocks, because 480 is not a multiple of 128: the master writes a
+whole block or drops it, and the packetizer takes 480 frames once they are there. The graph
+owns its master, so this workstream also owns `Graph::set_return` in `graph.rs`, the one way a
+return ring reaches a master before the graph goes live.
 
 Done when: on the offline driver, the packetizer fed from the ring produces one packet per 480
 rendered frames, with monotonic sequence numbers and timestamps advancing 480 per packet. The
