@@ -4,7 +4,7 @@ type Handler = (...args: never[]) => void;
 export class Emitter<Events extends Record<keyof Events, Handler>> {
   readonly #listeners = new Map<keyof Events, Set<Handler>>();
 
-  on<K extends keyof Events>(event: K, listener: Events[K]): () => void {
+  on<K extends keyof Events>(event: K, listener: Events[K]) {
     let listeners = this.#listeners.get(event);
     if (!listeners) {
       listeners = new Set();
@@ -16,7 +16,7 @@ export class Emitter<Events extends Record<keyof Events, Handler>> {
     };
   }
 
-  emit<K extends keyof Events>(event: K, ...args: Parameters<Events[K]>): void {
+  emit<K extends keyof Events>(event: K, ...args: Parameters<Events[K]>) {
     for (const listener of this.#listeners.get(event) ?? []) {
       (listener as (...args: Parameters<Events[K]>) => void)(...args);
     }

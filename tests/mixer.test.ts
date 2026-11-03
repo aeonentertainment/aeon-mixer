@@ -6,8 +6,9 @@ const BLOCK = 128;
 const FADE_BLOCKS = 3;
 const CENTRE = Math.SQRT1_2;
 
-function constant(level: number, blocks = 1): Float32Array {
-  return new Float32Array(BLOCK * blocks).fill(level);
+/** Interleaved stereo at one level, which folds to that level. */
+function constant(level: number, blocks = 1) {
+  return new Float32Array(2 * BLOCK * blocks).fill(level);
 }
 
 function left(interleaved: Float32Array): number[] {
@@ -58,6 +59,8 @@ test("a push slot plays what the host pushes, through its gain and the pan law",
   for (const sample of right(out)) expect(sample).toBeCloseTo(0.25 * CENTRE, 5);
 
   expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
+  // A slot holds a second ahead of the clock; the rest is dropped and the count says so
+  expect(mixer.push(1, constant(1, 400))).toBe(48_000);
   expect(mixer.stats()).toEqual({
     slots: [
       { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 },
@@ -116,11 +119,13 @@ test("level events read the slot's RMS and peak within a tenth of a decibel", as
   const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
   // The meter sits before gain, so it reads the sine through the swap fade too
   const blocks = Math.ceil(4800 / BLOCK);
-  const sine = new Float32Array(blocks * BLOCK);
-  for (let i = 0; i < sine.length; i += 1) {
-    sine[i] = 0.5 * Math.sin((2 * Math.PI * 1000 * i) / 48000);
+  const sine = new Float32Array(2 * blocks * BLOCK);
+  for (let frame = 0; frame < blocks * BLOCK; frame += 1) {
+    const sample = 0.5 * Math.sin((2 * Math.PI * 1000 * frame) / 48000);
+    sine[2 * frame] = sample;
+    sine[2 * frame + 1] = sample;
   }
-  expect(mixer.push(0, sine)).toBe(sine.length);
+  expect(mixer.push(0, sine)).toBe(blocks * BLOCK);
   const level = onceLevel(mixer);
   await startLive(engine, mixer);
   engine.pump(blocks - FADE_BLOCKS);
@@ -221,6 +226,7 @@ test("ranges are checked before anything crosses", async () => {
   expect(() => mixer.setSlotGuide(0, { notes: [], keyMask: 4096 })).toThrow(RangeError);
   expect(() => mixer.setSlotGuide(0, null, 5000)).toThrow(RangeError);
   expect(() => mixer.push(0, new Float32Array(0))).toThrow(TypeError);
+  expect(() => mixer.push(0, new Float32Array(3))).toThrow(RangeError);
   await expect(mixer.seek(1000)).rejects.toThrow(/backing/);
   await expect(mixer.setBackingKey(2)).rejects.toThrow(/backing/);
   expect(() => mixer.setStemGain("instrumental", 0.5)).toThrow(/backing/);

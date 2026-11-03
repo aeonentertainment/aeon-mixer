@@ -2,10 +2,10 @@
 
 const FRAMES_PER_MS = 48;
 
-export function msToFrames(ms: number): number {
+export function msToFrames(ms: number) {
   return Math.round(ms * FRAMES_PER_MS);
 }
 
-export function framesToMs(frames: number): number {
+export function framesToMs(frames: number) {
   return frames / FRAMES_PER_MS;
 }

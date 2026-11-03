@@ -43,8 +43,11 @@ export declare class Engine {
 export declare class Mixer {
   /** `push_slots` push slots, in order. The other kinds arrive with the ingest workstream. */
   constructor(pushSlots: number)
-  /** Hands mono PCM to a push slot and returns how many frames it took. */
-  push(index: number, pcm: Float32Array): number
+  /**
+   * Hands interleaved stereo PCM to a push slot, folded to mono as a slot is (docs/design.md
+   * 8.4), and returns how many frames it took.
+   */
+  push(index: number, stereo: Float32Array): number
 }
 
 export interface CorrectorInput {

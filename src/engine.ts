@@ -40,9 +40,7 @@ export class Engine {
   readonly capabilities: ReadonlySet<Capability> = new Set<Capability>(["level"]);
   readonly output: OutputInfo;
   /** How many slots a mixer may have, fixed at open. */
-  readonly slots: number;
-  /** The ingest jitter buffer's playout delay, applied when the ingest workstream lands. */
-  readonly playoutDelayMs: number;
+  readonly #slots: number;
   /** Offline engines only: render blocks and return them as interleaved stereo. */
   readonly pump?: (blocks: number) => Float32Array;
   readonly #native: NativeEngine;
@@ -56,8 +54,9 @@ export class Engine {
   #state: State = "running";
 
   constructor(options: OpenEngineOptions) {
-    this.slots = integerIn("slots", options.slots ?? 8, 1, 16);
-    this.playoutDelayMs = finiteIn("playoutDelayMs", options.playoutDelayMs ?? 15, 1, 500);
+    this.#slots = integerIn("slots", options.slots ?? 8, 1, 16);
+    // The jitter buffer's playout delay is checked now and applied when the ingest workstream lands
+    finiteIn("playoutDelayMs", options.playoutDelayMs ?? 15, 1, 500);
     const deliver = (batch: NativeEvent[]) => {
       this.#deliver(batch);
     };
@@ -88,7 +87,7 @@ export class Engine {
 
   /** Room-lifetime reaction voices, four at once; a fifth is dropped while four play. */
   readonly reactions = {
-    play: (samples: Float32Array, channels: 1 | 2): void => {
+    play: (samples: Float32Array, channels: 1 | 2) => {
       if (channels !== 1 && channels !== 2) {
         throw new RangeError(`channels must be 1 or 2, got ${String(channels)}`);
       }
@@ -105,9 +104,9 @@ export class Engine {
 
   async createMixer(config: MixerConfig): Promise<Mixer> {
     this.#assertRunning();
-    if (config.slots.length > this.slots) {
+    if (config.slots.length > this.#slots) {
       throw new RangeError(
-        `the engine has ${this.slots} slots; the mixer asks for ${config.slots.length}`,
+        `the engine has ${this.#slots} slots; the mixer asks for ${config.slots.length}`,
       );
     }
     for (const { kind } of config.slots) {
@@ -126,12 +125,12 @@ export class Engine {
     );
   }
 
-  on<K extends keyof EngineEvents>(event: K, listener: EngineEvents[K]): () => void {
+  on<K extends keyof EngineEvents>(event: K, listener: EngineEvents[K]) {
     return this.#events.on(event, listener);
   }
 
   /** Destroys the live mixer, stops the clock and joins the events thread. */
-  async close(): Promise<void> {
+  async close() {
     if (this.#state === "closed") return;
     if (this.#live && this.#state === "running") {
       await this.#live.mixer.destroy();
@@ -141,7 +140,7 @@ export class Engine {
     this.#acks.rejectAll(new Error("the engine is closed"));
   }
 
-  #swapIn(mixer: Mixer, graph: NativeMixer, events: Emitter<MixerEvents>): Promise<number> {
+  #swapIn(mixer: Mixer, graph: NativeMixer, events: Emitter<MixerEvents>) {
     if (this.#live) throw new Error("another mixer is live; destroy it first");
     const swapped = this.#command(() => this.#native.swap(graph));
     this.#live = { mixer, events };
@@ -150,7 +149,7 @@ export class Engine {
     return swapped;
   }
 
-  async #swapOut(mixer: Mixer): Promise<void> {
+  async #swapOut(mixer: Mixer) {
     if (this.#live?.mixer !== mixer) return;
     const swapped = this.#command(() => this.#native.swapSilent());
     this.#live = null;
@@ -159,12 +158,12 @@ export class Engine {
     await retired;
   }
 
-  #command(send: () => number): Promise<number> {
+  #command(send: () => number) {
     this.#assertRunning();
     return this.#acks.wait(send(), () => this.#state);
   }
 
-  #assertRunning(): void {
+  #assertRunning() {
     if (this.#state !== "running") {
       throw new Error(
         this.#state === "faulted"
@@ -174,7 +173,7 @@ export class Engine {
     }
   }
 
-  #deliver(batch: NativeEvent[]): void {
+  #deliver(batch: NativeEvent[]) {
     if (this.#state === "closed") return;
     for (const event of batch) {
       switch (event.kind) {
@@ -215,7 +214,7 @@ export class Engine {
   }
 
   /** A device loss or a caught panic: the host closes and reopens; nothing here recovers. */
-  #fault(): void {
+  #fault() {
     if (this.#state !== "running") return;
     this.#state = "faulted";
     const error = new Error("the engine has faulted; close it and open it again");
@@ -231,7 +230,7 @@ function outputInfo(info: NativeOutputInfo): OutputInfo {
   return { sampleRate: 48000, periodFrames: info.periodFrames, latencyMs: info.latencyMs };
 }
 
-function monoToStereo(mono: Float32Array): Float32Array {
+function monoToStereo(mono: Float32Array) {
   const stereo = new Float32Array(mono.length * 2);
   mono.forEach((sample, i) => {
     stereo[2 * i] = sample;

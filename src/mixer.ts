@@ -76,7 +76,7 @@ export class Mixer {
     this.#guides = kinds.map(() => null);
   }
 
-  setSlot(index: number, settings: Partial<SlotSettings>): void {
+  setSlot(index: number, settings: Partial<SlotSettings>) {
     const slot = this.#slot(index);
     const current = this.#paramsOf(slot);
     this.#write(slot, {
@@ -89,7 +89,7 @@ export class Mixer {
   }
 
   /** The slot's whole chain: an effect not in `effects` is disabled. */
-  setSlotEffects(index: number, effects: ReadonlyArray<SlotEffect>): void {
+  setSlotEffects(index: number, effects: ReadonlyArray<SlotEffect>) {
     const slot = this.#slot(index);
     const next = { ...this.#paramsOf(slot), ...defaultEffects() };
     for (const effect of effects) {
@@ -113,7 +113,7 @@ export class Mixer {
     this.#write(slot, next);
   }
 
-  setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number): void {
+  setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number) {
     const slot = this.#slot(index);
     const input = guide === null ? null : toGuideInput(guide);
     if (guideOffsetMs !== undefined) {
@@ -129,23 +129,26 @@ export class Mixer {
   }
 
   /** Forget the stream a slot was hearing; the next audio is a new singer. */
-  resetSlot(index: number): void {
+  resetSlot(index: number) {
     const slot = this.#slot(index);
     if (this.#host.isLive(this)) {
       this.#host.native.resetSlot(slot);
     }
   }
 
-  /** Hands mono PCM to a push slot. Returns the frames taken; the rest did not fit and is dropped. */
-  push(index: number, samples: Float32Array): number {
+  /**
+   * Hands interleaved stereo PCM to a push slot, folded to mono as every slot is. Returns the
+   * frames taken; the rest did not fit and is dropped, since late audio is worse than lost audio.
+   */
+  push(index: number, stereo: Float32Array) {
     const slot = this.#slot(index);
     if (this.#phase === "destroyed") {
       throw new Error("the mixer is destroyed");
     }
-    return this.#native.push(slot, pcm("samples", samples, 1));
+    return this.#native.push(slot, pcm("stereo", stereo, 2));
   }
 
-  async start(): Promise<{ startedAt: number; backingOffsetMs: number; speedFactor: number }> {
+  async start() {
     if (this.#phase !== "armed") {
       throw new Error(`the mixer cannot start: it is ${this.#phase}`);
     }
@@ -189,12 +192,12 @@ export class Mixer {
     return Promise.reject(new Error(NOT_YET));
   }
 
-  setStemGain(kind: StemKind, gain: number): void {
+  setStemGain(kind: StemKind, gain: number) {
     finiteIn(`${kind} gain`, gain, 0, 4);
     throw new Error(NOT_YET);
   }
 
-  on<K extends keyof MixerEvents>(event: K, listener: MixerEvents[K]): () => void {
+  on<K extends keyof MixerEvents>(event: K, listener: MixerEvents[K]) {
     return this.#events.on(event, listener);
   }
 
@@ -203,7 +206,7 @@ export class Mixer {
   }
 
   /** Swaps the silent graph in and resolves once this graph is back and dropped. */
-  async destroy(): Promise<void> {
+  async destroy() {
     switch (this.#phase) {
       case "destroyed":
         return;
@@ -218,17 +221,17 @@ export class Mixer {
     }
   }
 
-  #slot(index: number): number {
+  #slot(index: number) {
     return integerIn("slot", index, 0, this.slots.length - 1);
   }
 
-  #paramsOf(slot: number): SlotParamsInput {
+  #paramsOf(slot: number) {
     const params = this.#params[slot];
     if (!params) throw new RangeError(`no slot ${slot}`);
     return params;
   }
 
-  #write(slot: number, params: SlotParamsInput): void {
+  #write(slot: number, params: SlotParamsInput) {
     this.#params[slot] = params;
     if (this.#host.isLive(this)) {
       this.#host.native.setSlotParams(slot, params);

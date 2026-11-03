@@ -37,14 +37,17 @@ impl Mixer {
         Ok(Self { graph: Some(Box::new(Graph::new(slots))), feeds })
     }
 
-    /// Hands mono PCM to a push slot and returns how many frames it took.
+    /// Hands interleaved stereo PCM to a push slot, folded to mono as a slot is (docs/design.md
+    /// 8.4), and returns how many frames it took.
     #[napi]
-    pub fn push(&mut self, index: u32, pcm: Float32ArraySlice<'_>) -> Result<u32> {
+    pub fn push(&mut self, index: u32, stereo: Float32ArraySlice<'_>) -> Result<u32> {
         let feed = self
             .feeds
             .get_mut(index as usize)
             .ok_or_else(|| Error::from_reason(format!("no slot {index}")))?;
-        Ok(feed.push(&pcm) as u32)
+        let (frames, _) = stereo.as_chunks::<2>();
+        let mono: Vec<f32> = frames.iter().map(|[left, right]| (left + right) / 2.0).collect();
+        Ok(feed.push(&mono) as u32)
     }
 
     /// The graph, once: `swap` moves it to the audio thread.

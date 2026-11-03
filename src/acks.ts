@@ -27,7 +27,7 @@ export class Acks {
     });
   }
 
-  resolve(id: number, positionFrames: number): void {
+  resolve(id: number, positionFrames: number) {
     const pending = this.#pending.get(id);
     if (!pending) return;
     clearTimeout(pending.timer);
@@ -35,7 +35,7 @@ export class Acks {
     pending.resolve(positionFrames);
   }
 
-  rejectAll(error: Error): void {
+  rejectAll(error: Error) {
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);

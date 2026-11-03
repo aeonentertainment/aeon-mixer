@@ -7,7 +7,6 @@ test("an offline engine pumps silent blocks of 128 stereo frames at 48 kHz", asy
   const engine = await openEngine({ output: { offline: true } });
   expect(engine.output).toEqual({ sampleRate: 48000, periodFrames: 128, latencyMs: 0 });
   expect(engine.capabilities).toEqual(new Set(["level"]));
-  expect(engine.slots).toBe(8);
 
   const block = engine.pump(1);
   expect(block).toBeInstanceOf(Float32Array);
