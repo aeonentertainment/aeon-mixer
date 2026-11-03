@@ -188,12 +188,12 @@ mod tests {
     #[test]
     fn a_new_ssrc_or_reset_slot_starts_a_new_stream() {
         let signal = quantized(&source(3 * RATE as usize));
-        let parts: Vec<_> = signal.chunks_exact(RATE as usize).collect();
+        let (parts, _) = signal.as_chunks::<{ RATE as usize }>();
         let mut a = L16Sender::new(240, 11);
         let mut b = L16Sender::new(240, 12);
-        let mut arrivals = a.send_all(parts[0], 0, 1.0);
-        arrivals.extend(b.send_all(parts[1], SECOND, 1.0));
-        arrivals.extend(b.send_all(parts[2], 2 * SECOND, 1.0));
+        let mut arrivals = a.send_all(&parts[0], 0, 1.0);
+        arrivals.extend(b.send_all(&parts[1], SECOND, 1.0));
+        arrivals.extend(b.send_all(&parts[2], 2 * SECOND, 1.0));
         let arrivals = impair(&arrivals, Impairment::NONE, 4);
         let mut rig = Rig::new(Codec::L16);
         let reset_at = 2 * SECOND;
