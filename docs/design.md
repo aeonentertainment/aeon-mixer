@@ -111,9 +111,10 @@ What the engine reports so the rest of the device can follow:
 The topology is fixed. Adding a feature means adding a stage to a chain, a stem to the backing
 path or an output to the master, never a general graph.
 
-**A slot**, in order: source, meter, echo cancel when compiled in, pitch corrector, reverb,
-gain and pan into the stereo bus. The meter sits after the corrector and before gain, so the
-level words tell the singer about their singing, and mute never changes them. The source is a
+**A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, reverb,
+gain and pan into the stereo bus. The meter sits after the corrector and before the reverb and
+gain, so the level words tell the singer about their singing, not the room, and mute never
+changes them. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots. Slots are
 mono and pan with a constant-power law into the stereo bus.
 

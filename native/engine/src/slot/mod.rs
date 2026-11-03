@@ -1,6 +1,7 @@
 //! One mic input: its source, the effect chain, the meter, then gain and pan into the stereo
 //! bus. The order is docs/design.md section 4; the ramps are one block.
 
+pub mod cue;
 pub mod effects;
 pub mod guide;
 pub mod meter;
@@ -8,9 +9,11 @@ pub mod source;
 
 use std::f32::consts::FRAC_PI_4;
 
-use crate::block::{BLOCK, Stereo};
+use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{Event, EventProducer};
 use crate::params::SlotParams;
+use cue::Cue;
+use effects::{Corrector, Reverb};
 use guide::Guide;
 use meter::Meter;
 use source::Source;
@@ -18,6 +21,8 @@ use source::Source;
 pub struct Slot {
     source: Box<dyn Source>,
     guide: Option<Box<Guide>>,
+    corrector: Corrector,
+    reverb: Reverb,
     meter: Meter,
     /// Left and right gains the last block ended on; `None` before the first block, which starts
     /// on its target instead of ramping up from silence.
@@ -27,21 +32,49 @@ pub struct Slot {
 
 impl Slot {
     pub fn new(source: Box<dyn Source>) -> Self {
-        Self { source, guide: None, meter: Meter::new(), gains: None, input: [0.0; BLOCK] }
+        Self {
+            source,
+            guide: None,
+            corrector: Corrector::new(),
+            reverb: Reverb::new(),
+            meter: Meter::new(),
+            gains: None,
+            input: [0.0; BLOCK],
+        }
     }
 
-    /// Pulls one block, meters it, and adds it to `out` at the ramped gain. `any_solo` is whether
-    /// any slot in the graph is soloed, which silences this one unless it is too.
+    /// Pulls one block, corrects it toward the guide at `cue`, meters it, adds reverb, and adds it
+    /// to `out` at the ramped gain. `any_solo` is whether any slot in the graph is soloed, which
+    /// silences this one unless it is too.
     pub fn render(
         &mut self,
         index: u8,
         params: &SlotParams,
         any_solo: bool,
+        cue: Cue,
         out: &mut Stereo<'_>,
         events: &mut EventProducer,
     ) {
         self.source.pull(&mut self.input);
-        // The effect chain (8.6) runs here, so the meter reads the corrected voice.
+        let guide_offset =
+            (f64::from(params.guide_offset_ms) * f64::from(RATE) / 1000.0).round() as i64;
+        let frame = cue.frame - i64::from(self.source.latency_frames()) + guide_offset;
+        self.corrector.process(
+            &params.effects.corrector,
+            self.guide.as_deref(),
+            frame,
+            cue.semitones,
+            &mut self.input,
+            |reading| {
+                events.push(Event::Pitch {
+                    slot: index,
+                    position_ms: reading.position_ms,
+                    hz: reading.hz,
+                    confidence: reading.confidence,
+                });
+            },
+        );
+        // The meter reads the corrected voice before the reverb, so the level is the singing
         for sample in self.input {
             if let Some(reading) = self.meter.push_frame(sample * sample, sample.abs()) {
                 events.push(Event::Level {
@@ -51,6 +84,7 @@ impl Slot {
                 });
             }
         }
+        self.reverb.process(&params.effects.reverb, &mut self.input);
 
         let target = target_gains(params, any_solo);
         let [mut left, mut right] = self.gains.unwrap_or(target);
@@ -74,8 +108,10 @@ impl Slot {
         self.guide.as_deref()
     }
 
+    /// A new singer: the source forgets its stream and the corrector what it heard.
     pub fn reset(&mut self) {
         self.source.reset();
+        self.corrector.reset();
     }
 }
 
