@@ -18,6 +18,7 @@ use crate::event::NativeEvent;
 use crate::events_thread::EventsThread;
 use crate::guide::GuideInput;
 use crate::mixer::Mixer;
+use crate::rtp_return::RtpReturnInput;
 use crate::slot_params::SlotParamsInput;
 
 #[napi(object)]
@@ -83,11 +84,16 @@ impl Engine {
     }
 
     /// Builds a mixer with one slot per kind, in order: `"rtp"`, `"l16"` or `"push"`. The rtp
-    /// and l16 slots bind their ports here and report them through `Mixer.port`.
+    /// and l16 slots bind their ports here and report them through `Mixer.port`; a return stream
+    /// gets its socket and send task here too.
     #[napi]
-    pub fn create_mixer(&self, kinds: Vec<String>) -> Result<Mixer> {
+    pub fn create_mixer(
+        &self,
+        kinds: Vec<String>,
+        rtp_return: Option<RtpReturnInput>,
+    ) -> Result<Mixer> {
         let network = self.network.as_ref().ok_or_else(closed)?;
-        Mixer::build(&kinds, self.playout_delay_frames, network)
+        Mixer::build(&kinds, rtp_return.as_ref(), self.playout_delay_frames, network)
     }
 
     #[napi(getter)]

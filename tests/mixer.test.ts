@@ -67,6 +67,7 @@ test("a push slot plays what the host pushes, through its gain and the pan law",
       { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 },
     ],
     underruns: 0,
+    rtpReturn: null,
   });
   await destroyLive(engine, mixer);
   await engine.close();
@@ -147,6 +148,40 @@ test("level events read the slot's RMS and peak within a tenth of a decibel", as
   expect(slot).toBe(0);
   expect(rmsDb).toBeCloseTo(-9.03, 1);
   expect(peakDb).toBeCloseTo(-6.02, 1);
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("pitch events read a sung tone's frequency on the slot that sang it", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }, { kind: "push" }] });
+  let frame = 0;
+  const sineBlock = () => {
+    const block = new Float32Array(2 * BLOCK);
+    for (let i = 0; i < BLOCK; i += 1, frame += 1) {
+      const sample = 0.5 * Math.sin((2 * Math.PI * 220 * frame) / 48000);
+      block[2 * i] = sample;
+      block[2 * i + 1] = sample;
+    }
+    return block;
+  };
+  // The detector reads every 10 ms; the first windows still hold the silence before the tone
+  const reading = new Promise<[slot: number, hz: number]>((resolve) => {
+    const off = mixer.on("pitch", (slot, _positionMs, hz, confidence) => {
+      if (confidence < 0.9) return;
+      off();
+      resolve([slot, hz]);
+    });
+  });
+  await startLive(engine, mixer);
+  for (let i = 0; i < Math.ceil(9600 / BLOCK); i += 1) {
+    mixer.push(1, sineBlock());
+    engine.pump(1);
+  }
+  const [slot, hz] = await reading;
+  expect(slot).toBe(1);
+  // Within 10 cents of A3, the corrector tests' tolerance; a pure sine reads about 6 cents off
+  expect(Math.abs(1200 * Math.log2(hz / 220))).toBeLessThan(10);
   await destroyLive(engine, mixer);
   await engine.close();
 });

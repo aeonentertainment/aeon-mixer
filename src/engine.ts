@@ -16,7 +16,7 @@ import type {
   OutputInfo,
 } from "./types.ts";
 import { framesToMs, msToFrames } from "./units.ts";
-import { finiteIn, ingestKind, integerIn, pcm } from "./validate.ts";
+import { finiteIn, ingestKind, integerIn, pcm, rtpReturn } from "./validate.ts";
 
 type State = "running" | "faulted" | "closed";
 
@@ -135,8 +135,14 @@ export class Engine {
       );
     }
     const kinds = config.slots.map(({ kind }, i) => ingestKind(`slots[${i}].kind`, kind));
-    if (config.rtpReturn) throw new Error("the return branch arrives with its workstream");
-    return new Mixer(this.#host, kinds, new Emitter<MixerEvents>(), config.backing ?? null);
+    const destination = config.rtpReturn === undefined ? null : rtpReturn(config.rtpReturn);
+    return new Mixer(
+      this.#host,
+      kinds,
+      new Emitter<MixerEvents>(),
+      config.backing ?? null,
+      destination,
+    );
   }
 
   on<K extends keyof EngineEvents>(event: K, listener: EngineEvents[K]) {

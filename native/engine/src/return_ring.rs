@@ -58,6 +58,21 @@ impl ReturnConsumer {
     pub fn dropped(&self) -> u32 {
         self.dropped.load(Ordering::Relaxed)
     }
+
+    /// The drop count for the control thread, which keeps it after the consumer moves to the
+    /// network thread.
+    pub fn drops(&self) -> ReturnDrops {
+        ReturnDrops(Arc::clone(&self.dropped))
+    }
+}
+
+/// The control thread's read of the ring's drop count, for `Mixer.stats`.
+pub struct ReturnDrops(Arc<AtomicU32>);
+
+impl ReturnDrops {
+    pub fn read(&self) -> u32 {
+        self.0.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(test)]
@@ -97,6 +112,7 @@ mod tests {
         push_block(&mut producer, 2.0);
         push_block(&mut producer, 3.0);
         assert_eq!(consumer.dropped(), 2);
+        assert_eq!(consumer.drops().read(), 2, "and the control thread reads the same count");
 
         let mut out = vec![[0.0; 2]; fits * BLOCK];
         assert!(consumer.pop_exact(&mut out));

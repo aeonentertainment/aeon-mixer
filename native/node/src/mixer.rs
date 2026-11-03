@@ -1,6 +1,7 @@
 //! One mixing graph, built on the control thread by `Engine::create_mixer` and handed to the
 //! engine by its `swap`. The mixer keeps the control thread's end of every slot's ingest: the
-//! push feeds the host pushes into, and the ports the network thread listens on for the rest.
+//! push feeds the host pushes into, and the ports the network thread listens on for the rest;
+//! and the end of its return stream, when it has one.
 
 use engine::block::MAX_SLOTS;
 use engine::graph::Graph;
@@ -11,17 +12,20 @@ use transport::Network;
 
 use crate::backing::BackingRender;
 use crate::ingest::{Ingest, SlotStatsInfo};
+use crate::rtp_return::{RtpReturn, RtpReturnInput, RtpReturnStats};
 
 #[napi]
 pub struct Mixer {
     graph: Option<Box<Graph>>,
     slots: Vec<Ingest>,
+    rtp_return: Option<RtpReturn>,
 }
 
 impl Mixer {
     /// One slot per kind, in order: `"rtp"`, `"l16"` or `"push"`.
     pub(crate) fn build(
         kinds: &[String],
+        rtp_return: Option<&RtpReturnInput>,
         playout_delay_frames: u32,
         network: &Network,
     ) -> Result<Self> {
@@ -37,7 +41,10 @@ impl Mixer {
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .unzip();
-        Ok(Self { graph: Some(Box::new(Graph::new(slots))), slots: ingests })
+        let mut graph = Box::new(Graph::new(slots));
+        let rtp_return =
+            rtp_return.map(|input| RtpReturn::open(input, &mut graph, network)).transpose()?;
+        Ok(Self { graph: Some(graph), slots: ingests, rtp_return })
     }
 
     /// The graph, once: `swap` moves it to the audio thread.
@@ -88,11 +95,18 @@ impl Mixer {
         self.slots.iter().map(|slot| slot.stats().into()).collect()
     }
 
-    /// The end of the mixer on this thread: closes the slots' ports and drops the push feeds,
-    /// and a graph that never started.
+    /// The return stream's counters, or null for a mixer without one.
+    #[napi]
+    pub fn return_stats(&self) -> Option<RtpReturnStats> {
+        self.rtp_return.as_ref().map(RtpReturn::stats)
+    }
+
+    /// The end of the mixer on this thread: closes the slots' ports, drops the push feeds, stops
+    /// the return stream, and drops a graph that never started.
     #[napi]
     pub fn release(&mut self) {
         self.slots.clear();
+        self.rtp_return = None;
         self.graph = None;
     }
 

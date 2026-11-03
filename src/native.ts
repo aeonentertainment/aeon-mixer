@@ -15,6 +15,7 @@ export type {
   NativeEvent,
   OutputEntry,
   OutputInfo as NativeOutputInfo,
+  RtpReturnInput,
   SlotParamsInput,
   StemGainsInput,
 } from "../native/binding/index.js";
