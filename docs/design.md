@@ -172,7 +172,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   live, slots still open, until the host destroys it: people talk through the mics after the
   song.
 - **Destroy.** `destroy` swaps the silent graph in and resolves when the old graph arrives on
-  the retired ring and is dropped. Slot ports close.
+  the retired ring and is dropped. Slot ports close within the network thread's next tick after
+  that, since that thread owns the sockets and `destroy` only queues their removal. Nothing
+  waits for it: the ports are ephemeral and no caller binds one again.
 - **Close.** `close` destroys any live mixer, stops the driver, joins the threads.
 - **Faults.** A device loss or a caught panic emits `fault` on the engine. The host closes and
   reopens; nothing inside tries to recover.
