@@ -35,11 +35,19 @@ impl Receiver {
     }
 }
 
-/// An RTP datagram as the ring's packet; `None` for anything else, which is dropped.
+/// An RTP datagram as the ring's packet; `None` for anything else, which is dropped. mediasoup
+/// multiplexes RTCP onto the RTP port, and a report parses as RTP with a payload type in RFC
+/// 5761's reserved range and a timestamp where the SSRC goes, which would re-anchor the stream.
 pub fn packet_from(datagram: &[u8]) -> Option<Packet> {
     let (header, payload) = Header::parse(datagram)?;
+    if RTCP_PAYLOAD_TYPES.contains(&header.payload_type) {
+        return None;
+    }
     Packet::new(header.seq, header.timestamp, header.ssrc, header.marker, payload)
 }
+
+/// RFC 5761 section 4: RTCP packet types 192 to 223 read as these payload types.
+const RTCP_PAYLOAD_TYPES: std::ops::RangeInclusive<u8> = 64..=95;
 
 impl Task for Receiver {
     fn register(&mut self, registry: &Registry, token: Token) -> io::Result<()> {
@@ -79,5 +87,11 @@ mod tests {
         assert_eq!((packet.seq, packet.timestamp, packet.ssrc, packet.marker), (5, 960, 42, false));
         assert_eq!(packet.payload(), &[1, 2]);
         assert!(packet_from(b"not rtp at all").is_none());
+
+        // A sender report on the same port: version 2, packet type 200, then its own fields
+        let mut report = [0u8; 28];
+        report[0] = 0x81;
+        report[1] = 200;
+        assert!(packet_from(&report).is_none(), "RTCP never reaches the ring");
     }
 }

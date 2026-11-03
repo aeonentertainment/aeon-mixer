@@ -204,8 +204,8 @@ native/
 
 Dependencies point one way: `node` uses `engine`, `transport` and `devices`; `transport` and
 `devices` use `engine`; `engine` uses `kernels`; `kernels` uses nothing. `unsafe` lives in
-`kernels` and `devices` only. Opus comes into `engine` through a maintained Rust binding to
-libopus, chosen by the ingest workstream and named in its PR.
+`kernels` and `devices` only. Opus comes into `engine` through `opus` (opus-rs), the safe binding
+over `opusic-sys`, which builds its bundled libopus with cmake.
 
 ## 7. Contracts
 
@@ -281,9 +281,18 @@ pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
 // engine/src/ingest/
 pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
 pub fn packet_ring(capacity: usize) -> (PacketProducer, PacketConsumer);   // SPSC, fixed-size
-pub struct JitterBuffer;   // new(playout_delay_frames); push(Packet); pull one block of f32 mono; stats()
-pub struct PushVoice;      // SPSC f32 stereo ring the control thread fills; silence when empty
+pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder, on the control thread
+pub struct JitterBuffer;   // new(playout_delay_frames, codec); push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
+pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
+pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
 pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32 }
+
+// transport/src/
+/// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
+pub trait Task: Send + 'static { fn register(&mut self, registry: &Registry, token: Token) -> io::Result<()>; fn deregister(&mut self, registry: &Registry) -> io::Result<()>; fn ready(&mut self); fn tick(&mut self) {} }
+pub struct Network;        // spawn(); add(impl Task) -> TaskHandle, whose drop removes the task; drop stops the thread
+pub struct Receiver;       // a Task: bind(port: Option<u16>, PacketProducer); port()
+pub struct Header { pub marker: bool, pub payload_type: u8, pub seq: u16, pub timestamp: u32, pub ssrc: u32 }   // rtp.rs: parse(&[u8]) -> Option<(Header, &[u8])>; write(&mut [u8; 12])
 
 // engine/src/backing/
 pub struct Stems { pub instrumental: Planar, pub guide: Option<Planar>, pub frames: u64 }   // 48 kHz, planar f32
@@ -449,19 +458,30 @@ a feature so CI without hardware still compiles them.
 
 The network thread owns one UDP socket per `rtp` and `l16` slot, so today's grant flow and the
 mediasoup loopback keep working unchanged, polls them with a timeout, parses the RTP header and
-pushes fixed-size packets into the slot's ring. The audio thread drains the ring into the
-jitter buffer at the top of each block.
+pushes fixed-size packets into the slot's ring. The RTCP mediasoup multiplexes onto the same
+port is dropped by its payload type, RFC 5761's reserved range. The audio thread drains the
+ring into the jitter buffer at the top of each block.
 
 - The jitter buffer anchors the first packet's RTP timestamp to the output clock plus the
-  playout delay and never moves that anchor while the stream lives. A missing packet at its
-  due time is concealed by the decoder, with in-band FEC from the next packet when present. A
-  packet that arrives after its time is counted late and dropped; it never silences or resets
-  the stream. Clock skew between phone and device is corrected by dropping or concealing one
-  frame when the decoded FIFO drifts a frame from its target, and counted as a resync.
-- A new SSRC, a gap longer than a second, or `resetSlot` starts a new stream: the buffer
-  re-anchors and the slot's corrector resets.
+  playout delay, and jitter never moves that anchor. A missing packet at its due time is
+  concealed by the decoder, with in-band FEC from the next packet when that is already in
+  hand. A packet that arrives after its time is counted late and dropped; it never silences or
+  resets the stream.
+- Skew moves the anchor one frame at a time. Once a second the buffer looks at how early the
+  last second's packets arrived against their due times. When every one came at least a frame
+  early, the anchor moves a frame earlier and that frame is dropped; when every one came a
+  frame late, or half the delay late when a frame is longer than that, it moves a frame later
+  and that frame is concealed. Either counts as a resync. Arrival slack is the measure rather
+  than the decoded FIFO's fill, because decoding on demand keeps the FIFO at one frame.
+- A new SSRC, a gap over a second on either clock, or `resetSlot` starts a new stream: the
+  buffer re-anchors and the slot's corrector resets. A gap is a second without a packet, or a
+  timestamp a second away from where the stream is; the second one is a sender that paused.
+  A stream quiet for a second stops concealing, so an idle slot costs no decodes.
 - Decoding happens in the callback, bounded to the packets due this block. The decoder is
   created on the control thread; libopus allocates nothing after that.
+- At the 15 ms playout delay, in-band FEC helps frames of 10 ms and shorter. The packet after
+  a lost 20 ms frame arrives 5 ms after that frame falls due, so mediasoup's 20 ms streams get
+  the decoder's own concealment.
 - `l16` slots take stereo 16-bit big-endian at 48 kHz, as the house-mic sender sends today, and
   fold to mono. `push` voices take stereo f32 from the control thread.
 
