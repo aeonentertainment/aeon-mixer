@@ -4,7 +4,7 @@
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 
-use engine::block::RATE;
+use engine::block::{BLOCK, RATE};
 use engine::return_ring::ReturnConsumer;
 
 use crate::rtp::{HEADER_LEN, Header};
@@ -31,6 +31,8 @@ pub struct Packetizer {
     ring: ReturnConsumer,
     encoder: opus::Encoder,
     header: Header,
+    /// The ring's drop count as of the last packet, so a new drop shows as a timestamp gap.
+    dropped_seen: u32,
     frames: [[f32; 2]; FRAME],
     datagram: [u8; HEADER_LEN + MAX_PAYLOAD],
 }
@@ -55,17 +57,29 @@ impl Packetizer {
             ring,
             encoder,
             header,
+            dropped_seen: 0,
             frames: [[0.0; 2]; FRAME],
             datagram: [0; HEADER_LEN + MAX_PAYLOAD],
         })
     }
 
-    /// The next datagram once the ring holds a frame's worth, `None` until then. The marker bit
-    /// is on the first packet only. A frame libopus refuses is skipped: its timestamp passes and
-    /// its sequence number does not, which a receiver reads as a gap.
+    /// The next datagram once the ring holds a frame's worth, `None` until then. Timestamps
+    /// follow the output clock, so blocks the audio thread dropped still advance them: the
+    /// packet where a drop is first seen jumps by the frames lost and carries the marker, as
+    /// after a silence. The jump lands up to the ring's depth from where the frames fell; the
+    /// clock is right again from there. A frame libopus refuses is skipped the same way: its
+    /// timestamp passes and its sequence number does not.
     pub fn next_datagram(&mut self) -> Option<&[u8]> {
         if !self.ring.pop_exact(&mut self.frames) {
             return None;
+        }
+        let dropped = self.ring.dropped();
+        let missed = dropped.wrapping_sub(self.dropped_seen);
+        if missed > 0 {
+            self.dropped_seen = dropped;
+            self.header.timestamp =
+                self.header.timestamp.wrapping_add(missed.wrapping_mul(BLOCK as u32));
+            self.header.marker = true;
         }
         let (head, payload) = self.datagram.split_first_chunk_mut::<HEADER_LEN>()?;
         let encoded = self.encoder.encode_float(self.frames.as_flattened(), payload);
@@ -115,6 +129,12 @@ mod tests {
         }
     }
 
+    fn drain(packetizer: &mut Packetizer, headers: &mut Vec<Header>) {
+        while let Some(datagram) = packetizer.next_datagram() {
+            headers.push(Header::parse(datagram).unwrap().0);
+        }
+    }
+
     /// The offline driver rendering one slot into a master with a return ring, and the
     /// packetizer on the other end of it. Pumps run under the guard; the packetizer is the
     /// network thread's and may allocate.
@@ -152,6 +172,40 @@ mod tests {
             assert_eq!(pair[1].timestamp, pair[0].timestamp.wrapping_add(FRAME as u32));
         }
         assert_eq!(packetizer.dropped(), 0);
+    }
+
+    // A stalled network thread lets the ring fill; the blocks dropped then are audio time the
+    // receiver must see pass, or every later timestamp trails the room
+    #[test]
+    fn blocks_dropped_on_a_full_ring_still_advance_the_timestamp() {
+        let (mut driver, mut packetizer) = rig();
+        let mut block = [0.0; 2 * BLOCK];
+        let mut headers = Vec::new();
+        for _ in 0..4 {
+            assert_no_alloc(|| driver.pump_into(&mut block));
+        }
+        drain(&mut packetizer, &mut headers);
+        for _ in 0..30 {
+            assert_no_alloc(|| driver.pump_into(&mut block));
+        }
+        let dropped = packetizer.dropped();
+        assert!(dropped > 0, "the stall overflowed the ring");
+        for _ in 0..30 {
+            drain(&mut packetizer, &mut headers);
+            assert_no_alloc(|| driver.pump_into(&mut block));
+        }
+        drain(&mut packetizer, &mut headers);
+        assert_eq!(packetizer.dropped(), dropped, "the thread caught up");
+
+        let span = |h: &Header| h.timestamp.wrapping_sub(headers[0].timestamp) as usize;
+        let sent = (headers.len() - 1) * FRAME;
+        assert_eq!(span(headers.last().unwrap()), sent + dropped as usize * BLOCK);
+        let resumed: Vec<usize> = (1..headers.len()).filter(|&i| headers[i].marker).collect();
+        assert_eq!(resumed.len(), 1, "one marked packet where the gap shows");
+        assert_eq!(span(&headers[resumed[0]]), resumed[0] * FRAME + dropped as usize * BLOCK);
+        for pair in headers.windows(2) {
+            assert_eq!(pair[1].seq, pair[0].seq.wrapping_add(1), "no packet went missing");
+        }
     }
 
     // The ingest decoder folds the stereo mix to mono, which for a centred slot is either side.
