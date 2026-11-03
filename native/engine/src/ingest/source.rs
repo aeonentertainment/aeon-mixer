@@ -128,9 +128,12 @@ mod tests {
     }
 
     /// 10 ms frames with 15 ms of delay: the packet after a lost one is in hand when the lost
-    /// one falls due, so its in-band FEC fills the gap and beats plain concealment. With 20 ms
-    /// frames the next packet is 5 ms too late for that, and concealment is all there is. At
-    /// 32 kb/s the encoder is in SILK or hybrid mode, the modes that carry FEC.
+    /// one falls due, so its in-band FEC fills the gap. Over ten lost frames across the voice
+    /// bursts it beats the decoder's concealment on most and by a wide margin in all; a single
+    /// frame can go either way, since concealment of a steady voiced sound is good too, and
+    /// libopus's numbers shift with the CPU's SIMD path. With 20 ms frames the next packet is
+    /// 5 ms too late for any of this, and concealment is all there is. At 32 kb/s the encoder
+    /// is in SILK or hybrid mode, the modes that carry FEC.
     #[test]
     fn in_band_fec_from_the_next_packet_beats_concealment() {
         let signal = voice(2 * RATE as usize);
@@ -141,20 +144,31 @@ mod tests {
         let until = anchor_of(&clean) + signal.len() as i64;
         let mut reference = Rig::new(Codec::opus().unwrap());
         reference.run(&clean, until);
-        let error_at_50 = |arrivals: &[Arrival]| {
+        let error_at = |arrivals: &[Arrival], k: usize| {
             let mut rig = Rig::new(Codec::opus().unwrap());
             rig.run(arrivals, until);
             assert_eq!(rig.stats().lost, 1);
-            rig.frame_errors(&reference.out, anchor_of(&clean), frame, 60)[50]
+            rig.frame_errors(&reference.out, anchor_of(&clean), frame, 199)[k]
         };
-        let mut lost = clean.clone();
-        lost.remove(50);
-        let with_fec = error_at_50(&lost);
-        let mut lost_and_next_late = lost.clone();
-        lost_and_next_late[50].at = anchor_of(&clean) + 50 * frame as i64 + 1;
-        lost_and_next_late.sort_by_key(|a| a.at);
-        let without = error_at_50(&lost_and_next_late);
-        assert!(with_fec < without / 2.0, "FEC {with_fec:.4} against concealment {without:.4}");
+        let (mut fec_total, mut plc_total, mut fec_wins) = (0.0, 0.0, 0);
+        for k in [15usize, 25, 50, 55, 70, 100, 110, 150, 160, 190] {
+            let mut lost = clean.clone();
+            lost.remove(k);
+            let with_fec = error_at(&lost, k);
+            // The next packet lands just after the lost frame falls due: no FEC in hand
+            let mut next_late = lost.clone();
+            next_late[k].at = anchor_of(&clean) + (k * frame) as i64 + 1;
+            next_late.sort_by_key(|a| a.at);
+            let without = error_at(&next_late, k);
+            fec_total += with_fec;
+            plc_total += without;
+            fec_wins += u32::from(with_fec < without);
+        }
+        assert!(fec_wins >= 7, "FEC won {fec_wins} of 10");
+        assert!(
+            fec_total < 0.7 * plc_total,
+            "FEC {fec_total:.4} against concealment {plc_total:.4}"
+        );
     }
 
     /// The sender's clock runs on through a two-second pause while its sequence does not. The
