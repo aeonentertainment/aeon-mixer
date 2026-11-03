@@ -57,6 +57,15 @@ function sine(hz: number, seconds: number) {
   );
 }
 
+/** Twelve harmonics falling as 1/h at `hz`: a tone the stretcher treats as music, as the engine's tests use. */
+function harmonicTone(hz: number, seconds: number) {
+  return Float32Array.from({ length: RATE * seconds }, (_, i) => {
+    let sample = 0;
+    for (let h = 1; h <= 12; h += 1) sample += Math.sin((2 * Math.PI * hz * h * i) / RATE) / h;
+    return 0.25 * sample;
+  });
+}
+
 /** Every sample names its frame: the frame over the length, halved. */
 function ramp(seconds: number) {
   const frames = RATE * seconds;
@@ -84,22 +93,50 @@ function backing(
   };
 }
 
-function left(interleaved: Float32Array): number[] {
+function left(interleaved: Float32Array) {
   return Array.from(interleaved.filter((_, i) => i % 2 === 0));
 }
 
-/** The frequency of a sine from its rising zero crossings, interpolated between samples. */
-function frequency(samples: number[]) {
-  const crossings: number[] = [];
-  for (let i = 1; i < samples.length; i += 1) {
-    const before = samples[i - 1] ?? 0;
-    const after = samples[i] ?? 0;
-    if (before < 0 && after >= 0) crossings.push(i - 1 + before / (before - after));
+/**
+ * The pitch of one window: the lag within a semitone of `nearHz` where the normalised
+ * autocorrelation peaks, refined by a parabola through its neighbours.
+ */
+function pitchOf(window: number[], nearHz: number) {
+  const correlation = (lag: number) => {
+    let sum = 0;
+    let early = 0;
+    let late = 0;
+    for (let i = 0; i + lag < window.length; i += 1) {
+      const x = window[i] ?? 0;
+      const y = window[i + lag] ?? 0;
+      sum += x * y;
+      early += x * x;
+      late += y * y;
+    }
+    return sum / Math.sqrt(early * late);
+  };
+  const period = RATE / nearHz;
+  let best = { lag: 0, score: -1 };
+  for (let lag = Math.floor(period * 0.94); lag <= Math.ceil(period / 0.94); lag += 1) {
+    const score = correlation(lag);
+    if (score > best.score) best = { lag, score };
   }
-  const first = crossings[0];
-  const last = crossings.at(-1);
-  if (first === undefined || last === undefined || first === last) throw new Error("no tone");
-  return (RATE * (crossings.length - 1)) / (last - first);
+  const before = correlation(best.lag - 1);
+  const after = correlation(best.lag + 1);
+  return RATE / (best.lag + (0.5 * (before - after)) / (before - 2 * best.score + after));
+}
+
+/** The median pitch over every 10 ms step of `samples`, as the engine's tests read a tone. */
+function medianPitch(samples: number[], nearHz: number) {
+  const window = 2048;
+  const readings: number[] = [];
+  for (let end = window; end <= samples.length; end += RATE / 100) {
+    readings.push(pitchOf(samples.slice(end - window, end), nearHz));
+  }
+  readings.sort((a, b) => a - b);
+  const middle = readings[readings.length >> 1];
+  if (middle === undefined) throw new Error("no tone");
+  return middle;
 }
 
 function cents(hz: number, reference: number) {
@@ -172,7 +209,10 @@ test("the render reports its progress to 1, then start resolves the offset and t
 
 test("start called before the render is done waits for it, and the armed key is heard", async () => {
   const engine = await openEngine({ output: { offline: true } });
-  const mixer = await engine.createMixer({ slots: [], backing: backing(sine(440, 3), { key: 2 }) });
+  const mixer = await engine.createMixer({
+    slots: [],
+    backing: backing(harmonicTone(220, 3), { key: 2 }),
+  });
   const started = mixer.start();
   await rendered(mixer);
   engine.pump(FADE_BLOCKS);
@@ -180,7 +220,8 @@ test("start called before the render is done waits for it, and the armed key is 
 
   engine.pump(HALF_SECOND_BLOCKS);
   const heard = left(engine.pump(SECOND_BLOCKS));
-  expect(Math.abs(cents(frequency(heard), 440 * 2 ** (2 / 12)))).toBeLessThan(5);
+  const expected = 220 * 2 ** (2 / 12);
+  expect(Math.abs(cents(medianPitch(heard, expected), expected))).toBeLessThan(5);
   await destroyLive(engine, mixer);
   await engine.close();
 });
@@ -291,7 +332,7 @@ test("stopAtMs fades the stems out, is silent at its frame, and raises backingEn
 
 test("a live key change moves a tone by the asked semitones once its crossfade is done", async () => {
   const engine = await openEngine({ output: { offline: true } });
-  const mixer = await engine.createMixer({ slots: [], backing: backing(sine(220, 3)) });
+  const mixer = await engine.createMixer({ slots: [], backing: backing(harmonicTone(220, 3)) });
   await rendered(mixer);
   await startLive(engine, mixer);
   engine.pump(HALF_SECOND_BLOCKS / 2);
@@ -301,9 +342,8 @@ test("a live key change moves a tone by the asked semitones once its crossfade i
   await keyed;
   engine.pump(HALF_SECOND_BLOCKS);
   const heard = left(engine.pump(SECOND_BLOCKS));
-  // The live key's cheaper stretcher preset lands a sine 7.5 cents sharp of two semitones up;
-  // the armed render at the default preset is within 5
-  expect(Math.abs(cents(frequency(heard), 220 * 2 ** (2 / 12)))).toBeLessThan(10);
+  const expected = 220 * 2 ** (2 / 12);
+  expect(Math.abs(cents(medianPitch(heard, expected), expected))).toBeLessThan(5);
   await destroyLive(engine, mixer);
   await engine.close();
 });
