@@ -9,10 +9,13 @@ export const NativeEngine = binding.Engine;
 export type NativeEngine = Binding.Engine;
 export const NativeMixer = binding.Mixer;
 export type NativeMixer = Binding.Mixer;
+export type NativeBackingRender = Binding.BackingRender;
 export type {
+  BackingInput,
   GuideInput,
   NativeEvent,
   OutputEntry,
   OutputInfo as NativeOutputInfo,
   SlotParamsInput,
+  StemGainsInput,
 } from "../native/binding/index.js";

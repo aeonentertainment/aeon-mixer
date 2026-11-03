@@ -9,6 +9,8 @@ use engine::slot::Slot;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
+use crate::backing::BackingRender;
+
 /// 30 ms: the most a push slot plays behind the newest frame it holds (docs/design.md 8.4). Three
 /// 10 ms chunks, room for a host two chunks late; a default until `measure-latency` gives the push
 /// path a number.
@@ -56,6 +58,17 @@ impl Mixer {
             .get(index as usize)
             .map(|feed| feed.stats().resyncs)
             .ok_or_else(|| Error::from_reason(format!("no slot {index}")))
+    }
+
+    /// Moves a finished render's stems into the graph as its backing path, before `swap`.
+    #[napi]
+    pub fn install_backing(&mut self, render: &mut BackingRender) -> Result<()> {
+        let graph = self
+            .graph
+            .as_mut()
+            .ok_or_else(|| Error::from_reason("this mixer has already started"))?;
+        graph.set_backing(render.take_backing()?);
+        Ok(())
     }
 
     /// The graph, once: `swap` moves it to the audio thread.
