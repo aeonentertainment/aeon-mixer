@@ -1,0 +1,247 @@
+//! The return branch's first half (docs/design.md 8.7): 480 frames from the return ring become
+//! one 10 ms Opus frame in one RTP datagram. No socket here; `send::Sender` puts them on the wire.
+
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
+
+use engine::block::{BLOCK, RATE};
+use engine::return_ring::ReturnConsumer;
+
+use crate::rtp::{HEADER_LEN, Header};
+
+/// 10 ms at 48 kHz, the frame the display's jitter buffer is tuned for.
+pub const FRAME: usize = 480;
+
+/// libopus's largest single-frame packet.
+const MAX_PAYLOAD: usize = 1275;
+
+/// The loss the encoder plans for. In-band FEC spends no bits until this is above zero; 10 % is
+/// what a busy room's Wi-Fi drops on a bad minute.
+const EXPECTED_LOSS_PERCENT: i32 = 10;
+
+/// What every packet of the stream says about itself: the receiver's codec mapping and the
+/// stream's identity, both set by whoever opened the receiving end.
+#[derive(Clone, Copy, Debug)]
+pub struct Stream {
+    pub payload_type: u8,
+    pub ssrc: u32,
+}
+
+pub struct Packetizer {
+    ring: ReturnConsumer,
+    encoder: opus::Encoder,
+    header: Header,
+    /// The ring's drop count as of the last packet, so a new drop shows as a timestamp gap.
+    dropped_seen: u32,
+    frames: [[f32; 2]; FRAME],
+    datagram: [u8; HEADER_LEN + MAX_PAYLOAD],
+}
+
+impl Packetizer {
+    /// Stereo Opus for music, FEC on. The first sequence number and timestamp are random, as RFC
+    /// 3550 asks, so a new mixer reusing the SSRC does not look like a replay of the last one.
+    pub fn new(ring: ReturnConsumer, stream: Stream) -> Result<Self, opus::Error> {
+        let mut encoder =
+            opus::Encoder::new(RATE, opus::Channels::Stereo, opus::Application::Audio)?;
+        encoder.set_inband_fec(true)?;
+        encoder.set_packet_loss_perc(EXPECTED_LOSS_PERCENT)?;
+        let seed = RandomState::new().build_hasher().finish();
+        let header = Header {
+            marker: true,
+            payload_type: stream.payload_type,
+            seq: seed as u16,
+            timestamp: (seed >> 32) as u32,
+            ssrc: stream.ssrc,
+        };
+        Ok(Self {
+            ring,
+            encoder,
+            header,
+            dropped_seen: 0,
+            frames: [[0.0; 2]; FRAME],
+            datagram: [0; HEADER_LEN + MAX_PAYLOAD],
+        })
+    }
+
+    /// The next datagram once the ring holds a frame's worth, `None` until then. Timestamps
+    /// follow the output clock, so blocks the audio thread dropped still advance them: the
+    /// packet where a drop is first seen jumps by the frames lost and carries the marker, as
+    /// after a silence. The jump lands up to the ring's depth from where the frames fell; the
+    /// clock is right again from there. A frame libopus refuses is skipped the same way: its
+    /// timestamp passes and its sequence number does not.
+    pub fn next_datagram(&mut self) -> Option<&[u8]> {
+        if !self.ring.pop_exact(&mut self.frames) {
+            return None;
+        }
+        let dropped = self.ring.dropped();
+        let missed = dropped.wrapping_sub(self.dropped_seen);
+        if missed > 0 {
+            self.dropped_seen = dropped;
+            self.header.timestamp =
+                self.header.timestamp.wrapping_add(missed.wrapping_mul(BLOCK as u32));
+            self.header.marker = true;
+        }
+        let (head, payload) = self.datagram.split_first_chunk_mut::<HEADER_LEN>()?;
+        let encoded = self.encoder.encode_float(self.frames.as_flattened(), payload);
+        let header = self.header;
+        self.header.timestamp = header.timestamp.wrapping_add(FRAME as u32);
+        let len = encoded.ok()?;
+        header.write(head);
+        self.header.marker = false;
+        self.header.seq = header.seq.wrapping_add(1);
+        Some(&self.datagram[..HEADER_LEN + len])
+    }
+
+    /// Blocks the audio thread dropped because the ring was full.
+    pub fn dropped(&self) -> u32 {
+        self.ring.dropped()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f32::consts::TAU;
+
+    use assert_no_alloc::assert_no_alloc;
+    use engine::block::BLOCK;
+    use engine::command::event_ring;
+    use engine::driver::OfflineDriver;
+    use engine::graph::Graph;
+    use engine::ingest::Codec;
+    use engine::params::Params;
+    use engine::return_ring::return_ring;
+    use engine::slot::Slot;
+    use engine::slot::source::Source;
+
+    use super::*;
+
+    const STREAM: Stream = Stream { payload_type: 111, ssrc: 0xA301 };
+
+    /// A 440 Hz sine at half scale, centre-panned, so the mix is the same on both sides.
+    struct Sine(f32);
+
+    impl Source for Sine {
+        fn pull(&mut self, out: &mut [f32]) {
+            for sample in out {
+                *sample = 0.5 * self.0.sin();
+                self.0 = (self.0 + TAU * 440.0 / RATE as f32) % TAU;
+            }
+        }
+    }
+
+    fn drain(packetizer: &mut Packetizer, headers: &mut Vec<Header>) {
+        while let Some(datagram) = packetizer.next_datagram() {
+            headers.push(Header::parse(datagram).unwrap().0);
+        }
+    }
+
+    /// The offline driver rendering one slot into a master with a return ring, and the
+    /// packetizer on the other end of it. Pumps run under the guard; the packetizer is the
+    /// network thread's and may allocate.
+    fn rig() -> (OfflineDriver, Packetizer) {
+        let (producer, consumer) = return_ring();
+        let mut graph = Graph::new(vec![Slot::new(Box::new(Sine(0.0)))]);
+        graph.set_return(producer);
+        let params = Params::default();
+        let (mut events, _drain) = event_ring();
+        let driver =
+            OfflineDriver::new(Box::new(move |out| graph.render(&params, out, &mut events)));
+        (driver, Packetizer::new(consumer, STREAM).unwrap())
+    }
+
+    #[test]
+    fn one_packet_per_480_rendered_frames_in_sequence() {
+        let (mut driver, mut packetizer) = rig();
+        let mut block = [0.0; 2 * BLOCK];
+        let mut headers = Vec::new();
+        for _ in 0..100 {
+            assert_no_alloc(|| driver.pump_into(&mut block));
+            while let Some(datagram) = packetizer.next_datagram() {
+                let (header, payload) = Header::parse(datagram).unwrap();
+                assert!(!payload.is_empty());
+                headers.push(header);
+            }
+            let rendered = driver.frames_rendered() as usize;
+            assert_eq!(headers.len(), rendered / FRAME, "after {rendered} frames");
+        }
+
+        assert!(headers[0].marker && headers[1..].iter().all(|h| !h.marker));
+        assert!(headers.iter().all(|h| (h.payload_type, h.ssrc) == (111, 0xA301)));
+        for pair in headers.windows(2) {
+            assert_eq!(pair[1].seq, pair[0].seq.wrapping_add(1));
+            assert_eq!(pair[1].timestamp, pair[0].timestamp.wrapping_add(FRAME as u32));
+        }
+        assert_eq!(packetizer.dropped(), 0);
+    }
+
+    // A stalled network thread lets the ring fill; the blocks dropped then are audio time the
+    // receiver must see pass, or every later timestamp trails the room
+    #[test]
+    fn blocks_dropped_on_a_full_ring_still_advance_the_timestamp() {
+        let (mut driver, mut packetizer) = rig();
+        let mut block = [0.0; 2 * BLOCK];
+        let mut headers = Vec::new();
+        for _ in 0..4 {
+            assert_no_alloc(|| driver.pump_into(&mut block));
+        }
+        drain(&mut packetizer, &mut headers);
+        for _ in 0..30 {
+            assert_no_alloc(|| driver.pump_into(&mut block));
+        }
+        let dropped = packetizer.dropped();
+        assert!(dropped > 0, "the stall overflowed the ring");
+        for _ in 0..30 {
+            drain(&mut packetizer, &mut headers);
+            assert_no_alloc(|| driver.pump_into(&mut block));
+        }
+        drain(&mut packetizer, &mut headers);
+        assert_eq!(packetizer.dropped(), dropped, "the thread caught up");
+
+        let span = |h: &Header| h.timestamp.wrapping_sub(headers[0].timestamp) as usize;
+        let sent = (headers.len() - 1) * FRAME;
+        assert_eq!(span(headers.last().unwrap()), sent + dropped as usize * BLOCK);
+        let resumed: Vec<usize> = (1..headers.len()).filter(|&i| headers[i].marker).collect();
+        assert_eq!(resumed.len(), 1, "one marked packet where the gap shows");
+        assert_eq!(span(&headers[resumed[0]]), resumed[0] * FRAME + dropped as usize * BLOCK);
+        for pair in headers.windows(2) {
+            assert_eq!(pair[1].seq, pair[0].seq.wrapping_add(1), "no packet went missing");
+        }
+    }
+
+    // The ingest decoder folds the stereo mix to mono, which for a centred slot is either side.
+    // Opus is perceptual, so the tolerance is a signal-to-error ratio, not a per-sample bound:
+    // 25 dB, where this tone measures about 33
+    #[test]
+    fn the_payload_decodes_back_to_the_rendered_mix() {
+        const MIN_SNR_DB: f32 = 25.0;
+        let (mut driver, mut packetizer) = rig();
+        let lookahead = packetizer.encoder.get_lookahead().unwrap() as usize;
+        let mut decoder = Codec::opus().unwrap();
+        let mut rendered: Vec<f32> = Vec::new();
+        let mut decoded: Vec<f32> = Vec::new();
+        let mut block = [0.0; 2 * BLOCK];
+        let mut frame = [0.0; FRAME];
+        for _ in 0..(RATE as usize / 2).div_ceil(BLOCK) {
+            assert_no_alloc(|| driver.pump_into(&mut block));
+            rendered.extend(block.iter().step_by(2));
+            while let Some(datagram) = packetizer.next_datagram() {
+                let (_, payload) = Header::parse(datagram).unwrap();
+                assert_eq!(decoder.decode(payload, &mut frame), FRAME);
+                decoded.extend(frame);
+            }
+        }
+
+        // Past the codec's start-up, the decoded audio is the rendered audio about `lookahead`
+        // late; libopus does not promise the exact sample, so the best of a few lags is taken
+        let settled = 4 * FRAME;
+        let decoded = &decoded[settled..];
+        let snr_db = |lag: usize| {
+            let late = &rendered[settled - lag..][..decoded.len()];
+            let signal: f32 = late.iter().map(|r| r * r).sum();
+            let error: f32 = decoded.iter().zip(late).map(|(d, r)| (d - r).powi(2)).sum();
+            10.0 * (signal / error).log10()
+        };
+        let snr_db = (lookahead - 8..=lookahead + 8).map(snr_db).fold(f32::MIN, f32::max);
+        assert!(snr_db > MIN_SNR_DB, "{snr_db:.1} dB");
+    }
+}

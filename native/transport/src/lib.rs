@@ -1,11 +1,14 @@
 //! The network thread of docs/design.md 8.4 and 8.7. One thread owns every UDP socket, polls
 //! them with a timeout, and runs the tasks that use them: a `Receiver` parses RTP into a slot's
-//! packet ring, and the return sender of 8.7 joins the same loop as another `Task`. Sockets live
-//! here so the engine keeps none; `mio` does the readiness poll, so this crate has no `unsafe`.
+//! packet ring, and a `send::Sender` sends the return branch of 8.7 on the same loop. Sockets
+//! live here so the engine keeps none; `mio` does the readiness poll, so this crate has no
+//! `unsafe`.
 #![forbid(unsafe_code)]
 
+pub mod packetizer;
 pub mod receive;
 pub mod rtp;
+pub mod send;
 
 use std::collections::HashMap;
 use std::io;
@@ -22,6 +25,11 @@ use mio::{Events, Poll, Registry, Token, Waker};
 pub const TICK: Duration = Duration::from_millis(5);
 
 const WAKE: Token = Token(usize::MAX);
+
+// Tests that pump the engine wrap the pump in `assert_no_alloc`; this allocator makes it panic.
+#[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 /// Something the network thread runs. It owns one socket, registered under its token, and is
 /// driven by that socket's readiness and by the tick. Built on the control thread, then moved.
