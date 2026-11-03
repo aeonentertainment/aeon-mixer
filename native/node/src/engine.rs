@@ -10,6 +10,7 @@ use engine::reactions::ReactionsFeed;
 use engine::slot::guide::Guide;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use transport::Network;
 
 use crate::backing::{BackingInput, BackingRender, StemGainsInput};
 use crate::clock::{Clock, OutputEntry};
@@ -26,6 +27,8 @@ pub struct OpenOptions {
     /// An id from `outputs`, or the default output.
     pub device: Option<String>,
     pub period_frames: u32,
+    /// The jitter buffer's playout delay for every `rtp` and `l16` slot.
+    pub playout_delay_frames: u32,
 }
 
 #[napi(object)]
@@ -42,6 +45,9 @@ pub struct Engine {
     reactions: ReactionsFeed,
     clock: Option<Clock>,
     events: Option<EventsThread>,
+    /// The thread behind every slot's socket, spawned at open so a mixer never fails for it.
+    network: Option<Network>,
+    playout_delay_frames: u32,
     next_id: u32,
 }
 
@@ -54,6 +60,7 @@ impl Engine {
         options: OpenOptions,
         on_events: Function<'_, Vec<NativeEvent>, ()>,
     ) -> Result<Self> {
+        let network = Network::spawn()?;
         let (audio, controls) = AudioThread::new();
         let Controls { params, commands, events, retired, reactions } = controls;
         let clock = if options.offline {
@@ -69,8 +76,18 @@ impl Engine {
             reactions,
             clock: Some(clock),
             events: Some(events),
+            network: Some(network),
+            playout_delay_frames: options.playout_delay_frames,
             next_id: 0,
         })
+    }
+
+    /// Builds a mixer with one slot per kind, in order: `"rtp"`, `"l16"` or `"push"`. The rtp
+    /// and l16 slots bind their ports here and report them through `Mixer.port`.
+    #[napi]
+    pub fn create_mixer(&self, kinds: Vec<String>) -> Result<Mixer> {
+        let network = self.network.as_ref().ok_or_else(closed)?;
+        Mixer::build(&kinds, self.playout_delay_frames, network)
     }
 
     #[napi(getter)]
@@ -202,10 +219,12 @@ impl Engine {
         self.reactions.play(&stereo)
     }
 
-    /// Stops the clock, then the events thread. Whatever graph is live is dropped here.
+    /// Stops the clock, then the network thread with every port still on it, then the events
+    /// thread. Whatever graph is live is dropped here.
     #[napi]
     pub fn close(&mut self) {
         self.clock = None;
+        self.network = None;
         if let Some(events) = self.events.take() {
             events.stop();
         }

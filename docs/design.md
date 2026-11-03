@@ -605,7 +605,10 @@ GStreamer and the `aeonpitch` element are deleted in a later PR.
 
 ## 9. Verification
 
-- The offline driver is the clock in every engine test. No test opens a device or a socket.
+- The offline driver is the clock in every engine test. No test opens a device. A test that
+  creates an `rtp` or `l16` slot binds that slot's ephemeral port, because the port is what it
+  checks, and may bind it again to see it held; no test sends a datagram, since nothing marks
+  one's arrival to await, and the packet path is proven in Rust on the offline driver.
 - Every realtime `process` and `render` runs under the `assert_no_alloc` guard in tests. Its
   allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
   so the engine does not.

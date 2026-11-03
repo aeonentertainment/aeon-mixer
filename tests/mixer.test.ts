@@ -219,7 +219,6 @@ test("a command the clock never serves rejects after a second with the engine's 
 
 test("ranges are checked before anything crosses", async () => {
   const engine = await openEngine({ output: { offline: true } });
-  await expect(engine.createMixer({ slots: [{ kind: "rtp" }] })).rejects.toThrow(/ingest/);
   await expect(
     engine.createMixer({
       slots: [],

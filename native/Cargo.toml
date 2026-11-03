@@ -12,3 +12,4 @@ publish = false
 devices = { path = "devices" }
 engine = { path = "engine" }
 kernels = { path = "kernels" }
+transport = { path = "transport" }
