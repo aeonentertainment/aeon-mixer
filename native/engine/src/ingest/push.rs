@@ -34,6 +34,11 @@ impl Source for PushVoice {
             };
         }
     }
+
+    /// What waits in the ring: each frame the host hands in plays after those ahead of it.
+    fn latency_frames(&self) -> u32 {
+        u32::try_from(self.0.slots()).unwrap_or(u32::MAX)
+    }
 }
 
 #[cfg(test)]
@@ -49,5 +54,14 @@ mod tests {
         let mut out = [7.0; 6];
         assert_no_alloc(|| voice.pull(&mut out));
         assert_eq!(out, [0.5, 0.5, 0.0, 0.2, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn its_latency_is_what_waits_in_the_ring() {
+        let (mut producer, mut voice) = push_voice(16);
+        assert_eq!(voice.latency_frames(), 0);
+        producer.push(&mut [0.0; 20]);
+        voice.pull(&mut [0.0; 4]);
+        assert_eq!(voice.latency_frames(), 6, "ten handed in, four played");
     }
 }

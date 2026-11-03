@@ -107,6 +107,14 @@ impl JitterBuffer {
         self.stats
     }
 
+    /// How long ago the singer sang what `pull` hands over, as far as this end can know: the
+    /// sender gathers a frame before sending it, and the anchor plays it a playout delay after it
+    /// arrives. The Wi-Fi and the phone's own capture are the host's `guideOffsetMs`.
+    pub fn latency_frames(&self) -> u32 {
+        let frame = self.stream.as_ref().map_or(DEFAULT_FRAME, |stream| stream.frame);
+        u32::try_from(self.playout_delay + frame as i64).unwrap_or(u32::MAX)
+    }
+
     /// `ResetSlot`: forget the stream. The next packet is a new singer and re-anchors.
     pub fn reset(&mut self) {
         self.stream = None;
@@ -341,6 +349,29 @@ mod tests {
     use crate::block::BLOCK;
 
     const SECOND: i64 = RATE as i64;
+
+    /// What the guide clock subtracts is the delay a sung sample really has here: the measured
+    /// lag from source to output, less the sender's encoder lookahead, which is the phone's, to
+    /// within the block a packet waits to be drained.
+    #[test]
+    fn latency_frames_is_the_delay_a_sung_sample_has() {
+        let signal = source(2 * RATE as usize);
+        for frame in [120usize, 240, 480, 960] {
+            let mut sender = OpusSender::new(frame, 0xBEEF);
+            let arrivals = sender.send_all(&signal, 0);
+            let mut jitter = JitterBuffer::new(DELAY, Codec::opus().unwrap());
+            assert_eq!(jitter.latency_frames(), DELAY + DEFAULT_FRAME as u32, "before a stream");
+            let out = pull_direct(&mut jitter, &arrivals, signal.len() as i64 + SECOND / 10);
+            let expected = i64::from(DELAY) + frame as i64 + sender.lookahead as i64;
+            let fit = compare(&signal, frame, &out, expected, BLOCK as i64);
+            let measured = fit.lag - sender.lookahead as i64;
+            let reported = i64::from(jitter.latency_frames());
+            assert!(
+                (0..BLOCK as i64).contains(&(measured - reported)),
+                "{frame}-frame packets: measured {measured}, reported {reported}"
+            );
+        }
+    }
 
     /// Thirty seconds from a sender a tenth of a percent fast or slow, which drifts six 5 ms
     /// frames. Each window that sees a whole frame of drift moves the anchor one frame, so the

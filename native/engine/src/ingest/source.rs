@@ -30,6 +30,10 @@ impl Source for PacketSource {
     fn reset(&mut self) {
         self.jitter.reset();
     }
+
+    fn latency_frames(&self) -> u32 {
+        self.jitter.latency_frames()
+    }
 }
 
 #[cfg(test)]
