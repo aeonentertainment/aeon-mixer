@@ -287,12 +287,9 @@ pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub concea
 
 // engine/src/backing/
 pub struct Stems { pub instrumental: Planar, pub guide: Option<Planar>, pub frames: u64 }   // 48 kHz, planar f32
-pub struct Planar { pub left: Vec<f32>, pub right: Vec<f32> }
 pub struct Playhead;       // frames, playing, seek(to), pause(), resume(), stop_at(at, fade)
-pub struct RenderJob;      // start(StemFiles, semitones, speed) on the worker thread; progress() -> f32; finish() -> Result<Stems, BackingError>
+pub struct RenderJob;      // control thread starts it on the worker thread; yields Stems; progress is an AtomicU32 fraction
 pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the first change
-pub struct Backing;        // new(stems, armed_semitones); Graph::set_backing installs it before the graph goes live
-pub enum Transport { Start, Seek { to_frame }, Pause, Resume, SetKey { semitones }, StopAt { at_frame, fade_frames } }   // Graph::steer(id, Transport, events)
 
 // kernels/src/
 pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples()
