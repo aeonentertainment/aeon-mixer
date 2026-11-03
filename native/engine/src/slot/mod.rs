@@ -11,7 +11,7 @@ use std::f32::consts::FRAC_PI_4;
 
 use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{Event, EventProducer};
-use crate::params::SlotParams;
+use crate::params::{CorrectorParams, SlotParams};
 use cue::Cue;
 use effects::{Corrector, Reverb};
 use guide::Guide;
@@ -59,8 +59,12 @@ impl Slot {
         let guide_offset =
             (f64::from(params.guide_offset_ms) * f64::from(RATE) / 1000.0).round() as i64;
         let frame = cue.frame - i64::from(self.source.latency_frames()) + guide_offset;
+        // Correction stays bypassed on the mic path: engaged, the shifter delays the voice by up
+        // to 15 ms, which breaks the latency budget on slower devices until measure-latency shows
+        // otherwise. Bypassed it adds no delay and still reads pitch.
+        let bypassed = CorrectorParams { strength: 0.0, ..params.effects.corrector };
         self.corrector.process(
-            &params.effects.corrector,
+            &bypassed,
             self.guide.as_deref(),
             frame,
             cue.semitones,

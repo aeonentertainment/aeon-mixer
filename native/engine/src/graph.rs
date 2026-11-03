@@ -101,13 +101,12 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
-    use crate::backing::test_support::{SECOND, cents_between, harmonic_tone, median_pitch};
+    use crate::backing::test_support::SECOND;
     use crate::backing::{Planar, Stems};
     use crate::block::BLOCK;
     use crate::command::{Event, EventConsumer, event_ring};
     use crate::master::KNEE;
-    use crate::params::{CorrectorParams, ReverbParams};
-    use crate::slot::guide::Note;
+    use crate::params::ReverbParams;
     use crate::slot::meter::{FLOOR_DB, WINDOW_FRAMES};
     use crate::slot::source::Source;
     use crate::slot::source::fixtures::{Constant, Sine};
@@ -171,22 +170,6 @@ mod tests {
 
     fn recording(samples: Vec<f32>) -> Box<Recording> {
         Box::new(Recording { samples, at: 0 })
-    }
-
-    fn midi_hz(midi: f64) -> f64 {
-        440.0 * 2f64.powf((midi - 69.0) / 12.0)
-    }
-
-    /// A graph of `slots` over `seconds` of silent backing armed at `semitones`, started.
-    fn backed(slots: Vec<Slot>, seconds: usize, semitones: i8) -> Bench {
-        let mut graph = Graph::new(slots);
-        graph.set_backing(Backing::new(
-            Stems::new(Planar::silence(seconds * SECOND), None),
-            semitones,
-        ));
-        let mut bench = Bench::new(graph);
-        bench.graph.steer(1, Transport::Start, &mut bench.events);
-        bench
     }
 
     fn graph_of(sources: impl IntoIterator<Item = f32>) -> Graph {
@@ -295,30 +278,6 @@ mod tests {
         let displaced = graph.set_guide(0, None).expect("the old guide comes back");
         assert_eq!(displaced.key_mask, 0b1010_1011_0101);
         assert!(graph.set_guide(7, Some(displaced)).is_some(), "no slot 7, so it comes back");
-    }
-
-    // A voice 40 cents under B, a guide holding A, and a backing armed two semitones up: the voice
-    // lands on B, where the transposed guide is, not on the A the guide was written in
-    #[test]
-    fn the_corrector_pulls_a_voice_to_its_guide_note_moved_by_the_backing_key() {
-        let corrected = |semitones: i8| {
-            let mut slot = Slot::new(recording(harmonic_tone(midi_hz(70.6), SECOND)));
-            let note = Note { midi: 69, start_frame: 0, end_frame: 10 * SECOND as u64 };
-            slot.set_guide(Some(Box::new(Guide { notes: vec![note], key_mask: 0 })));
-            let mut bench = backed(vec![slot], 2, semitones);
-            bench.params.slots[0].effects.corrector =
-                CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
-            let mut voice = Vec::new();
-            for _ in 0..SECOND / BLOCK {
-                bench.render();
-                voice.extend(bench.left);
-            }
-            median_pitch(&voice[SECOND / 4..])
-        };
-        for (semitones, midi) in [(2, 71.0), (0, 69.0)] {
-            let cents = cents_between(corrected(semitones), midi_hz(midi));
-            assert!(cents.abs() < 10.0, "shifted {semitones}: {cents:+.1} cents from midi {midi}");
-        }
     }
 
     // The guide clock is the backing frame heard, less the output latency, plus the slot's guide

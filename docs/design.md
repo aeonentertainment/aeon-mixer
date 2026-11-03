@@ -114,7 +114,9 @@ path or an output to the master, never a general graph.
 **A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, reverb,
 gain and pan into the stereo bus. The meter sits after the corrector and before the reverb and
 gain, so the level words tell the singer about their singing, not the room, and mute never
-changes them. The source is a
+changes them. The corrector runs bypassed for now: engaged, its shifter delays the voice by up
+to 15 ms for a low voice, which breaks the latency budget on slower devices. It reads pitch
+with no delay until `measure-latency` shows engaged correction fits the budget. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots. Slots are
 mono and pan with a constant-power law into the stereo bus.
 
