@@ -32,15 +32,10 @@ type Phase = "armed" | "starting" | "live" | "destroyed";
 
 const NOT_YET = "the backing path arrives with the backing workstream";
 
-/** The ingest stats a slot reports; all zero until the ingest workstream fills them. */
-const NO_SLOT_STATS: SlotStats = {
-  pushed: 0,
-  lost: 0,
-  late: 0,
-  concealed: 0,
-  resyncs: 0,
-  jitterMs: 0,
-};
+/** The ingest stats a push slot reports: only its resyncs mean anything until ingest lands. */
+function pushSlotStats(resyncs: number): SlotStats {
+  return { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs, jitterMs: 0 };
+}
 
 function defaultSlotParams(): SlotParamsInput {
   return {
@@ -202,7 +197,10 @@ export class Mixer {
   }
 
   stats(): { slots: ReadonlyArray<SlotStats>; underruns: number } {
-    return { slots: this.slots.map(() => NO_SLOT_STATS), underruns: this.#host.underruns() };
+    return {
+      slots: this.slots.map((slot) => pushSlotStats(this.#native.resyncs(slot.index))),
+      underruns: this.#host.underruns(),
+    };
   }
 
   /** Swaps the silent graph in and resolves once this graph is back and dropped. */

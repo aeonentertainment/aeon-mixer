@@ -117,18 +117,26 @@ test("settings on an armed mixer wait for its start and never touch the live one
 test("level events read the slot's RMS and peak within a tenth of a decibel", async () => {
   const engine = await openEngine({ output: { offline: true } });
   const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
-  // The meter sits before gain, so it reads the sine through the swap fade too
-  const blocks = Math.ceil(4800 / BLOCK);
-  const sine = new Float32Array(2 * blocks * BLOCK);
-  for (let frame = 0; frame < blocks * BLOCK; frame += 1) {
-    const sample = 0.5 * Math.sin((2 * Math.PI * 1000 * frame) / 48000);
-    sine[2 * frame] = sample;
-    sine[2 * frame + 1] = sample;
-  }
-  expect(mixer.push(0, sine)).toBe(blocks * BLOCK);
+  // A host pushes as it captures, a block ahead of the clock; the meter sits before gain, so it
+  // reads the sine through the swap fade too
+  let frame = 0;
+  const sineBlock = () => {
+    const block = new Float32Array(2 * BLOCK);
+    for (let i = 0; i < BLOCK; i += 1, frame += 1) {
+      const sample = 0.5 * Math.sin((2 * Math.PI * 1000 * frame) / 48000);
+      block[2 * i] = sample;
+      block[2 * i + 1] = sample;
+    }
+    return block;
+  };
   const level = onceLevel(mixer);
+  for (let i = 0; i < FADE_BLOCKS; i += 1) mixer.push(0, sineBlock());
   await startLive(engine, mixer);
-  engine.pump(blocks - FADE_BLOCKS);
+  const blocks = Math.ceil(4800 / BLOCK);
+  for (let i = FADE_BLOCKS; i < blocks; i += 1) {
+    mixer.push(0, sineBlock());
+    engine.pump(1);
+  }
   const [slot, rmsDb, peakDb] = await level;
   expect(slot).toBe(0);
   expect(rmsDb).toBeCloseTo(-9.03, 1);
@@ -165,6 +173,24 @@ test("resetSlot forgets what the host pushed, and a guide can be set and cleared
   mixer.push(0, constant(0.5, 3));
   mixer.resetSlot(0);
   expect(engine.pump(3).every((sample) => sample === 0)).toBe(true);
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("a push slot plays at most 30 ms behind the newest frame, dropping the oldest and counting it", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  mixer.setSlot(0, { pan: -1 });
+  await startLive(engine, mixer);
+
+  // 50 ms of one level, then exactly 30 ms of another: the first level is what gets dropped
+  mixer.push(0, new Float32Array(2 * 2400).fill(0.25));
+  mixer.push(0, new Float32Array(2 * 1440).fill(0.5));
+  expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.5) < 1e-6)).toBe(true);
+  expect(mixer.stats().slots[0]?.resyncs).toBe(1);
+  // Within the depth nothing more is dropped
+  expect(left(engine.pump(10)).every((sample) => Math.abs(sample - 0.5) < 1e-6)).toBe(true);
+  expect(mixer.stats().slots[0]?.resyncs).toBe(1);
   await destroyLive(engine, mixer);
   await engine.close();
 });

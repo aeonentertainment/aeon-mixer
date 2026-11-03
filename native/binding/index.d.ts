@@ -48,6 +48,8 @@ export declare class Mixer {
    * 8.4), and returns how many frames it took.
    */
   push(index: number, stereo: Float32Array): number
+  /** How many times a push slot dropped its oldest audio to stay within the depth. */
+  resyncs(index: number): number
 }
 
 export interface CorrectorInput {
