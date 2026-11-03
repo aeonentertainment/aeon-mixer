@@ -7,6 +7,7 @@ use crate::block::{MAX_SLOTS, Stereo};
 use crate::command::{Event, EventProducer};
 use crate::master::Master;
 use crate::params::Params;
+use crate::return_ring::ReturnProducer;
 use crate::slot::Slot;
 use crate::slot::cue::Cue;
 use crate::slot::guide::Guide;
@@ -74,6 +75,12 @@ impl Graph {
         let Some(backing) = &self.backing else { return Cue::default() };
         let heard = i64::try_from(backing.position_frames()).unwrap_or(i64::MAX);
         Cue { frame: heard - i64::from(self.backing_offset_frames), semitones: backing.semitones() }
+    }
+
+    /// Gives the master a return ring for the network thread to encode, before the graph goes
+    /// live: the mixer's `rtpReturn`.
+    pub fn set_return(&mut self, ring: ReturnProducer) {
+        self.master.set_return(ring);
     }
 
     /// Installs the backing path once its render job is done, before the graph goes live.

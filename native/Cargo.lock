@@ -779,6 +779,7 @@ version = "0.0.0"
 dependencies = [
  "engine",
  "mio",
+ "opus",
 ]
 
 [[package]]

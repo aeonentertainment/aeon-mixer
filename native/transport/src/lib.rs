@@ -1,11 +1,13 @@
 //! The network thread of docs/design.md 8.4 and 8.7. One thread owns every UDP socket, polls
 //! them with a timeout, and runs the tasks that use them: a `Receiver` parses RTP into a slot's
-//! packet ring, and the return sender of 8.7 joins the same loop as another `Task`. Sockets live
-//! here so the engine keeps none; `mio` does the readiness poll, so this crate has no `unsafe`.
+//! packet ring, and a `send::Sender` encodes the return branch of 8.7 on the same loop. Sockets
+//! live here so the engine keeps none; `mio` does the readiness poll, so this crate has no
+//! `unsafe`.
 #![forbid(unsafe_code)]
 
 pub mod receive;
 pub mod rtp;
+pub mod send;
 
 use std::collections::HashMap;
 use std::io;
