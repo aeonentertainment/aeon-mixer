@@ -8,6 +8,7 @@ pub mod block;
 pub mod command;
 pub mod driver;
 pub mod graph;
+pub mod ingest;
 pub mod master;
 pub mod params;
 pub mod slot;
