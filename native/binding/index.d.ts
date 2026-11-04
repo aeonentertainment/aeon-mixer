@@ -26,9 +26,10 @@ export declare class Engine {
   constructor(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void)
   /**
    * Builds a mixer with one slot per kind, in order: `"rtp"`, `"l16"` or `"push"`. The rtp
-   * and l16 slots bind their ports here and report them through `Mixer.port`.
+   * and l16 slots bind their ports here and report them through `Mixer.port`; a return stream
+   * gets its socket and send task here too.
    */
-  createMixer(kinds: Array<string>): Mixer
+  createMixer(kinds: Array<string>, rtpReturn?: RtpReturnInput | undefined | null): Mixer
   get output(): OutputInfo
   /** The outputs this OS offers, the default marked. Empty on the offline clock. */
   outputs(): Array<OutputEntry>
@@ -81,9 +82,11 @@ export declare class Mixer {
   push(index: number, stereo: Float32Array): number
   /** Every slot's ingest counters, as the audio thread last published them. */
   stats(): Array<SlotStatsInfo>
+  /** The return stream's counters, or null for a mixer without one. */
+  returnStats(): RtpReturnStats | null
   /**
-   * The end of the mixer on this thread: closes the slots' ports and drops the push feeds,
-   * and a graph that never started.
+   * The end of the mixer on this thread: closes the slots' ports, drops the push feeds, stops
+   * the return stream, and drops a graph that never started.
    */
   release(): void
 }
@@ -154,6 +157,21 @@ export interface ReverbInput {
   enabled: boolean
   roomSize: number
   mix: number
+}
+
+/** `MixerConfig.rtpReturn`, range-checked in `src/` before it crosses. */
+export interface RtpReturnInput {
+  /** An IP literal: a name would be resolved on the control thread. */
+  host: string
+  port: number
+  payloadType: number
+  ssrc: number
+}
+
+/** What `Mixer.stats` says about the return stream. */
+export interface RtpReturnStats {
+  /** Blocks the audio thread dropped because the network thread had not drained the ring. */
+  droppedBlocks: number
 }
 
 export interface SlotParamsInput {

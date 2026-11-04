@@ -68,6 +68,7 @@ test("a mixed mixer runs silent until packets arrive, reports every slot's count
   expect(mixer.stats()).toEqual({
     slots: [SILENT_STATS, SILENT_STATS, SILENT_STATS],
     underruns: 0,
+    rtpReturn: null,
   });
   await startLive(engine, mixer);
   expect(engine.pump(10).every((sample) => sample === 0)).toBe(true);

@@ -11,6 +11,7 @@ mod events_thread;
 mod guide;
 mod ingest;
 mod mixer;
+mod rtp_return;
 mod slot_params;
 
 pub use backing::{BackingInput, BackingRender, StemGainsInput};
@@ -20,4 +21,5 @@ pub use event::NativeEvent;
 pub use guide::{GuideInput, NoteInput};
 pub use ingest::SlotStatsInfo;
 pub use mixer::Mixer;
+pub use rtp_return::{RtpReturnInput, RtpReturnStats};
 pub use slot_params::{CorrectorInput, ReverbInput, SlotParamsInput};

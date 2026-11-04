@@ -1,6 +1,6 @@
 import { Backing, type BackingConfig, type RenderHost, STOP_FADE_MS } from "./backing.ts";
 import type { Emitter } from "./emitter.ts";
-import type { GuideInput, NativeMixer, SlotParamsInput } from "./native.ts";
+import type { GuideInput, NativeMixer, RtpReturnInput, SlotParamsInput } from "./native.ts";
 import type {
   IngestKind,
   MelodyGuide,
@@ -44,8 +44,9 @@ function defaultSlotParams(): SlotParamsInput {
 
 /**
  * One mixing graph for one performance. Its `rtp` and `l16` slots listen on their ports from
- * here until `destroy`. Settings made while armed are kept here and written to the engine when
- * `start` swaps the graph in, so arming the next song never touches the live one.
+ * here until `destroy`; its return stream sends the mix from `start` until `destroy`. Settings
+ * made while armed are kept here and written to the engine when `start` swaps the graph in, so
+ * arming the next song never touches the live one.
  */
 export class Mixer {
   /** Each slot's kind and, for `rtp` and `l16`, the UDP port it listens on; `null` for `push`. */
@@ -63,10 +64,11 @@ export class Mixer {
     kinds: ReadonlyArray<IngestKind>,
     events: Emitter<MixerEvents>,
     backing: BackingConfig | null,
+    rtpReturn: RtpReturnInput | null,
   ) {
     this.#host = host;
     this.#events = events;
-    this.#native = host.native.createMixer([...kinds]);
+    this.#native = host.native.createMixer([...kinds], rtpReturn);
     this.slots = kinds.map((kind, index) => ({ index, kind, port: this.#native.port(index) }));
     this.#params = kinds.map(defaultSlotParams);
     this.#guides = kinds.map(() => null);
@@ -244,14 +246,25 @@ export class Mixer {
     return this.#events.on(event, listener);
   }
 
-  /** Each slot's ingest counters as the audio thread last published them, and the engine's underruns. */
-  stats(): { slots: ReadonlyArray<SlotStats>; underruns: number } {
-    return { slots: this.#native.stats(), underruns: this.#host.underruns() };
+  /**
+   * Each slot's ingest counters as the audio thread last published them, the engine's underruns,
+   * and the blocks the return stream dropped, `null` without one.
+   */
+  stats(): {
+    slots: ReadonlyArray<SlotStats>;
+    underruns: number;
+    rtpReturn: { droppedBlocks: number } | null;
+  } {
+    return {
+      slots: this.#native.stats(),
+      underruns: this.#host.underruns(),
+      rtpReturn: this.#native.returnStats(),
+    };
   }
 
   /**
-   * Closes the slots' ports, swaps the silent graph in when this one is live, and resolves once
-   * this graph is back and dropped.
+   * Closes the slots' ports, stops the return stream, swaps the silent graph in when this one is
+   * live, and resolves once this graph is back and dropped.
    */
   async destroy() {
     switch (this.#phase) {

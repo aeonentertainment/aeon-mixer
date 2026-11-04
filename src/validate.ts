@@ -1,6 +1,8 @@
 // Range checks at the edge, so nothing out of range crosses to the native side.
 
-import type { IngestKind } from "./types.ts";
+import { isIP } from "node:net";
+import type { RtpReturnInput } from "./native.ts";
+import type { IngestKind, MixerConfig } from "./types.ts";
 
 const INGEST_KINDS: ReadonlyArray<IngestKind> = ["rtp", "l16", "push"];
 
@@ -11,6 +13,22 @@ export function ingestKind(name: string, value: string) {
     throw new RangeError(`${name} must be rtp, l16 or push, got ${value}`);
   }
   return kind;
+}
+
+/**
+ * Where the mix goes: an IP literal, since resolving a name would block the control thread, and a
+ * dynamic RTP payload type, since Opus has no static one.
+ */
+export function rtpReturn(value: NonNullable<MixerConfig["rtpReturn"]>): RtpReturnInput {
+  if (isIP(value.host) === 0) {
+    throw new TypeError(`rtpReturn.host must be an IP address, got ${value.host}`);
+  }
+  return {
+    host: value.host,
+    port: integerIn("rtpReturn.port", value.port, 1, 65535),
+    payloadType: integerIn("rtpReturn.payloadType", value.payloadType, 96, 127),
+    ssrc: integerIn("rtpReturn.ssrc", value.ssrc, 0, 0xffff_ffff),
+  };
 }
 
 export function finiteIn(name: string, value: number, min: number, max: number) {
