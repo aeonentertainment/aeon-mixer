@@ -38,7 +38,7 @@ await mixer.destroy();
 await engine.close();
 ```
 
-- **Slots** are the mics, at most 16 per engine. `rtp` takes Opus over UDP from a phone or
+- **Slots** are the mics: 8 per engine by default, up to 16 with `openEngine({ slots })`. `rtp` takes Opus over UDP from a phone or
   mediasoup, `l16` takes raw PCM over loopback from a house mic, and `push` takes PCM the host
   hands to `mixer.push`. Each slot has gain, pan, mute, solo, reverb, a pitch reading and a
   melody guide.
@@ -56,7 +56,9 @@ await engine.close();
 
 ## Development
 
-You install Node 24, pnpm, a Rust toolchain and cmake yourself. cmake builds libopus from source.
+You install Node 24, pnpm, a Rust toolchain, cmake and a C++17 compiler yourself (GCC, Clang or
+the Visual Studio C++ build tools). cmake builds libopus from source, and the compiler builds the
+DSP kernels in `native/kernels`.
 
 ```bash
 pnpm install                     # dependencies, including Vite+
