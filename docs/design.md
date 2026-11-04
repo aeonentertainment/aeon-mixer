@@ -355,6 +355,7 @@ export interface MixerConfig {
     stemGains: Record<StemKind, number>;
     stopAtMs?: number;
   };
+  /** `host` is an IP literal, never a name; `payloadType` is dynamic, 96 to 127. */
   rtpReturn?: { host: string; port: number; payloadType: number; ssrc: number };
 }
 
@@ -399,7 +400,12 @@ export interface Mixer {
   on(event: "renderProgress", listener: (fraction: number) => void): () => void;
   on(event: "backingEnded", listener: () => void): () => void;
   on(event: "error", listener: (error: Error) => void): () => void;
-  stats(): { slots: ReadonlyArray<SlotStats>; underruns: number };
+  stats(): {
+    slots: ReadonlyArray<SlotStats>;
+    underruns: number;
+    /** Blocks the full return ring dropped; null without `rtpReturn`. */
+    rtpReturn: { droppedBlocks: number } | null;
+  };
   destroy(): Promise<void>;
 }
 ```
@@ -590,6 +596,10 @@ section 7.2 with typed events and validation of ranges before anything crosses.
 - The binding converts units once, at the edge: milliseconds to frames, decibels stay decibels.
 - Promises resolve on acks. A command whose ack has not arrived within a second rejects with
   the engine's fault state.
+- `rtpReturn` gets its ring and send task in `createMixer` and loses them in `destroy`, so the
+  stream runs while the graph is live. `stats().rtpReturn.droppedBlocks` is there because the
+  packetizer hides a drop as a timestamp jump: without the count, a stalled network thread
+  looks to the host like a quiet room.
 
 Done when: every method and event in 7.2 exists, `vp check` passes with no `any`, and the
 TypeScript suite exercises them on the offline engine.
