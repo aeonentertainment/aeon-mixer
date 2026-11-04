@@ -1,12 +1,7 @@
-import { createSocket } from "node:dgram";
-import { once } from "node:events";
-import type { AddressInfo } from "node:net";
 import { expect, test } from "vite-plus/test";
 import { type MixerConfig, openEngine } from "../src/index.ts";
 
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
-/** 5.3 s of output. The ring holds 50 ms, and the offline clock renders this in milliseconds. */
+/** 5.3 s of output, a hundred times what the return ring holds. */
 const LONG_PUMP = 2000;
 
 type RtpReturn = NonNullable<MixerConfig["rtpReturn"]>;
@@ -40,33 +35,14 @@ test("rtpReturn is checked before anything crosses", async () => {
   await engine.close();
 });
 
-test("the return stream carries the mix from start to destroy and counts what the network could not take", async () => {
-  // Somewhere for the datagrams to land; the test never reads them (docs/design.md section 9)
-  const sink = createSocket("udp4");
-  sink.bind(0, "127.0.0.1");
-  await once(sink, "listening");
-  const { port } = sink.address() satisfies AddressInfo;
-
+test("a mixer with a return stream builds it, counts no drops while armed, and drops it on destroy", async () => {
   const engine = await openEngine({ output: { offline: true } });
-  const mixer = await engine.createMixer({
-    slots: [{ kind: "push" }],
-    rtpReturn: { ...VALID, port },
-  });
-  // An armed graph is not rendered, so nothing reaches the ring however long the clock runs
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }], rtpReturn: VALID });
+  // An armed graph is not rendered, so nothing reaches the ring however long the clock runs and
+  // nothing is sent (docs/design.md section 9); the drops of a live ring are proven in Rust
   engine.pump(LONG_PUMP);
   expect(mixer.stats().rtpReturn).toEqual({ droppedBlocks: 0 });
-
-  const started = mixer.start();
-  engine.pump(FADE_BLOCKS);
-  await started;
-  // The offline clock outruns the network thread's 5 ms tick, so the full ring drops blocks
-  engine.pump(LONG_PUMP);
-  expect(mixer.stats().rtpReturn?.droppedBlocks).toBeGreaterThan(0);
-
-  const destroyed = mixer.destroy();
-  engine.pump(FADE_BLOCKS);
-  await destroyed;
+  await mixer.destroy();
   expect(mixer.stats().rtpReturn).toBeNull();
   await engine.close();
-  sink.close();
 });
