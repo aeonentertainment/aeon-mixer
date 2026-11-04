@@ -38,10 +38,10 @@ await mixer.destroy();
 await engine.close();
 ```
 
-- **Slots** are the mics: 8 per engine by default, up to 16 with `openEngine({ slots })`. `rtp` takes Opus over UDP from a phone or
-  mediasoup, `l16` takes raw PCM over loopback from a house mic, and `push` takes PCM the host
-  hands to `mixer.push`. Each slot has gain, pan, mute, solo, reverb, a pitch reading and a
-  melody guide.
+- **Slots** are the mics: 8 per engine by default, up to 16 with `openEngine({ slots })`. `rtp`
+  takes Opus over UDP from a phone or mediasoup, `l16` takes raw PCM over loopback from a house
+  mic, and `push` takes PCM the host hands to `mixer.push`. Each slot has gain, pan, mute, solo,
+  reverb, a pitch reading and a melody guide.
 - **The backing** is any format Symphonia decodes, resampled to 48 kHz. The armed key and speed
   are rendered before `start` resolves. Live, it supports seek, pause, resume, a key change and
   stem gains, and `start`, `seek` and `resume` report the position the lyric clock follows.
