@@ -4,20 +4,73 @@ A low-latency audio mixer for [Aeon Karaoke](https://github.com/aeonentertainmen
 Phones on the LAN, wired mics and wireless mics are the microphones. The mixer takes those mic
 streams and a backing track, and plays one mix to the room.
 
-**Status: design stage.** The package exports a stub. The design is in
-[docs/design.md](docs/design.md); the reasons are in [docs/decisions](docs/decisions).
+A native engine owns the audio device's output callback. TypeScript drives it through a Node
+addon, and no audio crosses into JavaScript. Mouth to speaker, the target is 40 to 60 ms. The
+package is private and not yet published; Aeon Karaoke's device service is its one consumer.
+
+## Use
+
+```ts
+import { openEngine } from "@aeon/mixer";
+
+// Opened once for the life of the process; it never reopens the device between songs
+const engine = await openEngine({ output: {} });
+
+const mixer = await engine.createMixer({
+  slots: [{ kind: "rtp" }, { kind: "l16" }, { kind: "push" }],
+  backing: {
+    stems: [
+      { kind: "instrumental", path: "song/instrumental.flac" },
+      { kind: "guideVocals", path: "song/vocals.flac" },
+    ],
+    key: -2,
+    speed: 1,
+    stemGains: { instrumental: 1, guideVocals: 0.3 },
+  },
+  rtpReturn: { host: "192.168.1.20", port: 40000, payloadType: 111, ssrc: 0x1234_5678 },
+});
+
+mixer.slots[0]?.port; // the UDP port this phone sends Opus over RTP to
+mixer.on("level", (slot, rmsDb, peakDb) => {});
+
+const { startedAt, backingOffsetMs } = await mixer.start();
+await mixer.destroy();
+await engine.close();
+```
+
+- **Slots** are the mics: 8 per engine by default, up to 16 with `openEngine({ slots })`. `rtp`
+  takes Opus over UDP from a phone or mediasoup, `l16` takes raw PCM over loopback from a house
+  mic, and `push` takes PCM the host hands to `mixer.push`. Each slot has gain, pan, mute, solo,
+  reverb, a pitch reading and a melody guide.
+- **The backing** is any format Symphonia decodes, resampled to 48 kHz. The armed key and speed
+  are rendered before `start` resolves. Live, it supports seek, pause, resume, a key change and
+  stem gains, and `start`, `seek` and `resume` report the position the lyric clock follows.
+- **`rtpReturn`** sends the mix to mediasoup's PlainTransport as 10 ms Opus with in-band FEC.
+  `host` is an IP address, never a name.
+- **Reactions** play through `engine.reactions.play` between songs and during them.
+- **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
+  renders only when its caller runs `engine.pump(blocks)`. The tests run on it.
+
+[docs/design.md](docs/design.md) section 7.2 has the full API. The reasons are in
+[docs/decisions](docs/decisions).
 
 ## Development
 
+You install Node 24, pnpm, a Rust toolchain, cmake and a C++17 compiler yourself (GCC, Clang or
+the Visual Studio C++ build tools). cmake builds libopus from source, and the compiler builds the
+DSP kernels in `native/kernels`.
+
 ```bash
-vp install   # dependencies (installs Vite+ if needed: npm i -g vite-plus)
-vp check     # format, lint, type-check
-vp test      # unit tests
-vp pack      # build dist/
+pnpm install                     # dependencies, including Vite+
+pnpm exec vp run build:native    # the addon the TypeScript tests load
+pnpm exec vp check               # format, lint, type-check
+pnpm exec vp test                # the TypeScript suite, on the offline engine
+pnpm exec vp pack                # build dist/
 ```
 
-Node 24 and [Vite+](https://viteplus.dev) are the only requirements. A pre-commit hook runs
-`vp check --fix` on staged files; `vp hooks disable` turns it off for your clone.
+In `native/`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`
+do the same for Rust. A pre-commit hook runs `vp check --fix` on staged files;
+`pnpm exec vp hooks disable` turns it off for your clone.
 
 Agents start at [AGENTS.md](AGENTS.md). Contributors start at [CONTRIBUTING.md](CONTRIBUTING.md).
 Security reports go through [SECURITY.md](SECURITY.md).
