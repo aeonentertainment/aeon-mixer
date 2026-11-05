@@ -40,7 +40,7 @@ pub fn lock(job: &SharedRenderJob) -> MutexGuard<'_, Option<RenderJob>> {
 }
 
 /// A song's stems being decoded and rendered for one mixer. JavaScript holds it from
-/// `createMixer` until `start` installs it.
+/// `createMixer` and installs it when the events thread says the job is done.
 #[napi]
 pub struct BackingRender {
     id: u32,

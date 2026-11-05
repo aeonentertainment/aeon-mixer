@@ -11,7 +11,7 @@ export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-was
 
 /**
  * A song's stems being decoded and rendered for one mixer. JavaScript holds it from
- * `createMixer` until `start` installs it.
+ * `createMixer` and installs it when the events thread says the job is done.
  */
 export declare class BackingRender {
   /** The id the events thread's `renderProgress` and `renderFinished` events carry. */
