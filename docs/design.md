@@ -178,6 +178,15 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 - **Close.** `close` destroys any live mixer, stops the driver, joins the threads.
 - **Faults.** A device loss or a caught panic emits `fault` on the engine. The host closes and
   reopens; nothing inside tries to recover.
+- **Mixer errors.** `error` on a mixer fires once, when that mixer can no longer play its song,
+  and the host ends the song and destroys it. Three things raise it: a render job that fails,
+  at the moment it fails, so a bad next song is known before its turn (`start` still rejects
+  with the same message); an ack that times out, because the audio thread drains commands every
+  block and a second without one means the room has gone silent; and an engine fault, on every
+  mixer the engine holds, so a host can treat one signal as the end of a song. Trouble a mixer
+  plays through is not an error: a slot's bad, late or missing packets are concealed and counted
+  in `stats()`, so one phone never ends a song for the room, and a return stream that cannot
+  send costs only its remote listener, since the room still hears the mix.
 
 ## 6. Module map
 
@@ -399,6 +408,7 @@ export interface Mixer {
   on(event: "position", listener: (positionMs: number) => void): () => void;
   on(event: "renderProgress", listener: (fraction: number) => void): () => void;
   on(event: "backingEnded", listener: () => void): () => void;
+  /** This mixer can no longer play its song; end the song and destroy it. Section 5. */
   on(event: "error", listener: (error: Error) => void): () => void;
   stats(): {
     slots: ReadonlyArray<SlotStats>;
