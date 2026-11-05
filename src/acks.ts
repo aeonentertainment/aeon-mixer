@@ -11,16 +11,19 @@ interface Pending {
 export class Acks {
   readonly #pending = new Map<number, Pending>();
 
-  /** `state` describes the engine for the rejection when no ack comes. */
-  wait(id: number, state: () => string): Promise<number> {
+  /**
+   * `state` describes the engine for the rejection when no ack comes, and `onTimeout` hears the
+   * same error; a command rejected any other way never reaches it.
+   */
+  wait(id: number, state: () => string, onTimeout?: (error: Error) => void): Promise<number> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
-        reject(
-          new Error(
-            `command ${id} was not acknowledged within ${ACK_TIMEOUT_MS} ms; the engine is ${state()}`,
-          ),
+        const error = new Error(
+          `command ${id} was not acknowledged within ${ACK_TIMEOUT_MS} ms; the engine is ${state()}`,
         );
+        reject(error);
+        onTimeout?.(error);
       }, ACK_TIMEOUT_MS);
       timer.unref();
       this.#pending.set(id, { resolve, reject, timer });

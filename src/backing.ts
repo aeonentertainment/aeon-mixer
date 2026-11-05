@@ -31,16 +31,30 @@ export interface RenderHost {
 export class Backing {
   readonly speed: number;
   readonly stopAtFrames: number | undefined;
-  /** Resolves when the render job is done, with stems or an error that `install` reports. */
+  /**
+   * Resolves when the render job is done. The stems are in the graph by the time anyone awaiting
+   * this runs, or `install` throws the render's error.
+   */
   readonly rendered: Promise<void>;
   #rendering = true;
   #installed = false;
   #fraction = 0;
+  #failure: Error | null = null;
   #stemGains: StemGainsInput;
   readonly #render: NativeBackingRender;
+  readonly #graph: NativeMixer;
 
-  /** Checks `config` and starts its render on the worker thread. */
-  constructor(host: RenderHost, config: BackingConfig, onProgress: (fraction: number) => void) {
+  /**
+   * Checks `config` and starts its render on the worker thread. The stems move into `graph` as
+   * soon as the job is done, so a render that fails is reported then and not at `start`.
+   */
+  constructor(
+    host: RenderHost,
+    config: BackingConfig,
+    graph: NativeMixer,
+    report: { progress(fraction: number): void; failed(error: Error): void },
+  ) {
+    this.#graph = graph;
     const input = toInput(config);
     this.speed = input.speed;
     this.stopAtFrames =
@@ -56,12 +70,19 @@ export class Backing {
     // its renderProgress listener finds the stems ready
     this.rendered = host.watchRender(this.#render.id, (fraction) => {
       this.#fraction = fraction;
-      if (fraction < 1) onProgress(fraction);
+      if (fraction < 1) report.progress(fraction);
     });
     this.rendered.then(
       () => {
         this.#rendering = false;
-        if (this.#fraction === 1) onProgress(1);
+        try {
+          this.install();
+        } catch (error) {
+          this.#failure = error instanceof Error ? error : new Error(String(error));
+          report.failed(this.#failure);
+          return;
+        }
+        if (this.#fraction === 1) report.progress(1);
       },
       () => {},
     );
@@ -77,12 +98,13 @@ export class Backing {
   }
 
   /**
-   * Moves the rendered stems into `graph`, once; the graph keeps them through a refused swap.
-   * Throws the engine's message when the render failed.
+   * Moves the rendered stems into the graph, once; the graph keeps them through a refused swap.
+   * Throws the engine's message when the render failed, on every call.
    */
-  install(graph: NativeMixer) {
+  install() {
+    if (this.#failure) throw this.#failure;
     if (this.#installed) return;
-    graph.installBacking(this.#render);
+    this.#graph.installBacking(this.#render);
     this.#installed = true;
   }
 

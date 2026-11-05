@@ -17,12 +17,28 @@ import { finiteIn, integerIn, pcm } from "./validate.ts";
 /** What a mixer needs from its engine. Internal to the package. */
 export interface MixerHost extends RenderHost {
   readonly output: OutputInfo;
-  /** Sends a command carrying an id and resolves on its ack with the backing position. */
-  command(send: () => number): Promise<number>;
-  /** Swaps `graph` in as the live graph, routing its events to `events`. Rejects while another mixer is live. */
-  swapIn(mixer: Mixer, graph: NativeMixer, events: Emitter<MixerEvents>): Promise<number>;
-  /** Swaps the silent graph back in; resolves once the mixer's graph is back and dropped. */
+  /**
+   * Sends a command carrying an id and resolves on its ack with the backing position. `onTimeout`
+   * hears the rejection when no ack comes in time.
+   */
+  command(send: () => number, onTimeout: (error: Error) => void): Promise<number>;
+  /**
+   * Swaps `graph` in as the live graph, routing its events to `events`. Rejects while another
+   * mixer is live. `onTimeout` is `command`'s.
+   */
+  swapIn(
+    mixer: Mixer,
+    graph: NativeMixer,
+    events: Emitter<MixerEvents>,
+    onTimeout: (error: Error) => void,
+  ): Promise<number>;
+  /**
+   * Swaps the silent graph back in; resolves once the mixer's graph is back and dropped, or at
+   * once on a faulted engine, which hands nothing back.
+   */
   swapOut(mixer: Mixer): Promise<void>;
+  /** Hears the engine's fault until the returned function is called. */
+  onFault(listener: (error: Error) => void): () => void;
   isLive(mixer: Mixer): boolean;
   anyLive(): boolean;
   underruns(): number;
@@ -57,7 +73,19 @@ export class Mixer {
   readonly #params: SlotParamsInput[];
   readonly #guides: Array<GuideInput | null>;
   readonly #backing: Backing | null;
+  readonly #offFault: () => void;
   #phase: Phase = "armed";
+  #failed = false;
+
+  /**
+   * The mixer can no longer play its song: docs/design.md section 5. Fires once, and a mixer
+   * being destroyed has no song left to lose.
+   */
+  readonly #fail = (error: Error) => {
+    if (this.#failed || this.#phase === "destroyed") return;
+    this.#failed = true;
+    this.#events.emit("error", error);
+  };
 
   constructor(
     host: MixerHost,
@@ -75,9 +103,13 @@ export class Mixer {
     this.#backing =
       backing === null
         ? null
-        : new Backing(host, backing, (fraction) => {
-            if (this.#phase !== "destroyed") this.#events.emit("renderProgress", fraction);
+        : new Backing(host, backing, this.#native, {
+            progress: (fraction) => {
+              if (this.#phase !== "destroyed") this.#events.emit("renderProgress", fraction);
+            },
+            failed: this.#fail,
           });
+    this.#offFault = host.onFault(this.#fail);
   }
 
   setSlot(index: number, settings: Partial<SlotSettings>) {
@@ -161,9 +193,10 @@ export class Mixer {
   }
 
   /**
-   * Waits for the backing's render, installs it, and swaps the graph in. With the render already
-   * done, the swap is sent before this returns to the caller. Nothing is written to the engine
-   * while another mixer is live, so a refused start leaves the song playing untouched.
+   * Waits for the backing's render and swaps the graph in; a render that failed rejects with the
+   * message `error` carried. With the render already done, the swap is sent before this returns
+   * to the caller. Nothing is written to the engine while another mixer is live, so a refused
+   * start leaves the song playing untouched.
    */
   async start() {
     if (this.#phase !== "armed") {
@@ -174,14 +207,14 @@ export class Mixer {
     try {
       if (this.#backing?.rendering) await this.#backing.rendered;
       if (this.#host.anyLive()) throw new Error("another mixer is live; destroy it first");
-      this.#backing?.install(this.#native);
+      this.#backing?.install();
       this.#params.forEach((params, slot) => {
         this.#host.native.setSlotParams(slot, params);
       });
       if (this.#backing) this.#host.native.setStemGains(this.#backing.stemGains);
-      swapped = this.#host.swapIn(this, this.#native, this.#events);
+      swapped = this.#host.swapIn(this, this.#native, this.#events, this.#fail);
     } catch (error) {
-      this.#phase = "armed";
+      if (this.#phase === "starting") this.#phase = "armed";
       throw error;
     }
     // From here the graph is the audio thread's, so the mixer is live whatever the acks say.
@@ -189,14 +222,12 @@ export class Mixer {
     this.#guides.forEach((guide, slot) => {
       if (guide) this.#host.native.setGuide(slot, guide);
     });
-    const started = this.#host.command(() => this.#host.native.start());
+    const started = this.#command(() => this.#host.native.start());
     const stopAtFrames = this.#backing?.stopAtFrames;
     const stopping =
       stopAtFrames === undefined
         ? undefined
-        : this.#host.command(() =>
-            this.#host.native.stopAt(stopAtFrames, msToFrames(STOP_FADE_MS)),
-          );
+        : this.#command(() => this.#host.native.stopAt(stopAtFrames, msToFrames(STOP_FADE_MS)));
     await Promise.all([swapped, started, stopping]);
     const { latencyMs } = this.#host.output;
     return {
@@ -210,19 +241,19 @@ export class Mixer {
   async seek(toMs: number) {
     const toFrame = msToFrames(finiteIn("toMs", toMs, 0, Number.MAX_SAFE_INTEGER));
     const native = this.#liveBacking();
-    const landed = await this.#host.command(() => native.seek(toFrame));
+    const landed = await this.#command(() => native.seek(toFrame));
     return { positionMs: framesToMs(landed) };
   }
 
   /** Resolves once the fade out is done and the playhead holds. */
   async pause() {
     const native = this.#liveBacking();
-    await this.#host.command(() => native.pause());
+    await this.#command(() => native.pause());
   }
 
   async resume() {
     const native = this.#liveBacking();
-    const position = await this.#host.command(() => native.resume());
+    const position = await this.#command(() => native.resume());
     return { positionMs: framesToMs(position) };
   }
 
@@ -230,7 +261,7 @@ export class Mixer {
   async setBackingKey(semitones: number) {
     const checked = integerIn("semitones", semitones, -12, 12);
     const native = this.#liveBacking();
-    await this.#host.command(() => native.setKey(checked));
+    await this.#command(() => native.setKey(checked));
   }
 
   /** A parameter write, held while armed like the slot settings. */
@@ -271,16 +302,30 @@ export class Mixer {
       case "destroyed":
         return;
       case "starting":
-        throw new Error("the mixer is starting; await start before destroying it");
+        // Once `error` has fired, the `start` still waiting can only reject, so a host may destroy
+        // the mixer from its listener as section 5 asks
+        if (!this.#failed) {
+          throw new Error("the mixer is starting; await start before destroying it");
+        }
+        this.#release();
+        return;
       case "armed":
-        this.#phase = "destroyed";
-        this.#native.release();
+        this.#release();
         return;
       case "live":
-        this.#phase = "destroyed";
-        this.#native.release();
+        this.#release();
         await this.#host.swapOut(this);
     }
+  }
+
+  #release() {
+    this.#phase = "destroyed";
+    this.#offFault();
+    this.#native.release();
+  }
+
+  #command(send: () => number) {
+    return this.#host.command(send, this.#fail);
   }
 
   #slot(index: number) {

@@ -97,13 +97,14 @@ export class Engine {
     this.#host = {
       native: this.#native,
       output: this.output,
-      command: (send) => this.#command(send),
+      command: (send, onTimeout) => this.#command(send, onTimeout),
       watchRender: (id, onProgress) =>
         new Promise<void>((resolve, reject) => {
           this.#renders.set(id, { onProgress, resolve, reject });
         }),
-      swapIn: (mixer, graph, events) => this.#swapIn(mixer, graph, events),
+      swapIn: (mixer, graph, events, onTimeout) => this.#swapIn(mixer, graph, events, onTimeout),
       swapOut: (mixer) => this.#swapOut(mixer),
+      onFault: (listener) => this.#events.on("fault", listener),
       isLive: (mixer) => this.#live?.mixer === mixer,
       anyLive: () => this.#live !== null,
       underruns: () => this.#underruns,
@@ -160,9 +161,14 @@ export class Engine {
     this.#stop(new Error("the engine is closed"));
   }
 
-  #swapIn(mixer: Mixer, graph: NativeMixer, events: Emitter<MixerEvents>) {
+  #swapIn(
+    mixer: Mixer,
+    graph: NativeMixer,
+    events: Emitter<MixerEvents>,
+    onTimeout: (error: Error) => void,
+  ) {
     if (this.#live) throw new Error("another mixer is live; destroy it first");
-    const swapped = this.#command(() => this.#native.swap(graph));
+    const swapped = this.#command(() => this.#native.swap(graph), onTimeout);
     this.#live = { mixer, events };
     // The silent graph comes back; nothing waits for it
     this.#retirements.push(() => {});
@@ -171,6 +177,11 @@ export class Engine {
 
   async #swapOut(mixer: Mixer) {
     if (this.#live?.mixer !== mixer) return;
+    // A stopped engine takes no commands and hands nothing back; its graph goes with the clock
+    if (this.#state !== "running") {
+      this.#live = null;
+      return;
+    }
     const swapped = this.#command(() => this.#native.swapSilent());
     this.#live = null;
     const retired = new Promise<void>((resolve) => this.#retirements.push(resolve));
@@ -178,9 +189,9 @@ export class Engine {
     await retired;
   }
 
-  #command(send: () => number) {
+  #command(send: () => number, onTimeout?: (error: Error) => void) {
     this.#assertRunning();
-    return this.#acks.wait(send(), () => this.#state);
+    return this.#acks.wait(send(), () => this.#state, onTimeout);
   }
 
   #assertRunning() {
@@ -242,7 +253,10 @@ export class Engine {
     }
   }
 
-  /** A device loss or a caught panic: the host closes and reopens; nothing here recovers. */
+  /**
+   * A device loss or a caught panic: the host closes and reopens; nothing here recovers. `fault`
+   * reaches the host's listeners and every mixer not yet destroyed, each of which emits `error`.
+   */
   #fault() {
     if (this.#state !== "running") return;
     this.#state = "faulted";

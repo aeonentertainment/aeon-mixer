@@ -541,8 +541,8 @@ Stems in memory, one playhead, gains, fades, the live key, and the render job.
   resampling any other rate with Rubato's FFT resampler. With an armed key or speed it renders
   them through one stretcher at signalsmith's default preset, both stems together so they stay
   aligned, trimming the stretcher's lead and flushing its tail. `createMixer` resolves when the
-  graph is built; `start` waits for the render, then installs the backing with
-  `Graph::set_backing`.
+  graph is built; the backing goes in with `Graph::set_backing` as soon as the render finishes,
+  so a render that fails raises `error` then, and `start` waits for a render still running.
 - The playhead advances a block per render while playing, holds on pause, jumps on seek with
   its fades, and stops at `stopAt` with its fade. Both raise `BackingEnded` once. A seek or
   pause acks when it takes effect, once its fade out is done, so the ack carries the frame it

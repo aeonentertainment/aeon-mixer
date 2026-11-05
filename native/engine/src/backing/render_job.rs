@@ -13,7 +13,7 @@ pub struct StemFiles {
 
 /// Decodes a song's stems on the worker thread and, with an armed key or speed, renders them
 /// through the stretcher. The control thread starts it beside `createMixer`, reads `progress` on
-/// each events drain, and takes the stems with `finish` when `start` is called.
+/// each events drain, and takes the stems with `finish` once the job is finished.
 pub struct RenderJob {
     progress: Arc<AtomicU32>,
     worker: JoinHandle<Result<Stems, BackingError>>,
