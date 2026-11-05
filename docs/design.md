@@ -183,10 +183,12 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   at the moment it fails, so a bad next song is known before its turn (`start` still rejects
   with the same message); an ack that times out, because the audio thread drains commands every
   block and a second without one means the room has gone silent; and an engine fault, on every
-  mixer the engine holds, so a host can treat one signal as the end of a song. Trouble a mixer
-  plays through is not an error: a slot's bad, late or missing packets are concealed and counted
-  in `stats()`, so one phone never ends a song for the room, and a return stream that cannot
-  send costs only its remote listener, since the room still hears the mix.
+  mixer the engine holds, so a host can treat one signal as the end of a song. A timeout is not
+  itself a fault: a stall can pass, so the song ends and the engine stays open until a device
+  loss or a panic says it is gone. Trouble a mixer plays through is not an error: a slot's bad,
+  late or missing packets are concealed and counted in `stats()`, so one phone never ends a song
+  for the room, and a return stream that cannot send costs only its remote listener, since the
+  room still hears the mix.
 
 ## 6. Module map
 
@@ -683,6 +685,9 @@ Each is deliberate and here so no one reverts it by accident.
 - **Decode in the callback.** Decoding on the network thread would need one more buffer between
   the two threads. Decoding a due packet in the callback costs tens of microseconds and no
   latency.
+- **A mixer error is narrower than a pipeline error.** The GStreamer engine ends the song on any
+  error any element posts, even one bad phone stream. Here `error` means the mixer can no longer
+  play its song (section 5), so a singer's failure stays that singer's.
 
 ## 12. Decided later
 
