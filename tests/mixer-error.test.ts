@@ -129,6 +129,23 @@ test("a start already waiting on the render rejects with the message error carri
   await engine.close();
 });
 
+test("a host may destroy from its error listener while a start waits on the failed render", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [], backing: backingOf(notAudio) });
+  const destroyed = new Promise<void>((resolve, reject) => {
+    mixer.on("error", () => {
+      mixer.destroy().then(resolve, reject);
+    });
+  });
+  const error = onceError(mixer);
+
+  const refusal = await mixer.start().catch((reason: unknown) => reason);
+  expect(refusal).toBe(await error);
+  await destroyed;
+  await expect(mixer.start()).rejects.toThrow(/destroyed/);
+  await engine.close();
+});
+
 test("a start that goes unanswered emits error once, rejects with it, and leaves the engine open", async () => {
   await withFakeTimers(async () => {
     const engine = await openEngine({ output: { offline: true } });
@@ -248,6 +265,24 @@ test("a fault rejects the command in flight with the error the mixer emitted", a
 
   await expect(started).rejects.toBe(errors[0]);
   expect(errors).toHaveLength(1);
+  await engine.close();
+});
+
+test("a host may destroy from its error listener while a fault rejects the start waiting on a render", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [], backing: backingOf(silentStem(), 2) });
+  const destroyed = new Promise<void>((resolve, reject) => {
+    mixer.on("error", () => {
+      mixer.destroy().then(resolve, reject);
+    });
+  });
+  const started = mixer.start();
+
+  addon.deliver([{ kind: "fault" }]);
+
+  await expect(started).rejects.toThrow(/faulted/);
+  await destroyed;
+  await expect(mixer.start()).rejects.toThrow(/destroyed/);
   await engine.close();
 });
 

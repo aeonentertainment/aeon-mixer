@@ -39,6 +39,7 @@ export class Backing {
   #rendering = true;
   #installed = false;
   #fraction = 0;
+  #failure: Error | null = null;
   #stemGains: StemGainsInput;
   readonly #render: NativeBackingRender;
   readonly #graph: NativeMixer;
@@ -77,7 +78,8 @@ export class Backing {
         try {
           this.install();
         } catch (error) {
-          report.failed(error instanceof Error ? error : new Error(String(error)));
+          this.#failure = error instanceof Error ? error : new Error(String(error));
+          report.failed(this.#failure);
           return;
         }
         if (this.#fraction === 1) report.progress(1);
@@ -100,6 +102,7 @@ export class Backing {
    * Throws the engine's message when the render failed, on every call.
    */
   install() {
+    if (this.#failure) throw this.#failure;
     if (this.#installed) return;
     this.#graph.installBacking(this.#render);
     this.#installed = true;

@@ -177,10 +177,13 @@ export class Engine {
 
   async #swapOut(mixer: Mixer) {
     if (this.#live?.mixer !== mixer) return;
-    this.#live = null;
     // A stopped engine takes no commands and hands nothing back; its graph goes with the clock
-    if (this.#state !== "running") return;
+    if (this.#state !== "running") {
+      this.#live = null;
+      return;
+    }
     const swapped = this.#command(() => this.#native.swapSilent());
+    this.#live = null;
     const retired = new Promise<void>((resolve) => this.#retirements.push(resolve));
     await swapped;
     await retired;

@@ -214,7 +214,7 @@ export class Mixer {
       if (this.#backing) this.#host.native.setStemGains(this.#backing.stemGains);
       swapped = this.#host.swapIn(this, this.#native, this.#events, this.#fail);
     } catch (error) {
-      this.#phase = "armed";
+      if (this.#phase === "starting") this.#phase = "armed";
       throw error;
     }
     // From here the graph is the audio thread's, so the mixer is live whatever the acks say.
@@ -302,7 +302,13 @@ export class Mixer {
       case "destroyed":
         return;
       case "starting":
-        throw new Error("the mixer is starting; await start before destroying it");
+        // Once `error` has fired, the `start` still waiting can only reject, so a host may destroy
+        // the mixer from its listener as section 5 asks
+        if (!this.#failed) {
+          throw new Error("the mixer is starting; await start before destroying it");
+        }
+        this.#release();
+        return;
       case "armed":
         this.#release();
         return;
