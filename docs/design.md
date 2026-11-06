@@ -87,7 +87,7 @@ Rules that follow:
 
 Mic slots run on the output clock. A block of output is a block of input from every slot's
 jitter buffer, decoded now. Nothing on a slot's path may delay a sample beyond the jitter
-buffer's fixed playout delay and the decoder's frame.
+buffer's playout delay and the decoder's frame.
 
 The backing path runs on its own playhead, a frame counter the audio thread advances by one
 block per render while playing. Key shift, time stretch, guide vocal mixing, seek and fades
@@ -147,7 +147,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | Hardware period      | 128 frames, 64 on request                    | 64 ran clean only on macOS; decision 0003 has every OS's numbers       |
 | Internal format      | f32, planar                                  | slots mono, buses stereo; the device crate interleaves at the edge     |
 | Slots per engine     | fixed at open, default 8, at most 16         | `Params` is fixed-size                                                 |
-| Playout delay        | 15 ms, set at open                           | fixed and shallow; the singer notices a moving delay more than a click |
+| Playout delay        | each stream's own, 15 ms down to 3.67 ms     | sized from each stream's arrivals, moved only in quiet; see decision 7 |
 | Opus frames accepted | 2.5, 5, 10, 20 ms                            | the phone's native module sends short frames; mediasoup sends 20       |
 | Return branch        | 10 ms Opus frames, in-band FEC on            | what the display's jitter buffer is tuned for today                    |
 | Level event          | 10 Hz, RMS and peak over 100 ms              | the device maps words at 5 Hz                                          |
@@ -308,10 +308,10 @@ pub struct CorrectorDelay;  // published once a block; Slot::corrector_delay() h
 pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
 pub fn packet_ring(capacity: usize) -> (PacketProducer, PacketConsumer);   // SPSC, fixed-size
 pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder, on the control thread
-pub struct JitterBuffer;   // new(playout_delay_frames, codec); push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
+pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; chosen(codec) lets each stream choose; push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
 pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
 pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
-pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32 }
+pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push slot
 
 // transport/src/
 /// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
@@ -351,7 +351,7 @@ export type StemKind = "instrumental" | "guideVocals";
 export interface OpenEngineOptions {
   output: { device?: string; periodFrames?: 64 | 128 } | { offline: true };
   slots?: number; // fixed for the engine's life, default 8, at most 16
-  playoutDelayMs?: number; // the ingest jitter buffer, default 15
+  playoutDelayMs?: number; // pins the ingest jitter buffer; left out, each slot chooses its own (8.4)
 }
 
 export interface Engine {
@@ -550,16 +550,28 @@ port is dropped by its payload type, RFC 5761's reserved range. The audio thread
 ring into the jitter buffer at the top of each block.
 
 - The jitter buffer anchors the first packet's RTP timestamp to the output clock plus the
-  playout delay, and jitter never moves that anchor. A missing packet at its due time is
-  concealed by the decoder, with in-band FEC from the next packet when that is already in
-  hand. A packet that arrives after its time is counted late and dropped; it never silences or
-  resets the stream.
-- Skew moves the anchor one frame at a time. Once a second the buffer looks at how early the
-  last second's packets arrived against their due times. When every one came at least a frame
-  early, the anchor moves a frame earlier and that frame is dropped; when every one came a
-  frame late, or half the delay late when a frame is longer than that, it moves a frame later
-  and that frame is concealed. Either counts as a resync. Arrival slack is the measure rather
-  than the decoded FIFO's fill, because decoding on demand keeps the FIFO at one frame.
+  playout delay, and a single late packet never moves that anchor. A missing packet at its due
+  time is concealed by the decoder, with in-band FEC from the next packet when that is already
+  in hand. A packet that arrives after its time is counted late and dropped; it never silences
+  or resets the stream.
+- A slot chooses its own delay unless the host pins one with `playoutDelayMs`. A stream opens at
+  15 ms. Every half second the buffer notes the slack of the half second's latest and earliest
+  packets against their due times. Once 20 notes, ten seconds, leave at least a block of room,
+  the anchor moves earlier, once, until the latest of them would have a millisecond and a quarter
+  of the spread over the block to spare, and never under 3.67 ms: a block a packet can wait to be
+  drained, and a millisecond. After that fall, three late notes out of the last 20 move it later
+  to cover them, at most back to where it opened. A move waits for the slot to be under -30 dBFS
+  for 21 ms and counts as a resync. A delay means how long the stream's earliest packets wait, and
+  `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
+  reasons and the numbers.
+- Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
+  last second's packets arrived against their due times. A step is a frame, or as many whole
+  2.5 ms as the delay holds when a frame is longer. When every packet came at least a step early,
+  or the earliest did once the delay has fallen, the anchor moves a step earlier and that step is
+  dropped; when even the earliest came a step late, or half the delay's room over a block late
+  when that is less, it moves a step later and that step is concealed. Either counts as a resync.
+  Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
+  keeps the FIFO at one frame.
 - A new SSRC, a gap over a second on either clock, or `resetSlot` starts a new stream: the
   buffer re-anchors and the slot's corrector resets. A gap is a second without a packet, or a
   timestamp a second away from where the stream is; the second one is a sender that paused.
@@ -569,9 +581,11 @@ ring into the jitter buffer at the top of each block.
 - A slot's first pull discards what its ring already holds. A mixer is armed, and its ports
   handed to the phones, before it starts; a stream anchored on that backlog would play behind
   real time for good.
-- At the 15 ms playout delay, in-band FEC helps frames of 10 ms and shorter. The packet after
-  a lost 20 ms frame arrives 5 ms after that frame falls due, so mediasoup's 20 ms streams get
-  the decoder's own concealment.
+- In-band FEC is SILK's, so of the frames accepted only 10 and 20 ms can carry it, and it needs
+  the next packet in hand, a delay over the frame and a block. At the 15 ms a stream opens at, 10 ms
+  frames get it. The packet after a lost 20 ms frame arrives 5 ms after that frame falls due, so
+  mediasoup's 20 ms streams get the decoder's own concealment. A 10 ms stream whose delay has fallen
+  under 13 ms gets the same.
 - `l16` slots take stereo 16-bit big-endian at 48 kHz, as the house-mic sender sends today, and
   fold to mono. `push` slots take interleaved stereo f32 from the control thread and fold to
   mono too. The ring holds 100 ms, and `push` returns how many frames fit; the rest is the
@@ -585,7 +599,9 @@ Done when: a test feeds synthetic RTP with reordering, 30 ms jitter spikes and 5
 through the offline driver and the output matches the source within the concealment's expected
 error; frames of 2.5, 5, 10 and 20 ms all pass; a packet arriving late never produces a gap
 longer than the frame it missed; a stream that pauses for two seconds resumes without a
-growing delay.
+growing delay; a slot left to choose falls to the floor on a clean link on every frame size, stays
+exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a quiet moment, and
+loses at most 0.1 percent more of its packets to lateness than the same song at the opening delay.
 
 ### 8.5 Backing: `engine/src/backing/`
 
@@ -754,3 +770,6 @@ Each is deliberate and here so no one reverts it by accident.
   streaming decode if a box cannot hold two stems.
 - House mics as a native capture input with drift correction, instead of the loopback sender.
 - Device hotplug and the default-device change.
+- Choosing a slot's delay before `start`, from the packets a phone already sends to an armed mixer,
+  so the first ten seconds of a song have the chosen delay too. Nothing here measures how long a
+  mixer sits armed yet.
