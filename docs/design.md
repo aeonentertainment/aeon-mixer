@@ -68,8 +68,9 @@ Rules that follow:
   the TypeScript API is this pattern. `SetGuide` and `ResetSlot` carry no id and their methods
   return at once.
 - A full ring never blocks, and a producer never touches the consumer's index. What becomes of
-  the item depends on who can afford to lose it: an event is dropped and counted; a command is
-  handed back to the control thread as an error, since dropping a `Swap` would lose a graph; a
+  the item depends on who can afford to lose it: an event is dropped and counted, except
+  `Fault`, since losing it would leave the room silent with nobody told; a command is handed
+  back to the control thread as an error, since dropping a `Swap` would lose a graph; a
   command that carries a box waits in its ring until the retired ring has room for what it
   displaces, so the audio thread is never left holding a box it cannot hand back.
 - The events thread drains the event ring every 5 ms and calls one napi threadsafe function per
@@ -78,8 +79,9 @@ Rules that follow:
   ring: the job writes an atomic fraction the events thread reads on each drain.
 - A `Box<Graph>` or `Box<Guide>` moves through a ring as a pointer. The audio thread never drops
   one.
-- A panic inside render is caught at the callback boundary. The block is silence, a `Fault`
-  event is sent, and the engine refuses further commands until the host closes it.
+- A panic inside render is caught at the callback boundary. Every block from there is silence,
+  the audio thread pushes `Fault` again each block until the event ring has room for it, and the
+  engine refuses further commands until the host closes it.
 
 ## 3. The two clocks
 
