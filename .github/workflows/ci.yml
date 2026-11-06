@@ -6,6 +6,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,14 +21,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: linux-x64
-            os: ubuntu-24.04
-          - name: darwin-arm64
-            os: macos-15
-          - name: win32-x64
-            os: windows-2025
-    runs-on: ${{ matrix.os }}
+        # Mac and Windows only by hand: their minutes count 10x and 2x, and at every push they spent
+        # a month's included minutes in six days.
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"name":"linux-x64"},{"name":"darwin-arm64","os":"macos-15"},{"name":"win32-x64","os":"windows-2025"}]' || '[{"name":"linux-x64"}]') }}
+    runs-on: ${{ matrix.os || vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -71,6 +68,6 @@ jobs:
     name: CI
     needs: build
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     steps:
       - run: test "${{ needs.build.result }}" = success
