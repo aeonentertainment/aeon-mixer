@@ -194,7 +194,7 @@ something a breath already solves. If a slot is never quiet it stays where it op
 
 ## What `measure-latency` says
 
-Offline, so no network at all: the chosen rows are the least a slot can hold. On 32e5698 plus this
+Offline, so no network at all: the chosen rows are the least a slot can hold. On dddb193 plus this
 change, in ms. The chosen delay also takes away the block's wait a held stream keeps for good, which
 narrows the range, because the fall measures from the earliest packet.
 
