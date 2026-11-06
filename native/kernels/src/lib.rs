@@ -1,5 +1,5 @@
 //! The DSP leaves the engine runs on the audio thread: the pitch corrector and its detector, the
-//! stretcher, the reverb. The C++ ones sit behind the `extern "C"` shims in cpp/shim, and this
+//! stretcher, the reverb, the voice shifter. The C++ ones sit behind the `extern "C"` shims in cpp/shim, and this
 //! crate is the only place that calls them, so the engine keeps `#![forbid(unsafe_code)]`.
 //! Every `process` allocates nothing and locks nothing once its kernel is built.
 
@@ -10,12 +10,14 @@ mod reverb;
 mod stretch;
 #[cfg(test)]
 mod test_support;
+mod voice_shifter;
 mod yin;
 
 pub use corrector::PitchCorrector;
 pub use pitch::{EVERY_PITCH_CLASS, Pitch, PitchClassMask, pitch_class_of};
 pub use reverb::Reverb;
 pub use stretch::{Preset, Stretch};
+pub use voice_shifter::VoiceShifter;
 pub use yin::YinDetector;
 
 // Tests wrap every realtime call in `assert_no_alloc`; this allocator is what makes it panic.

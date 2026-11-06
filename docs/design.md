@@ -212,7 +212,7 @@ native/
     src/backing/        Stems, playhead, stem gains, live key, render job
     src/master.rs       sum, soft clipper, master meter, push into the return ring
     src/return_ring.rs  the return branch's ring: whole blocks in, any number of frames out
-  kernels/              C++ leaves behind extern "C": corrector, stretcher, reverb
+  kernels/              C++ leaves behind extern "C": corrector, stretcher. Rust leaves: reverb, voice shifter
     build.rs            cc compiles cpp/
     cpp/                vendored sources with licences and the commit they came from
   transport/            the network thread: UDP receive into packet rings, RTP return sender
@@ -324,6 +324,7 @@ pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms),
 pub struct Stretch;         // new(channels, rate, preset), set_transpose_semitones(f32), process(planar in, planar out), latency_frames()
 pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
 pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
+pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
 ```
 
 ### 7.2 TypeScript
@@ -568,8 +569,9 @@ within 5 cents after the crossfade.
 
 The C++ leaves and the Rust stages that drive them. The corrector's sources come from Aeon
 Karaoke's `lib/dsp/pitch-corrector` at a named commit, with its vendored FFT. The stretcher is
-signalsmith-stretch. The reverb is a Rust port of Freeverb. Each C++ kernel gets an
-`extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
+signalsmith-stretch. The reverb is a Rust port of Freeverb. The voice shifter is Rust of our own,
+[decision 0004](decisions/0004-voice-shifter.md) has why and its delay bound. Each C++ kernel gets
+an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 
 - The guide follower is the Rust port of what the GStreamer element did: it splits a block at
   every note edge so the target changes on the sample the guide names, and posts a reading
