@@ -2,6 +2,17 @@ import { expect, test } from "vite-plus/test";
 import { openEngine } from "../src/index.ts";
 
 const BLOCK = 128;
+/** One reading of the master meter, 100 ms at 48 kHz. */
+const METER_WINDOW = 4800;
+const LEVEL_TOLERANCE_DB = 0.01;
+
+/** 1 kHz is 48 samples a cycle, so a meter window holds whole cycles and one exact crest. */
+function sine(amplitude: number, frames: number) {
+  return Float32Array.from(
+    { length: frames },
+    (_, i) => amplitude * Math.sin((2 * Math.PI * i) / 48),
+  );
+}
 
 test("an offline engine pumps silent blocks of 128 stereo frames at 48 kHz", async () => {
   const engine = await openEngine({ output: { offline: true } });
@@ -36,9 +47,9 @@ test("a closed engine refuses everything, and closing twice is fine", async () =
 test("reactions play on both channels, four at once, and a fifth is dropped", async () => {
   const engine = await openEngine({ output: { offline: true } });
   for (let voice = 0; voice < 4; voice += 1) {
-    engine.reactions.play(new Float32Array(BLOCK).fill(0.1), 1);
+    expect(engine.reactions.play(new Float32Array(BLOCK).fill(0.1), 1)).toBe(true);
   }
-  engine.reactions.play(new Float32Array(BLOCK).fill(1), 1);
+  expect(engine.reactions.play(new Float32Array(BLOCK).fill(1), 1)).toBe(false);
   const sum = engine.pump(1);
   expect(sum.every((sample) => Math.abs(sample - 0.4) < 1e-6)).toBe(true);
   expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
@@ -48,12 +59,30 @@ test("reactions play on both channels, four at once, and a fifth is dropped", as
     stereo[2 * frame] = 0.5;
     stereo[2 * frame + 1] = -0.5;
   }
-  engine.reactions.play(stereo, 2);
+  expect(engine.reactions.play(stereo, 2)).toBe(true);
   const played = engine.pump(1);
   for (let frame = 0; frame < BLOCK; frame += 1) {
     expect(played[2 * frame]).toBeCloseTo(0.5, 6);
     expect(played[2 * frame + 1]).toBeCloseTo(-0.5, 6);
   }
+  await engine.close();
+});
+
+test("the engine reads the master level of what it plays, with no mixer live", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const reading = new Promise<[rmsDb: number, peakDb: number]>((resolve) => {
+    const off = engine.on("masterLevel", (rmsDb, peakDb) => {
+      off();
+      resolve([rmsDb, peakDb]);
+    });
+  });
+  engine.reactions.play(sine(0.5, METER_WINDOW), 1);
+  engine.pump(Math.ceil(METER_WINDOW / BLOCK));
+
+  // A half-scale sine, under the clipper's knee
+  const [rmsDb, peakDb] = await reading;
+  expect(Math.abs(rmsDb - -9.03)).toBeLessThan(LEVEL_TOLERANCE_DB);
+  expect(Math.abs(peakDb - -6.02)).toBeLessThan(LEVEL_TOLERANCE_DB);
   await engine.close();
 });
 
