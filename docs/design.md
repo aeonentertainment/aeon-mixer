@@ -351,9 +351,11 @@ export interface Engine {
   readonly output: { sampleRate: 48000; periodFrames: number; latencyMs: number };
   outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
   createMixer(config: MixerConfig): Promise<Mixer>;
-  /** Room-lifetime reaction voices, four at once; a fifth is dropped while four play. */
-  reactions: { play(pcm: Float32Array, channels: 1 | 2): void };
+  /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
+  reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
   on(event: "fault", listener: (error: Error) => void): () => void;
+  /** The mix after the clipper, reactions included, between songs too. */
+  on(event: "masterLevel", listener: (rmsDb: number, peakDb: number) => void): () => void;
   /** Offline engines only: render blocks and return them as interleaved stereo. */
   pump?(blocks: number): Float32Array;
   close(): Promise<void>;
