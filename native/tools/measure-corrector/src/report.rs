@@ -104,6 +104,9 @@ pub fn table(result: &Value) -> String {
 
     let cpu = &result["cpu"];
     if !cpu.is_null() {
+        // A debug run's percentages sit beside a release baseline, so they say what they are
+        let build = cpu["build"].as_str().filter(|build| *build != "release");
+        let warning = build.map_or(String::new(), |build| format!(" ({build})"));
         let spent = |row: &str| {
             format!("{} (best {})", number(&cpu[row]["median"], 2), number(&cpu[row]["min"], 2))
         };
@@ -112,7 +115,7 @@ pub fn table(result: &Value) -> String {
             "CPU, the core alone",
             "under 5 % of a core",
             "0.28 %",
-            &format!("{} %", spent("core_correcting")),
+            &format!("{} %{warning}", spent("core_correcting")),
         );
         cell(
             &mut table,
@@ -120,7 +123,7 @@ pub fn table(result: &Value) -> String {
             "under 5 % of a core",
             "element 0.61 %, slot tail 1.10 %",
             &format!(
-                "{} %, bypassed {} %, four slots {} %",
+                "{} %, bypassed {} %, four slots {} %{warning}",
                 spent("slot_correcting"),
                 spent("slot_bypassed"),
                 spent("four_slots_correcting")

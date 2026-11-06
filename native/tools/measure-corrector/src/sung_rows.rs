@@ -71,12 +71,13 @@ pub struct DetectorScore {
 /// Each reading scored against the f0 at its window's centre, the way the harness scored its
 /// element, voiced frames being the reference's.
 pub fn score_detector(readings: &[Point], truth: &Truth) -> DetectorScore {
-    let at_or_after_start = readings.iter().filter(|reading| reading.ms >= 0.0);
+    let annotated =
+        readings.iter().filter(|reading| reading.ms >= 0.0 && reading.ms <= truth.end_ms());
     let (mut voiced, mut unvoiced) = (0usize, 0usize);
     let (mut undetected, mut within, mut octave, mut engaged, mut false_engaged) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut errors = Vec::new();
-    for reading in at_or_after_start {
+    for reading in annotated {
         let reference = truth.hz_at(reading.ms);
         let would_act =
             reading.hz >= LOWEST_CORRECTED_HZ && reading.confidence >= VOICED_CONFIDENCE;

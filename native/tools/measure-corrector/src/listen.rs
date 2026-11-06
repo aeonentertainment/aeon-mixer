@@ -47,7 +47,8 @@ pub struct ListenSource {
 
 /// `path` as far as it exists, resolved, so `..` and symlinks cannot hide where it is.
 fn resolved(path: &Path) -> PathBuf {
-    let mut existing = path.to_path_buf();
+    // Absolute first: a relative path that does not exist yet would otherwise stay relative
+    let mut existing = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut rest = Vec::new();
     while !existing.exists() {
         let Some(name) = existing.file_name().map(ToOwned::to_owned) else { break };
@@ -327,6 +328,15 @@ pub struct Verdict {
 pub fn verdict(responses: &[Response], key: &Value) -> Result<Verdict, String> {
     let sources = key["sources"].as_array().ok_or("a key with no sources")?;
     let listeners: BTreeSet<&str> = responses.iter().map(|r| r.listener.as_str()).collect();
+    let mut answered = BTreeSet::new();
+    for response in responses {
+        if !answered.insert((&response.listener, &response.source)) {
+            return Err(format!(
+                "{} answered {} twice; keep one row per source",
+                response.listener, response.source
+            ));
+        }
+    }
     let mut result = Verdict {
         listeners: listeners.len(),
         melody_below_off: Vec::new(),
@@ -558,6 +568,15 @@ mod tests {
         let result = verdict(&[good("a"), good("b"), control], &key()).unwrap();
         assert!(result.passes, "{result:?}");
         assert_eq!(result.warble_on_off, 1);
+    }
+
+    #[test]
+    fn a_revised_answer_is_refused_rather_than_half_counted() {
+        let key = json!({ "sources": [] });
+        let clean = answered("ana", [1, 2, 3], [false, false, false]);
+        let revised = answered("ana", [1, 2, 3], [true, false, false]);
+        let error = verdict(&[clean, revised], &key).unwrap_err();
+        assert!(error.contains("twice"), "{error}");
     }
 
     #[test]

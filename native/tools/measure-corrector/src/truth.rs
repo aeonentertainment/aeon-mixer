@@ -8,6 +8,11 @@ impl Truth {
         Self { rows }
     }
 
+    /// Where the annotation ends. A reading past it has nothing to be scored against.
+    pub fn end_ms(&self) -> f64 {
+        self.rows.last().map_or(0.0, |(seconds, _)| seconds * 1000.0)
+    }
+
     /// The annotation row at or after `ms`, as the harness's scorer picks it; 0 where unvoiced.
     pub fn hz_at(&self, ms: f64) -> f64 {
         let index = self.rows.partition_point(|(seconds, _)| seconds * 1000.0 < ms);
