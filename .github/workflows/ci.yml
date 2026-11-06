@@ -24,9 +24,9 @@ jobs:
           - name: linux-x64
             os: blacksmith-4vcpu-ubuntu-2404
           - name: darwin-arm64
-            os: macos-15
+            os: blacksmith-6vcpu-macos-15
           - name: win32-x64
-            os: windows-2025
+            os: blacksmith-4vcpu-windows-2025
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     defaults:
