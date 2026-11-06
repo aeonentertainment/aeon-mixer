@@ -157,6 +157,7 @@ impl VoiceShifter {
     /// Forgets the voice, for a new singer on the same slot. Keeps the settings.
     pub fn reset(&mut self) {
         self.line.clear();
+        self.envelope.clear();
         self.filter.clear();
         self.line_mix = 0.0;
         self.period = self.rate / STARTING_HZ;

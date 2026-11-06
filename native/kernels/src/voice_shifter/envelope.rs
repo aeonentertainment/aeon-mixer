@@ -108,8 +108,9 @@ impl Envelope {
         // Hann's mean square is 3/8. The first difference of a voice is well under the voice, so
         // this silence is measured in a tilted spectrum, and is quieter than it reads.
         let power = self.autocorrelation[0] / (0.375 * count as f64);
-        if power < SILENCE {
-            self.held = [0.0; MOST_LAGS];
+        // A bad sample in the window reads as no voice: kept, it would stay in `held` for good
+        if !power.is_finite() || power < SILENCE {
+            self.clear();
             return false;
         }
         // Per sample, so a reading from a long window weighs no more than one from a short one
@@ -124,6 +125,11 @@ impl Envelope {
         }
         self.autocorrelation[lags..].fill(0.0);
         true
+    }
+
+    /// Forgets the running reading.
+    pub fn clear(&mut self) {
+        self.held = [0.0; MOST_LAGS];
     }
 
     /// The model of the measured envelope with its frequency axis scaled by `factor`, from

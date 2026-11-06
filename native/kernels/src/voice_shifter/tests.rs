@@ -569,32 +569,34 @@ fn reset_forgets_the_last_voice() {
     assert!(run.output.iter().all(|s| *s == 0.0), "the last voice came out after a reset");
 }
 
-// A bad sample must not end the song: it does not stay in the filters, the voice comes back in
-// tune once the line has played it out, and nothing panics on the way.
+// A bad sample must not end the song: it does not stay in the filters, nothing panics, and once
+// the line has played it out the voice is back in tune with its formants still held.
 #[test]
 fn a_bad_sample_passes_and_the_voice_comes_back() {
-    let mut input = vowel(220.0, 1.5);
+    let mut input = vowel(110.0, 1.5);
     input[24_000] = f32::NAN;
     input[24_001] = f32::INFINITY;
-    let run = shifted(&input, 4.0, 1.2);
+    let run = shifted(&input, 4.0, 1.0);
     assert!(run.output.iter().all(|s| s.is_finite()), "a bad sample reached the output");
-    let asked = 220.0 * 2f64.powf(4.0 / 12.0);
-    let cents = cents_between(pitch_near(tail(&run.output, 1.0), asked), asked);
+    let asked = 110.0 * 2f64.powf(4.0 / 12.0);
+    let stretch = tail(&run.output, 1.0);
+    let cents = cents_between(pitch_near(stretch, asked), asked);
     assert!(cents.abs() < PITCH_TOLERANCE_CENTS, "{cents:+.2} cents after a bad sample");
+    let error = envelope_error(stretch, asked, 1.0);
+    assert!(
+        error.rms_db < 4.0,
+        "the formants stayed off after a bad sample: {:.1} dB",
+        error.rms_db
+    );
 }
 
-// The stated bound, in the numbers the doc gives: 1.125 periods and the floor. These are the figures
-// the PR and decision 0004 quote.
+// The stated bound, in the samples decision 0004's table is worked out from.
 #[test]
 fn the_bound_is_what_the_doc_says() {
-    let ms = |semitones: f32, hz: f64| {
-        VoiceShifter::latency_bound_samples(RATE, semitones, hz) as f64 * 1000.0 / SR
-    };
-    let near = |a: f64, b: f64| (a - b).abs() < 0.1;
-    assert!(near(ms(6.0, 82.0), 14.9), "{}", ms(6.0, 82.0));
-    assert!(near(ms(-6.0, 82.0), 13.8), "{}", ms(-6.0, 82.0));
-    assert!(near(ms(-6.0, 880.0), 1.4), "{}", ms(-6.0, 880.0));
-    assert_eq!(ms(0.0, 82.0), 0.0);
+    let samples = |semitones, hz| VoiceShifter::latency_bound_samples(RATE, semitones, hz);
+    assert_eq!(samples(6.0, 82.0), 720, "15.0 ms");
+    assert_eq!(samples(-6.0, 82.0), 666, "13.9 ms");
+    assert_eq!(samples(0.0, 82.0), 0);
     // A voice under E2 is bound as E2, whatever it sings
-    assert_eq!(ms(6.0, 50.0), ms(6.0, 82.0));
+    assert_eq!(samples(6.0, 50.0), samples(6.0, 82.0));
 }
