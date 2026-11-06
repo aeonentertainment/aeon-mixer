@@ -54,8 +54,8 @@ before.
 Voiced frames clearing the corrector's bar rose from 94.0, 90.5, 85.9 and 81.6 percent to 97.7, 97.8,
 95.9 and 91.6 on clips 2, 6, 19 and 10. De Cheveigne and Kawahara say why: on a glide the difference
 grows with the cube of the window. Accuracy within a semitone reads 95.5, 97.0, 98.0 and 97.8 percent.
-Frames the reference calls unvoiced that it acts on rose from 0.4, 1.6, 5.4 and 13.6 percent to 2.0,
-4.0, 9.1 and 20.3.
+Frames the reference calls unvoiced that it acts on rose from 0.5, 1.7, 5.6 and 16.6 percent to 2.1,
+4.3, 9.5 and 24.6.
 
 ## The reading is no longer most of the trouble
 
@@ -69,9 +69,9 @@ retune, which is #46's to change. Strength sets its own floor: at 0.6 the oracle
 
 |                        | Before | After  |
 | ---------------------- | ------ | ------ |
-| CPU, the core          | 0.27 % | 0.45 % |
-| CPU, a slot correcting | 0.34 % | 0.67 % |
-| CPU, four slots        | 1.27 % | 2.58 % |
+| CPU, the core          | 0.28 % | 0.44 % |
+| CPU, a slot correcting | 0.34 % | 0.68 % |
+| CPU, four slots        | 1.28 % | 2.61 % |
 
 A reading costs 7.4, 14.9 and 24.4 microseconds at 512, 1024 and 2048 samples on an M2 Pro. An unsure
 frame runs all three, 47 microseconds in one block, and today every slot reads in the same block. That
