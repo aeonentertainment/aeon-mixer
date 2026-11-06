@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
           - name: linux-x64
-            os: ubuntu-24.04
+            os: blacksmith-4vcpu-ubuntu-2404
           - name: darwin-arm64
             os: macos-15
           - name: win32-x64
@@ -71,6 +71,6 @@ jobs:
     name: CI
     needs: build
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - run: test "${{ needs.build.result }}" = success
