@@ -1,6 +1,6 @@
 [package]
 name = "devices"
-description = "The engine's Driver for each OS: CoreAudio, WASAPI and ALSA, and the measure-sink tool."
+description = "The engine's Driver and Capture for each OS: CoreAudio, WASAPI and ALSA, and the measure-sink tool."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

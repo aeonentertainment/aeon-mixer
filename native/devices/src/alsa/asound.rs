@@ -23,6 +23,7 @@ pub struct SwParams {
 
 // From alsa/pcm.h
 pub const STREAM_PLAYBACK: c_int = 0;
+pub const STREAM_CAPTURE: c_int = 1;
 pub const ACCESS_RW_INTERLEAVED: c_int = 3;
 
 macro_rules! asound {
@@ -90,6 +91,8 @@ asound! {
     fn snd_pcm_sw_params(*mut RawPcm, *mut SwParams) -> c_int;
     fn snd_pcm_wait(*mut RawPcm, c_int) -> c_int;
     fn snd_pcm_writei(*mut RawPcm, *const c_void, c_ulong) -> c_long;
+    fn snd_pcm_readi(*mut RawPcm, *mut c_void, c_ulong) -> c_long;
+    fn snd_pcm_start(*mut RawPcm) -> c_int;
     fn snd_pcm_recover(*mut RawPcm, c_int, c_int) -> c_int;
     fn snd_device_name_hint(c_int, *const c_char, *mut *mut *mut c_void) -> c_int;
     fn snd_device_name_get_hint(*const c_void, *const c_char) -> *mut c_char;

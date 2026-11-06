@@ -1,4 +1,5 @@
 mod asound;
+mod capture;
 mod driver;
 mod format;
 mod pcm;
@@ -8,6 +9,7 @@ use std::ptr::null_mut;
 
 use engine::driver::DriverError;
 
+pub use capture::AlsaCapture;
 pub use driver::AlsaDriver;
 
 use crate::output::Output;
@@ -16,6 +18,17 @@ use asound::{Asound, asound};
 /// The hardware playback devices, `hw:CARD=...,DEV=...`. The first is the default: card 0's
 /// first device, which is where ALSA's own default points on a box with no sound server.
 pub fn outputs() -> Result<Vec<Output>, DriverError> {
+    devices("Input")
+}
+
+/// The hardware capture devices, listed the way `outputs` lists playback ones. A laptop's digital
+/// mics are usually not the first of them, so name the one you mean.
+pub fn inputs() -> Result<Vec<crate::Input>, DriverError> {
+    devices("Output")
+}
+
+// Every hw: device but those that run only `other_way`.
+fn devices(other_way: &str) -> Result<Vec<Output>, DriverError> {
     let lib = asound()?;
     let mut hints = null_mut();
     // SAFETY: `hints` receives a null-terminated array freed below.
@@ -32,7 +45,7 @@ pub fn outputs() -> Result<Vec<Output>, DriverError> {
         let direction = take_hint(lib, hint, c"IOID");
         let description = take_hint(lib, hint, c"DESC").unwrap_or_default();
         if let Some(id) = name.filter(|name| name.starts_with("hw:"))
-            && direction.as_deref() != Some("Input")
+            && direction.as_deref() != Some(other_way)
         {
             let name = label(&id, &description);
             outputs.push(Output { is_default: outputs.is_empty(), id, name });
@@ -43,6 +56,14 @@ pub fn outputs() -> Result<Vec<Output>, DriverError> {
     // SAFETY: allocated by snd_device_name_hint above.
     unsafe { (lib.snd_device_name_free_hint)(hints) };
     Ok(outputs)
+}
+
+fn default_input() -> Result<String, DriverError> {
+    inputs()?
+        .into_iter()
+        .find(|input| input.is_default)
+        .map(|input| input.id)
+        .ok_or(DriverError::NoDevice)
 }
 
 fn default_output() -> Result<String, DriverError> {
