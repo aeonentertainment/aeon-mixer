@@ -7,11 +7,13 @@ use engine::slot::guide::Guide;
 use serde_json::{Map, Value, json};
 
 use crate::chain::{Input, Setup, Take, run};
+use crate::condition::{Condition, Prepared};
 use crate::contour::{self, LOWEST_CORRECTED_HZ, Point, VOICED_CONFIDENCE};
 use crate::expression::{self, Envelope};
 use crate::music::{cents, cents_off_class, median, percentile};
-use crate::sung_clip::{MeantNote, SungClip, Truth};
-use crate::variant::{Condition, Prepared, Variant};
+use crate::sung_clip::{MeantNote, SungClip};
+use crate::truth::Truth;
+use crate::variant::Variant;
 
 /// Past a note's first moments, where any corrector is still arriving, and before its end.
 const NOTE_LEAD_MS: f64 = 30.0;

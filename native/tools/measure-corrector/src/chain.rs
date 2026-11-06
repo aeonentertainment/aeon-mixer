@@ -13,121 +13,24 @@ use engine::block::{BLOCK, RATE, Stereo};
 use engine::command::{Event, event_ring};
 use engine::driver::OfflineDriver;
 use engine::graph::Graph;
-use engine::ingest::{
-    Codec, JitterBuffer, PacketProducer, PacketSource, SharedStats, SlotStats, packet_ring,
-};
-use engine::params::{CorrectorParams, Params, ReverbParams, SlotParams};
+use engine::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
+use engine::params::{Params, SlotParams};
 use engine::slot::Slot;
-use engine::slot::guide::Guide;
 use engine::slot::source::Source;
 
+use crate::clip_source::ClipSource;
 use crate::contour::Point;
-use crate::rtp::{Arrival, PLAYOUT_DELAY};
-
-/// Below the master clipper's 0.75 knee for any clip that peaks at full scale, so the clipper
-/// stays out of a measurement.
-const MEASURE_GAIN: f32 = 0.5;
-
-/// A clip the slot plays once, then silence. It says it has no latency: the guide clock reads the
-/// clip's own time.
-struct ClipSource {
-    samples: Vec<f32>,
-    at: usize,
-}
-
-impl Source for ClipSource {
-    fn pull(&mut self, out: &mut [f32]) {
-        for sample in out {
-            *sample = self.samples.get(self.at).copied().unwrap_or(0.0);
-            self.at += 1;
-        }
-    }
-}
-
-pub enum Input {
-    Samples(Vec<f32>),
-    /// Opus or L16 packets and the output frame each reaches the socket at, through the real
-    /// packet ring and jitter buffer.
-    Packets(Vec<Arrival>),
-}
-
-/// What runs through the chain.
-pub struct Setup {
-    pub input: Input,
-    pub frames: usize,
-    pub corrector: CorrectorParams,
-    pub reverb: ReverbParams,
-    pub guide: Option<Guide>,
-    pub guide_offset_ms: f32,
-    /// Slots beside the first, all the same voice: the CPU row's four singers.
-    pub extra_voices: Vec<Vec<f32>>,
-    /// Centre-panned at `mix_gain` over this backing, for a listening clip. `None` is the
-    /// measuring setup: hard left over silence, so the left channel is the voice.
-    pub mix: Option<Mix>,
-}
-
-pub struct Mix {
-    pub backing: Option<Planar>,
-    pub voice_gain: f32,
-}
-
-impl Setup {
-    pub fn new(input: Input, frames: usize, corrector: CorrectorParams) -> Self {
-        Self {
-            input,
-            frames,
-            corrector,
-            reverb: ReverbParams::default(),
-            guide: None,
-            guide_offset_ms: 0.0,
-            extra_voices: Vec::new(),
-            mix: None,
-        }
-    }
-}
-
-/// What came out.
-pub struct Take {
-    pub left: Vec<f32>,
-    pub right: Vec<f32>,
-    /// The slot's own pitch readings, on the guide's clock.
-    pub readings: Vec<Point>,
-    /// How far the corrector made the voice trail, in frames, once per block.
-    pub delays: Vec<u32>,
-    pub cpu_seconds: f64,
-    pub stats: Option<SlotStats>,
-}
-
-impl Take {
-    /// The voice, when the setup was the measuring one, at the level it went in.
-    pub fn voice(&self) -> Vec<f32> {
-        self.left.iter().map(|s| s / MEASURE_GAIN).collect()
-    }
-}
-
-struct Ingest {
-    producer: PacketProducer,
-    arrivals: Vec<Arrival>,
-    next: usize,
-    stats: Arc<SharedStats>,
-}
-
-impl Ingest {
-    /// Hands the ring every packet that reached the socket before this block, as the network
-    /// thread would have.
-    fn deliver(&mut self, pumped: i64) {
-        while let Some(arrival) = self.arrivals.get(self.next).filter(|a| a.at < pumped) {
-            assert!(self.producer.push(&arrival.packet), "the ring never fills here");
-            self.next += 1;
-        }
-    }
-}
+use crate::ingest::Ingest;
+use crate::rtp::PLAYOUT_DELAY;
+pub use crate::setup::{Input, Mix, Setup};
+use crate::take::MEASURE_GAIN;
+pub use crate::take::Take;
 
 pub fn run(setup: Setup) -> Take {
     let Setup { input, frames, corrector, reverb, guide, guide_offset_ms, extra_voices, mix } =
         setup;
     let (source, mut ingest): (Box<dyn Source>, Option<Ingest>) = match input {
-        Input::Samples(samples) => (Box::new(ClipSource { samples, at: 0 }), None),
+        Input::Samples(samples) => (Box::new(ClipSource::new(samples)), None),
         Input::Packets(arrivals) => {
             let (producer, consumer) = packet_ring(engine::ingest::packet::RING_CAPACITY);
             let codec = Codec::opus().expect("the decoder could not be made");
@@ -142,9 +45,7 @@ pub fn run(setup: Setup) -> Take {
     first.set_guide(guide.map(Box::new));
     let mut slots = vec![first];
     slots.extend(
-        extra_voices
-            .into_iter()
-            .map(|samples| Slot::engaged(Box::new(ClipSource { samples, at: 0 }))),
+        extra_voices.into_iter().map(|samples| Slot::engaged(Box::new(ClipSource::new(samples)))),
     );
     let voices = slots.len();
     let mut graph = Graph::new(slots);

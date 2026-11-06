@@ -698,7 +698,7 @@ output is the evidence a PR quotes.
 
 `native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
 chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
-blind-listen set. Decision [0004](decisions/0004-corrector-measurement.md) has the reasons.
+blind-listen set. Decision [0005](decisions/0005-corrector-measurement.md) has the reasons.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 

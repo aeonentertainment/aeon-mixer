@@ -1,9 +1,9 @@
-# 0004: How the corrector is measured
+# 0005: How the corrector is measured
 
 ## The problem
 
 Every corrector number came through GStreamer's `aeonpitch`, and the row that decides whether
-correction sounds good had never run. `tools/measure-corrector` is what #44, #45, #46, #49 and #50
+correction sounds good had never run. `native/tools/measure-corrector` is what #44, #45, #46, #49 and #50
 are judged against, so what it can and cannot say spans them all.
 
 ## Reaching the engaged corrector

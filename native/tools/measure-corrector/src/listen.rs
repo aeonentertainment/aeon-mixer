@@ -20,6 +20,7 @@ use crate::audio::write_wav;
 use crate::chain::{Input, Mix, Setup, run};
 use crate::contour;
 use crate::expression::{Envelope, Expression, compare};
+use crate::listen_take::Take;
 use crate::music::{Lcg, key_mask};
 use crate::sung_clip::SungClip;
 use crate::vocadito;
@@ -88,23 +89,6 @@ pub fn shuffled_takes(seed: u64) -> impl FnMut() -> [Take; 3] {
             takes.swap(last, rng.below(last as u32 + 1) as usize);
         }
         takes
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Take {
-    Off,
-    Key,
-    Melody,
-}
-
-impl Take {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Key => "key",
-            Self::Melody => "melody",
-        }
     }
 }
 

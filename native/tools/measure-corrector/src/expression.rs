@@ -3,7 +3,7 @@
 //! leave the rest. These measures say how much movement survives, and how much appeared that the
 //! singer did not sing, which is the physical half of what a listener calls warble.
 //!
-//! How far to trust them is docs/decisions/0004-corrector-measurement.md. In short: they are
+//! How far to trust them is docs/decisions/0005-corrector-measurement.md. In short: they are
 //! measured against known signals, not yet against listeners, so they are a regression alarm
 //! beside the listen, never a substitute for it.
 

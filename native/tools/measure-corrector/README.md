@@ -3,7 +3,7 @@
 The pitch corrector's numbers, printed beside the GStreamer baseline in Aeon Karaoke's
 `docs/open-problems/auto-tune.md`, a JSON result to diff, and the blind-listen set. It runs the real
 slot chain on the offline driver and opens no device or socket. Why it is built this way, and how
-far to trust each number, is [decision 0004](../../../docs/decisions/0004-corrector-measurement.md).
+far to trust each number, is [decision 0005](../../../docs/decisions/0005-corrector-measurement.md).
 
 It needs two things it does not carry:
 

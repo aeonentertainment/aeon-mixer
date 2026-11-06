@@ -1,23 +1,30 @@
 //! measure-corrector: the pitch corrector's numbers beside the GStreamer baseline, a machine
 //! readable result to diff, and the blind-listen set. It runs the real slot chain on the offline
 //! driver, never a device. README.md beside this crate says how to use it and how far to trust it;
-//! docs/decisions/0004-corrector-measurement.md says why it is built this way.
+//! docs/decisions/0005-corrector-measurement.md says why it is built this way.
 
 mod added_latency;
 mod audio;
 mod chain;
+mod clip_source;
+mod condition;
 mod contour;
 mod cpu;
 mod diff;
 mod expression;
+mod ingest;
 mod listen;
+mod listen_take;
 mod melody_sync;
 mod music;
 mod report;
 mod rtp;
+mod setup;
 mod sung_clip;
 mod sung_rows;
 mod synthetic;
+mod take;
+mod truth;
 mod variant;
 mod vocadito;
 
@@ -28,10 +35,11 @@ use engine::slot::guide::{Guide, Note};
 use serde_json::{Map, Value, json};
 
 use crate::chain::frames_of_ms;
+use crate::condition::Condition;
 use crate::listen::ListenSource;
 use crate::music::key_mask;
 use crate::sung_clip::{SungClip, load_take, parse_guide_json};
-use crate::variant::{Condition, Variant};
+use crate::variant::Variant;
 
 const USAGE: &str = "\
 usage:
