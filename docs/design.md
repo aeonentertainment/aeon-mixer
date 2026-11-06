@@ -124,7 +124,8 @@ gain and pan into the stereo bus. The meter sits after the corrector and before 
 gain, so the level words tell the singer about their singing, not the room, and mute never
 changes them. The corrector runs bypassed for now: engaged, its shifter delays the voice by up
 to 15 ms for a low voice, which breaks the latency budget on slower devices. It reads pitch
-with no delay until `measure-latency` shows engaged correction fits the budget. The source is a
+with no delay until `measure-latency` shows engaged correction fits the budget;
+`Slot::engaged` lets `measure-corrector` measure it on the real chain until then. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots. Slots are
 mono and pan with a constant-power law into the stereo bus.
 
@@ -223,6 +224,7 @@ native/
     cpp/                vendored sources with licences and the commit they came from
   transport/            the network thread: UDP receive into packet rings, RTP return sender
   devices/              Driver implementations: coreaudio, wasapi, alsa; the measure-sink binary
+  tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
 ```
@@ -693,6 +695,10 @@ TypeScript suite exercises them on the offline engine.
 Scripts a person runs on real hardware. `measure-sink` is in `devices`. `measure-latency`
 plays a click through a slot and records it at the output to give the mic-path number. Their
 output is the evidence a PR quotes.
+
+`native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
+chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
+blind-listen set. Decision [0004](decisions/0004-corrector-measurement.md) has the reasons.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
