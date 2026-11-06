@@ -111,7 +111,7 @@ export class Engine {
     };
   }
 
-  /** Room-lifetime reaction voices, four at once; a fifth is dropped while four play. */
+  /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
   readonly reactions = {
     play: (samples: Float32Array, channels: 1 | 2) => {
       if (channels !== 1 && channels !== 2) {
@@ -119,7 +119,7 @@ export class Engine {
       }
       pcm("samples", samples, channels);
       this.#assertRunning();
-      this.#native.playReaction(channels === 2 ? samples : monoToStereo(samples));
+      return this.#native.playReaction(channels === 2 ? samples : monoToStereo(samples));
     },
   };
 
@@ -230,6 +230,7 @@ export class Engine {
           this.#live?.events.emit("backingEnded");
           break;
         case "masterLevel":
+          this.#events.emit("masterLevel", event.rmsDb, event.peakDb);
           break;
         case "underrun":
           this.#underruns += 1;
