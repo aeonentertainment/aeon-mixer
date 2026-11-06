@@ -107,6 +107,12 @@ impl EventProducer {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
+
+    /// Whether `event` went in. For the one event the caller will send again rather than lose, so
+    /// a full ring is not counted as a drop.
+    pub fn try_push(&mut self, event: Event) -> bool {
+        self.ring.push(event).is_ok()
+    }
 }
 
 pub struct EventConsumer {

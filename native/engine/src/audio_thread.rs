@@ -1,7 +1,8 @@
 //! What runs inside the device callback: drain the commands, read the snapshot, render the live
 //! graph, crossfade an outgoing one, and hand what is no longer held back through the retired
-//! ring. A panic inside is caught here; the block is silence, `Fault` is sent and no further
-//! command is taken (docs/design.md section 2).
+//! ring. A panic inside is caught here; every block after is silence, no further command is
+//! taken, and `Fault` is sent, again each block until the event ring has room for it
+//! (docs/design.md section 2).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -37,6 +38,7 @@ pub struct AudioThread {
     reaction_left: [f32; BLOCK],
     reaction_right: [f32; BLOCK],
     faulted: bool,
+    fault_sent: bool,
 }
 
 /// The control thread's ends of the four crossings, and the feed for the reaction voices.
@@ -70,6 +72,7 @@ impl AudioThread {
             reaction_left: [0.0; BLOCK],
             reaction_right: [0.0; BLOCK],
             faulted: false,
+            fault_sent: false,
         };
         let controls = Controls {
             params: params_writer,
@@ -87,14 +90,13 @@ impl AudioThread {
 
     /// One block, as the driver calls it. Never panics: a panic below becomes a fault.
     pub fn render(&mut self, mut out: Stereo<'_>) {
-        if self.faulted {
-            out.silence();
+        if !self.faulted && catch_unwind(AssertUnwindSafe(|| self.render_block(&mut out))).is_ok() {
             return;
         }
-        if catch_unwind(AssertUnwindSafe(|| self.render_block(&mut out))).is_err() {
-            self.faulted = true;
-            self.events.push(Event::Fault);
-            out.silence();
+        self.faulted = true;
+        out.silence();
+        if !self.fault_sent {
+            self.fault_sent = self.events.try_push(Event::Fault);
         }
     }
 
@@ -207,6 +209,7 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
+    use crate::command::EVENT_CAPACITY;
     use crate::driver::OfflineDriver;
     use crate::slot::Slot;
     use crate::slot::guide::Guide;
@@ -406,5 +409,33 @@ mod tests {
         controls.commands.push(Command::Start { id: 2 }).ok().unwrap();
         assert!(pump(&mut driver, 1).iter().all(|s| *s == 0.0));
         assert!(events(&mut controls).is_empty(), "a faulted engine takes no command");
+    }
+
+    #[test]
+    fn a_fault_that_finds_the_event_ring_full_lands_once_there_is_room() {
+        let (mut audio, mut controls) = AudioThread::new();
+        for _ in 0..EVENT_CAPACITY {
+            audio.events.push(Event::Underrun);
+        }
+        let mut driver = OfflineDriver::new(audio.into_render());
+        let panicking = Box::new(Graph::new(vec![Slot::new(Box::new(Panics))]));
+        controls.commands.push(Command::Swap { id: 1, graph: panicking }).ok().unwrap();
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        driver.pump(1);
+        std::panic::set_hook(hook);
+
+        // Under the guard from here: the retry runs on the audio thread, block after block
+        assert!(pump(&mut driver, 3).iter().all(|s| *s == 0.0));
+        assert_eq!(controls.events.dropped(), 1, "only the swap's ack is lost, not the fault");
+        let full = events(&mut controls);
+        assert_eq!(full.len(), EVENT_CAPACITY);
+        assert!(!full.contains(&Event::Fault), "the ring had no room for it");
+
+        assert!(pump(&mut driver, 1).iter().all(|s| *s == 0.0));
+        assert_eq!(events(&mut controls), vec![Event::Fault]);
+        pump(&mut driver, 2);
+        assert!(events(&mut controls).is_empty(), "it is sent once");
+        assert_eq!(controls.events.dropped(), 1);
     }
 }
