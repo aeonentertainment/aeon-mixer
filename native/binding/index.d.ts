@@ -85,7 +85,7 @@ export declare class Mixer {
    * recording it for null.
    */
   recordSlot(index: number, path?: string | undefined | null): void
-  /** Every slot's ingest counters, as the audio thread last published them. */
+  /** Every slot's ingest counters and corrector delay, as the audio thread last published them. */
   stats(): Array<SlotStatsInfo>
   /** The return stream's counters, or null for a mixer without one. */
   returnStats(): RtpReturnStats | null
@@ -208,6 +208,8 @@ export interface SlotStatsInfo {
   concealed: number
   resyncs: number
   jitterMs: number
+  correctorDelayMs: number
+  correctorMaxDelayMs: number
 }
 
 export interface StemGainsInput {

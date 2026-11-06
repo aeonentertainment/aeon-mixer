@@ -1,4 +1,4 @@
-//! The real chain on the offline driver: a source, one engaged `Slot`, the `Graph` around it with
+//! The real chain on the offline driver: a source, one `Slot`, the `Graph` around it with
 //! a backing playhead for the guide clock, the master, and `OfflineDriver` as the clock. It
 //! renders `Graph` directly rather than through `AudioThread` because the delay row reads the
 //! slot's state between blocks; what `AudioThread` adds is the command drain and the swap fade.
@@ -41,11 +41,11 @@ pub fn run(setup: Setup) -> Take {
         }
     };
 
-    let mut first = Slot::engaged(source);
+    let mut first = Slot::new(source);
     first.set_guide(guide.map(Box::new));
     let mut slots = vec![first];
     slots.extend(
-        extra_voices.into_iter().map(|samples| Slot::engaged(Box::new(ClipSource::new(samples)))),
+        extra_voices.into_iter().map(|samples| Slot::new(Box::new(ClipSource::new(samples)))),
     );
     let voices = slots.len();
     let mut graph = Graph::new(slots);

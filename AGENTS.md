@@ -30,7 +30,8 @@ a decision record and the developer's agreement.
 - **Ingest kind**: how a slot's audio arrives. `rtp` is Opus over LAN UDP from a phone or from
   mediasoup, `l16` is raw PCM over loopback from a house mic, `push` is PCM the host hands in.
 - **Backing path**: the stems a singer performs over, on their own playhead. Key, speed, guide
-  vocal, seek and fades live here and may add latency. The mic path may not.
+  vocal, seek and fades live here and may add latency. The mic path may not, except the corrector
+  on a slot whose singer asked for it.
 - **Audio thread**: the OS callback that renders one block. **Control thread**: Node's event
   loop, where every API call runs.
 - **Block**: 128 frames at 48 kHz, 2.67 ms. The unit of every render and every ramp.

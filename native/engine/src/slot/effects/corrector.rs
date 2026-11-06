@@ -19,6 +19,11 @@ pub struct Corrector {
 }
 
 impl Corrector {
+    /// The most `latency_frames` can read, 15 ms: the shifter's floor and 1.125 periods of the
+    /// lowest voice it corrects, 82 Hz. It does not move with the voice, so it is what a latency
+    /// budget counts.
+    pub const MAX_LATENCY_FRAMES: u32 = 720;
+
     pub fn new() -> Self {
         Self { kernel: PitchCorrector::new(RATE), scratch: [0.0; BLOCK] }
     }
@@ -28,7 +33,7 @@ impl Corrector {
         self.kernel.reset();
     }
 
-    /// How far the voice trails its input now; 0 while bypassed.
+    /// How far the voice trails its input now; 0 with correction off.
     pub fn latency_frames(&self) -> usize {
         self.kernel.latency_samples()
     }
@@ -168,6 +173,31 @@ mod tests {
         assert!(
             (heard.hz - 220.0).abs() < 0.5 && heard.confidence > 0.9,
             "read {heard:?} for 220 Hz"
+        );
+    }
+
+    // The ceiling a host budgets with holds on the lowest voice the corrector takes, pulled as far
+    // as a shift goes each way, and it is close: a bound nothing reaches would overstate the cost.
+    #[test]
+    fn the_lowest_voice_stays_under_the_ceiling_at_any_shift() {
+        let mut highest = 0;
+        for target in [34, 37, 39, 41, 43, 46] {
+            let guide = Guide {
+                notes: vec![Note { midi: target, start_frame: 0, end_frame: 96_000 }],
+                key_mask: 0,
+            };
+            let mut corrector = Corrector::new();
+            let mut voice = tone(40.04, 96_000);
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                let frame = (index * BLOCK) as i64;
+                assert_no_alloc(|| corrector.process(&ON, Some(&guide), frame, 0, block, |_| {}));
+                highest = highest.max(corrector.latency_frames() as u32);
+            }
+        }
+        assert!(
+            (Corrector::MAX_LATENCY_FRAMES - 48..=Corrector::MAX_LATENCY_FRAMES).contains(&highest),
+            "the delay reached {highest} frames against {}",
+            Corrector::MAX_LATENCY_FRAMES
         );
     }
 

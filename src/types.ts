@@ -70,6 +70,13 @@ export interface SlotStats {
   concealed: number;
   resyncs: number;
   jitterMs: number;
+  /**
+   * How far the corrector holds this slot's voice now; 0 with correction off. It moves with the
+   * voice and one read is a sample of it, so show it and never add it to a budget or a clock.
+   */
+  correctorDelayMs: number;
+  /** The most that delay can reach; 0 with correction off. It holds still, so a budget adds this. */
+  correctorMaxDelayMs: number;
 }
 
 export type EngineEvents = {

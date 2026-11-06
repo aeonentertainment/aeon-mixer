@@ -3,21 +3,27 @@
 //! push feeds the host pushes into, and the ports the network thread listens on for the rest;
 //! and the end of its return stream, when it has one.
 
+use std::sync::Arc;
+
 use engine::block::MAX_SLOTS;
 use engine::graph::Graph;
 use engine::slot::Slot;
+use engine::slot::corrector_delay::CorrectorDelay;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use transport::Network;
 
 use crate::backing::BackingRender;
-use crate::ingest::{Ingest, SlotStatsInfo};
+use crate::ingest::Ingest;
 use crate::rtp_return::{RtpReturn, RtpReturnInput, RtpReturnStats};
+use crate::slot_stats_info::SlotStatsInfo;
 
 #[napi]
 pub struct Mixer {
     graph: Option<Box<Graph>>,
     slots: Vec<Ingest>,
+    /// Slot for slot with `slots`: what each corrector last published.
+    corrector_delays: Vec<Arc<CorrectorDelay>>,
     rtp_return: Option<RtpReturn>,
 }
 
@@ -41,10 +47,11 @@ impl Mixer {
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .unzip();
+        let corrector_delays = slots.iter().map(Slot::corrector_delay).collect();
         let mut graph = Box::new(Graph::new(slots));
         let rtp_return =
             rtp_return.map(|input| RtpReturn::open(input, &mut graph, network)).transpose()?;
-        Ok(Self { graph: Some(graph), slots: ingests, rtp_return })
+        Ok(Self { graph: Some(graph), slots: ingests, corrector_delays, rtp_return })
     }
 
     /// The graph, once: `swap` moves it to the audio thread.
@@ -96,10 +103,14 @@ impl Mixer {
         self.slot(index)?.record(path.as_deref())
     }
 
-    /// Every slot's ingest counters, as the audio thread last published them.
+    /// Every slot's ingest counters and corrector delay, as the audio thread last published them.
     #[napi]
     pub fn stats(&self) -> Vec<SlotStatsInfo> {
-        self.slots.iter().map(|slot| slot.stats().into()).collect()
+        self.slots
+            .iter()
+            .zip(&self.corrector_delays)
+            .map(|(slot, delay)| SlotStatsInfo::new(slot.stats(), delay.frames()))
+            .collect()
     }
 
     /// The return stream's counters, or null for a mixer without one.
@@ -113,6 +124,7 @@ impl Mixer {
     #[napi]
     pub fn release(&mut self) {
         self.slots.clear();
+        self.corrector_delays.clear();
         self.rtp_return = None;
         self.graph = None;
     }

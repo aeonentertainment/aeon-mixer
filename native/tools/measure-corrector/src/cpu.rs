@@ -49,7 +49,7 @@ fn core_alone(voice: &[f32], strength: f32) -> f64 {
     percent_of_core(started.elapsed().as_secs_f64(), voice.len())
 }
 
-/// `voices` copies of `voice` through engaged slots, all into one graph.
+/// `voices` copies of `voice` through slots, all into one graph.
 fn slots(voice: &[f32], voices: usize, params: CorrectorParams) -> f64 {
     let mut setup = Setup::new(Input::Samples(voice.to_vec()), voice.len(), params);
     setup.guide = Some(Guide { notes: Vec::new(), key_mask: EVERY_PITCH_CLASS });

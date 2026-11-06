@@ -9,7 +9,16 @@ import { type Mixer, type OfflineEngine, openEngine } from "../src/index.ts";
 const BLOCK = 128;
 /** The swap fade is 5 ms, under two blocks; the third block is clean. */
 const FADE_BLOCKS = 3;
-const SILENT_STATS = { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 };
+const SILENT_STATS = {
+  pushed: 0,
+  lost: 0,
+  late: 0,
+  concealed: 0,
+  resyncs: 0,
+  jitterMs: 0,
+  correctorDelayMs: 0,
+  correctorMaxDelayMs: 0,
+};
 
 async function startLive(engine: OfflineEngine, mixer: Mixer) {
   const started = mixer.start();
@@ -85,6 +94,32 @@ test("a mixed mixer runs silent until packets arrive, reports every slot's count
   mixer.resetSlot(2);
   expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
   expect(mixer.stats().slots).toEqual([SILENT_STATS, SILENT_STATS, SILENT_STATS]);
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("a slot reports the corrector's delay while correction is on and nothing once it is off", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  const corrector = () => {
+    const { correctorDelayMs, correctorMaxDelayMs } = mixer.stats().slots[0]!;
+    return { correctorDelayMs, correctorMaxDelayMs };
+  };
+  await startLive(engine, mixer);
+  engine.pump(1);
+  expect(corrector()).toEqual({ correctorDelayMs: 0, correctorMaxDelayMs: 0 });
+
+  mixer.setSlotEffects(0, [{ kind: "pitch-correction", enabled: true, strength: 1, retuneMs: 0 }]);
+  engine.pump(1);
+  const on = corrector();
+  // With no voice yet the shifter rests on its floor, 59 frames, and the ceiling is 15 ms
+  expect(on.correctorDelayMs).toBeCloseTo(59 / 48, 1);
+  expect(on.correctorMaxDelayMs).toBe(15);
+
+  mixer.setSlotEffects(0, []);
+  // Turning off crossfades over 20 ms, eight blocks
+  engine.pump(8);
+  expect(corrector()).toEqual({ correctorDelayMs: 0, correctorMaxDelayMs: 0 });
   await destroyLive(engine, mixer);
   await engine.close();
 });
