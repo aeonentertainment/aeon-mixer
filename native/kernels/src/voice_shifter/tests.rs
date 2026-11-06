@@ -11,6 +11,8 @@ const BLOCK: usize = 128;
 const PITCH_TOLERANCE_CENTS: f64 = 5.0;
 /// Long enough for the detector to have heard the voice, and the delay to have settled on it.
 const SETTLED_SECONDS: f64 = 0.25;
+/// How much of a voice's harmonic energy, here 20 dB down, says its grid is an octave out.
+const OCTAVE_FLOOR: f64 = 0.01;
 /// A vowel near /a/: where the formants sit, each with its bandwidth.
 const FORMANTS: [(f64, f64); 4] =
     [(700.0, 90.0), (1220.0, 110.0), (2600.0, 170.0), (3500.0, 250.0)];
@@ -150,7 +152,35 @@ fn pitch_near(stretch: &[f32], guess: f64) -> f64 {
         let top = (-span..=span).max_by(|a, b| score(*a).total_cmp(&score(*b))).unwrap_or(0);
         best = cents(top);
     }
-    guess * 2f64.powf(best / 1200.0)
+    let hz = guess * 2f64.powf(best / 1200.0);
+    assert_is_the_fundamental(&windowed, sum, hz);
+    hz
+}
+
+/// `pitch_near` sums a grid of harmonics, and a voice an octave away also lands on that grid, so it
+/// checks the grid is the right one. A voice an octave up leaves the odd harmonics empty; one an
+/// octave down fills the gaps between them.
+fn assert_is_the_fundamental(windowed: &[f64], sum: f64, hz: f64) {
+    let energy = |multiples: &[f64]| -> f64 {
+        multiples
+            .iter()
+            .map(|multiple| multiple * hz)
+            .take_while(|frequency| *frequency < 6_000.0)
+            .map(|frequency| amplitude_at(windowed, sum, frequency).powi(2))
+            .sum()
+    };
+    let odd = energy(&[1.0, 3.0, 5.0, 7.0, 9.0, 11.0]);
+    let even = energy(&[2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
+    let between = energy(&[0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5]);
+    let total = odd + even;
+    assert!(
+        odd > OCTAVE_FLOOR * total,
+        "an octave high of {hz:.1} Hz: odd {odd:.2e}, all {total:.2e}"
+    );
+    assert!(
+        between < OCTAVE_FLOOR * total,
+        "an octave low of {hz:.1} Hz: between {between:.2e}, all {total:.2e}"
+    );
 }
 
 /// How far the voice's harmonics sit from the envelope asked for, as the RMS in dB over the
@@ -514,6 +544,18 @@ fn concealment_of_lost_packets_stays_in_tune() {
         let change = 20.0 * (rms(tail(&run.output, 0.7)) / rms(tail(&input, 0.7))).log10();
         assert!(change.abs() < 3.0, "{semitones:+} x{factor}: level changed {change:+.1} dB");
     }
+}
+
+#[test]
+#[should_panic(expected = "an octave high")]
+fn the_pitch_check_catches_a_voice_an_octave_high() {
+    pitch_near(&vowel(440.0, 0.5), 220.0);
+}
+
+#[test]
+#[should_panic(expected = "an octave low")]
+fn the_pitch_check_catches_a_voice_an_octave_low() {
+    pitch_near(&vowel(110.0, 0.5), 220.0);
 }
 
 // The detector reads a wrong octave now and then, and a note must not follow it. The pitch out does
