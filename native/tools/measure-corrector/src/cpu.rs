@@ -43,7 +43,7 @@ fn core_alone(voice: &[f32], strength: f32) -> f64 {
     corrector.set_target(EVERY_PITCH_CLASS, strength, 40.0);
     let mut output = vec![0.0; 480];
     let started = ThreadTime::now();
-    for input in voice.chunks_exact(480) {
+    for input in voice.as_chunks::<480>().0 {
         corrector.process(input, &mut output);
     }
     percent_of_core(started.elapsed().as_secs_f64(), voice.len())

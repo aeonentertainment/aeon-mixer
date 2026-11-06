@@ -191,7 +191,9 @@ impl Envelope {
         let decibels = signal
             .get(lag..)
             .unwrap_or_default()
-            .chunks_exact(Self::FRAME)
+            .as_chunks::<{ Self::FRAME }>()
+            .0
+            .iter()
             .map(|frame| {
                 let energy: f32 = frame.iter().map(|s| s * s).sum::<f32>() / Self::FRAME as f32;
                 10.0 * f64::from(energy.max(1e-9)).log10()

@@ -66,7 +66,7 @@ pub fn encode(clip: &[f32], impairment: Impairment, dtx: bool, seed: u64) -> Enc
     let mut payload = [0u8; 1500];
     let mut seq = 1000u16;
     let mut in_dtx = false;
-    for (k, pcm) in clip.chunks_exact(FRAME).enumerate() {
+    for (k, pcm) in clip.as_chunks::<FRAME>().0.iter().enumerate() {
         let len = encoder.encode_float(pcm, &mut payload).expect("a frame Opus takes");
         let silent = len <= DTX_PAYLOAD;
         if !(silent && in_dtx) {
