@@ -1,23 +1,65 @@
-# 0006: How we measure latency
+# 0006: How we measure latency, and what a figure can say
 
-**Status:** accepted, 2026-11-05. This covers the engine's share, which is measured. The output's
-share on real hardware is #40's next step and comes with its own numbers.
+**Status:** accepted, 2026-11-05. The engine's share is measured. The hardware numbers are owed by a
+person on each OS.
 
 ## Decision
 
-`measure-latency` (`native/tools/measure-latency`) sends a known signal through the real mic path on
-the offline driver and times where it comes out.
+`measure-latency` (`native/tools/measure-latency`) has two modes built on one signal and one
+detector.
 
 - **The signal is a Hann-tapered linear chirp,** 0.5 to 7.5 kHz over 200 ms. The detector is a
   matched filter's envelope. It takes the earliest peak within 20 dB of the strongest and at most
   30 ms ahead of it, placed between frames by a parabola through the log.
-- **It runs the real path.** The chirp goes through a sender, the real jitter buffer, decoder, slot
-  and master, for every Opus frame size, l16 and push. It opens nothing, and a test holds its
-  numbers: adding 64 frames to the jitter buffer's anchor fails that test.
+- **Offline mode measures the engine's share.** The chirp goes through a sender, the real jitter
+  buffer, decoder, slot and master on the offline driver, for every Opus frame size, l16 and push. It
+  opens nothing, and a test holds its numbers: adding 64 frames to the jitter buffer's anchor fails
+  that test.
+- **Device mode measures the output's share.** The chirp goes through a real slot and a real output,
+  and a real input records it. The two streams are compared on the host clock, each through a line
+  fitted to its own wakes. It refuses to open anything without `device --open-device`.
 
-Offline alone needs no taper or onset rule, since it has no room in it. They are here because #40's
-hardware figure has to use the same signal and detector to be added to this one, and a real room is
-what they were chosen for.
+The mic path's figure is the offline total plus the device figure.
+
+## A loopback cannot be split, and the tool does not pretend to
+
+A loopback measures output latency plus input latency. No software measurement can separate them,
+and this is arithmetic. With outputs O1, O2 and inputs I1, I2, every run gives one sum. All four
+sums are unchanged if you add a constant to both outputs and subtract it from both inputs, so more
+devices and more runs never pin down a single O. Only something outside the sound card can, such as
+the Teensy that [WALT](https://github.com/google/walt/blob/master/docs/AudioLatency.md) uses, and
+that synchronises to about 1 ms. Android's own documentation
+[measures round trip instead](https://source.android.com/docs/core/audio/latency/measure). Paul Davis
+[says the same of Ardour](https://discourse.ardour.org/t/understanding-latency-figures/109819):
+"normally we can only measure the sum and divide by two on the assumption that they are equal". That
+assumption fails on the MacBook speakers, which decision 0003 puts at 17.4 ms of their own.
+
+So the tool does three things.
+
+1. **It takes the input's buffering out by construction.** A capture thread wakes after its frames
+   came off the hardware and never before. A line under all of an input's wakes dates each frame to
+   the earliest moment the OS could have delivered it, so the input's period drops out of the
+   figure. A test moves the input from 64 to 960 frames and the figure holds to 100 µs.
+2. **It prints what is left as a bound.** The ADC and the driver hold a frame before any wake can
+   happen. That share stays in, so the figure is `output at most`. Next to it sits the same figure
+   less what the OS reports for the input, labelled as trusting the OS.
+3. **It says differences are exact.** Two runs on one input cancel that input's share. 64 frames
+   against 128, a change on the mic path, or one output against another are free of the capture
+   side, and those differences are what most later issues need.
+
+## What makes it refuse
+
+A reading it cannot stand behind prints why instead of a number.
+
+- The input is silent, or the first sound stands under 30 dB over the noise.
+- The input lost frames, since its count of frames no longer says the time.
+- The figure moves more than 0.75 ms across one opening's chirps. An output that drops audio and
+  carries on keeps counting frames as if nothing happened, so its chirps either side of the dropout
+  disagree by the time lost. One 64-frame period is 1.33 ms. This reads the sound rather than the
+  backend's underrun count, because the count misses what the OS does not report, and in WASAPI
+  exclusive it counts every late wake of a driver that signals in bursts. Decision 0003 needs that
+  mode measured, and a refusal on the count would have ruled it out. A dropout after the last chirp
+  touches nothing the figure rests on and is not refused.
 
 ## What the signal choice rests on
 
@@ -63,7 +105,7 @@ speaker. Three things decided against it:
 | Peak over floor, one clock, -40 dBFS noise | 47 dB                   | 37 dB, its own self-noise    |
 | Same, input 300 ppm from the output        | 46 dB                   | 12 dB                        |
 
-The first is decisive, since this mode has to read through the codec and one signal for every mode
+The first is decisive, since offline mode has to read through the codec and one signal for both modes
 keeps one detector. The second is MLS outside the periodic use it is designed for. The third matters
 on any rig with a USB mic.
 
@@ -97,8 +139,14 @@ block sets the delay for the whole stream. Most of what the path spends is the s
 20 ms voice frames to 2.5 ms low-delay frames saves 21.5 ms, far more than anything left in the
 engine.
 
+Hardware numbers go here when they exist. The rig is a mic at the speaker where possible, since a
+powered speaker's own processing is delay the room hears and a cable never sees.
+
 ## Not measured yet
 
-- Anything after the master. These figures stop at the engine's output, with no device, network or
-  room in them.
-- A phone's capture and the Wi-Fi, which are outside what this tool can reach.
+- Every hardware figure: nobody has run device mode. Its analysis is tested only on a simulated
+  device, with a known answer, on the offline driver.
+- How far the input's residual reaches on real hardware. Running one output with two different
+  inputs gives the difference between their residuals, the closest software can get.
+- The whole path from a singer's mouth. A phone's capture and the Wi-Fi are outside what this tool
+  can reach.

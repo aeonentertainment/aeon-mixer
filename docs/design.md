@@ -248,7 +248,7 @@ native/
   devices/              Driver implementations: coreaudio, wasapi, alsa, the timer clock;
                         the measure-sink and measure-clock binaries
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
-  tools/measure-latency/  the engine's share of the mic path, per ingest kind, on the offline driver
+  tools/measure-latency/  the mic path's latency: the engine's share offline, the output's on hardware
   tools/replay/         a slot's recording through the real chain on the offline driver
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
@@ -886,10 +886,11 @@ TypeScript suite exercises them on the offline engine.
 ### 8.9 Tools: `native/tools/`
 
 Tools live in the Rust workspace, because what they measure is the engine. `measure-sink` is in
-`devices`. `measure-latency` gives the mic-path number. Today that is the engine's share of each
-ingest kind on the offline driver, which opens nothing and which a test holds. The output's share
-on real hardware is #40's next step. Decision [0006](decisions/0006-measuring-latency.md) has how it
-works. Their output is the evidence a PR quotes.
+`devices`. `measure-latency` gives the mic-path number in two parts: the engine's share of each
+ingest kind on the offline driver, which opens nothing and which a test holds, and the output's
+share on real hardware, which a person runs with `device --open-device`. Decision
+[0006](decisions/0006-measuring-latency.md) has how it works and what its figures cannot say. Their
+output is the evidence a PR quotes.
 
 A new ingest kind is a variant of `Ingest`, and a new stage on the mic path, such as correction or
 echo cancelling, is a new row in the offline table with its own guard.

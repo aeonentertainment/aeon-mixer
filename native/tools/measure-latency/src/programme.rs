@@ -24,6 +24,17 @@ impl Programme {
         }
     }
 
+    /// A room rings and a device can hide a lot, so the gap is long and the chirps many, which
+    /// shows how much the figure moves from one to the next.
+    pub fn device(level: f32) -> Self {
+        Self {
+            chirp: Chirp::voice_band(level),
+            preroll: RATE as usize * 4 / 10,
+            gap: RATE as usize * 4 / 10,
+            repeats: 8,
+        }
+    }
+
     /// Frames from one chirp's start to the next, and the most delay a path may have.
     pub fn interval(&self) -> usize {
         self.chirp.frames + self.gap

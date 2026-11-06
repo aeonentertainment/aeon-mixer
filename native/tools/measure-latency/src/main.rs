@@ -1,5 +1,6 @@
-//! The engine's share of the mic path's latency. See `USAGE`, and
-//! docs/decisions/0006-measuring-latency.md for what the figures say. It opens no device.
+//! The mic path's latency. See `USAGE`, and docs/decisions/0006-measuring-latency.md for what the
+//! figures can and cannot say. A person runs the `device` mode on real hardware; everything else,
+//! tests included, opens nothing.
 
 use std::process::ExitCode;
 
@@ -18,6 +19,7 @@ fn main() -> ExitCode {
         Command::Offline { playout_frames } => {
             offline::measure_all(playout_frames).map(|rows| print!("{}", report::offline(&rows)))
         }
+        Command::Device(_) | Command::List => hardware(command),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -26,4 +28,14 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(feature = "hardware")]
+fn hardware(command: Command) -> Result<(), String> {
+    measure_latency::device::run(command)
+}
+
+#[cfg(not(feature = "hardware"))]
+fn hardware(_command: Command) -> Result<(), String> {
+    Err("this build opens no device. Build with --features hardware".into())
 }
