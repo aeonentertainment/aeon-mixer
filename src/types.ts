@@ -70,6 +70,8 @@ export interface SlotStats {
 
 export type EngineEvents = {
   fault: (error: Error) => void;
+  /** The mix after the clipper, reactions included, between songs too. */
+  masterLevel: (rmsDb: number, peakDb: number) => void;
 };
 
 export type MixerEvents = {
