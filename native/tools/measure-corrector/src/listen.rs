@@ -512,6 +512,11 @@ mod tests {
     }
 
     #[test]
+    fn a_relative_path_that_does_not_exist_yet_is_still_compared_absolute() {
+        assert!(resolved(Path::new("no-such-folder/clips")).is_absolute());
+    }
+
+    #[test]
     fn audio_refuses_a_repo_and_a_key_beside_its_clips() {
         let root = scratch("places");
         std::fs::create_dir_all(root.join("repo/.git")).unwrap();
