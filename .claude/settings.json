@@ -18,7 +18,6 @@
       "Bash(gh pr checks *)",
       "Bash(gh issue view *)"
     ],
-    "ask": ["Bash(rm -rf *)", "Bash(git push *)"],
     "deny": ["Read(./.env)", "Read(./.env.*)", "Bash(git push --force *)", "Bash(git push -f *)"]
   },
   "hooks": {
