@@ -76,10 +76,10 @@ input's pitch times the ratio, whatever the detector says.
 | vocadito 2, 10, 19: frames within 20 cents of input times ratio     | 73 to 94 %                                | 84 to 98 %             |
 | vocadito 2, 10, 19: periodicity read back against the input's 0.97  | 0.92 to 0.97                              | 0.92 to 0.97           |
 
-The stressed cases are what a singer does. On a tone both reach their tolerances. Each has a
-number only a listen can read: grains cannot blur a consonant through a filter, and the chosen
-design can, so the rejected grains are in the listen set too. If the listen disagrees, this file
-changes.
+The stressed cases are what a singer does. On a steady tone up to 440 Hz both designs reach their
+tolerances. A listen still has to settle it: grains cannot blur a consonant through a filter and
+this design can, so the rejected grains are in the listen set too. If the listen disagrees, this
+file changes.
 
 ## Settings the measurements chose
 
