@@ -66,6 +66,7 @@ input's pitch times the ratio, whatever the detector says.
 
 | Measured, shift ±6                                                  | Grains                                    | Delay line and filter  |
 | ------------------------------------------------------------------- | ----------------------------------------- | ---------------------- |
+| Tones, 82 to 220 Hz: envelope error, RMS                            | 2.2 to 4.4 dB                             | 0.7 to 2.8 dB          |
 | Synthetic vibrato, 5.5 Hz, ±50 cents: output's lag behind the input | 18 to 26 ms                               | 2 to 8 ms              |
 | The same: RMS from the input's track                                | 7 to 11 cents                             | 2 to 4 cents           |
 | Pitch step: settled within 20 cents                                 | 51 to 61 ms                               | 11 to 21 ms            |

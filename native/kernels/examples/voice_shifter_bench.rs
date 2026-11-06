@@ -48,12 +48,12 @@ fn measure(
     let (mut sum, mut count, mut most) = (0, 0, 0);
     for _ in 0..RUNS {
         let start = Instant::now();
-        for block in input.chunks_exact(BLOCK) {
+        for block in input.as_chunks::<BLOCK>().0 {
             process(block, &mut output);
         }
         best = best.min(start.elapsed().as_secs_f64());
     }
-    for block in input[..(5 * RATE) as usize].chunks_exact(BLOCK) {
+    for block in input[..(5 * RATE) as usize].as_chunks::<BLOCK>().0 {
         process(block, &mut output);
         let samples = latency();
         sum += samples;

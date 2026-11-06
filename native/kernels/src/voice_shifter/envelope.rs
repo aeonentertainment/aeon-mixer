@@ -35,9 +35,9 @@ const MOST_LAGS: usize = 2 * ORDER + 4;
 /// percent of a core.
 fn dot(a: &[f32], b: &[f32]) -> f32 {
     let mut lanes = [0.0; 8];
-    let (a_chunks, b_chunks) = (a.chunks_exact(8), b.chunks_exact(8));
-    let (a_rest, b_rest) = (a_chunks.remainder(), b_chunks.remainder());
-    for (a, b) in a_chunks.zip(b_chunks) {
+    let (a_chunks, a_rest) = a.as_chunks::<8>();
+    let (b_chunks, b_rest) = b.as_chunks::<8>();
+    for (a, b) in a_chunks.iter().zip(b_chunks) {
         for ((lane, x), y) in lanes.iter_mut().zip(a).zip(b) {
             *lane += x * y;
         }
