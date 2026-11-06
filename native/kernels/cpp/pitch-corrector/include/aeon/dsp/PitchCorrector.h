@@ -7,12 +7,12 @@
 namespace aeon::dsp {
 
 /**
- * Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 10 ms YIN
- * reads the input; the distance to the nearest class in the target, scaled by the strength and
- * eased in over the retune time, becomes a transposition that PitchShifter applies. The output trails the
- * input by 1.2 ms plus at most 1.125 periods of the voice. At strength 0 the output is the input
- * itself with no delay, and turning the strength up from or down to 0 crossfades over 20 ms;
- * the detector runs either way.
+ * Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 5 ms
+ * PitchReader reads the input; the distance from where the voice is now to the nearest class in
+ * the target, scaled by the strength and eased in over the retune time, becomes a transposition
+ * that PitchShifter applies. The output trails the input by 1.2 ms plus at most 1.125 periods of
+ * the voice. At strength 0 the output is the input itself with no delay, and turning the strength
+ * up from or down to 0 crossfades over 20 ms; the reader runs either way.
  *
  * A host calls `process` from its audio thread and `setTarget` between calls. Nothing
  * allocates after construction.
@@ -31,11 +31,11 @@ class PitchCorrector {
   /** Forgets the voice it was hearing, for a new stream on the same channel; keeps the target and allocates nothing. */
   void reset();
 
-  /** The newest detector reading. */
+  /** The newest reading, of where the voice was at its window's centre. */
   Pitch detected() const;
-  /** Frames until the next detector reading; a host that publishes every reading processes at most this many at a time. */
+  /** Frames until the next reading to publish, one every 10 ms; a host that publishes them processes at most this many at a time. */
   int framesUntilReading() const;
-  /** How far a reading's centre trails the newest sample it read: half the detector's window. */
+  /** How far the newest reading's centre trails the newest sample it read: half the window it took, which follows the voice. */
   int readingLagSamples() const;
   /** The newest reading's distance to the class it is pulled toward, in semitones; 0 while unvoiced. */
   float errorSemitones() const;

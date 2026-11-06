@@ -152,7 +152,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | Opus frames accepted | 2.5, 5, 10, 20 ms                            | the phone's native module sends short frames; mediasoup sends 20       |
 | Return branch        | 10 ms Opus frames, in-band FEC on            | what the display's jitter buffer is tuned for today                    |
 | Level event          | 10 Hz, RMS and peak over 100 ms              | the device maps words at 5 Hz                                          |
-| Pitch event          | every 10 ms, batched per events-thread drain | the detector's own cadence                                             |
+| Pitch event          | every 10 ms, batched per events-thread drain | every second reading, as much as the display and the score use         |
 
 | Ramp                       | Length                            |
 | -------------------------- | --------------------------------- |
@@ -332,7 +332,7 @@ pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the f
 pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples()
 pub struct Stretch;         // new(channels, rate, preset), set_transpose_semitones(f32), process(planar in, planar out), latency_frames()
 pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
-pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
+pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: one window of the corrector's reader
 pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
 ```
 
@@ -645,6 +645,9 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   every note edge so the target changes on the sample the guide names, and posts a reading
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
 - At strength zero the corrector is bypassed with no delay and still reads pitch.
+- The corrector reads every 5 ms from the shortest window that holds the voice and steers from
+  where the voice is now. A published reading is the raw one, placed at its own window's centre, so
+  its lag follows the voice. [Decision 0006](decisions/0006-pitch-reading.md) has the numbers.
 - The slot drives two stages from `slot::effects`, each in place on its mono block.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and

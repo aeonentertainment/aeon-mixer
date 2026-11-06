@@ -10,8 +10,8 @@ const CHROMATIC: Target = Target { mask: EVERY_PITCH_CLASS, midi: None };
 
 /// The slot's pitch corrector, following the song's melody guide: Aeon Karaoke's `aeonpitch`
 /// element, ported off GStreamer. It splits a run at every note edge, so the target changes on
-/// the sample the guide names, and at every detector reading, so each one is published. The
-/// slot owns the guide and lends it to each `process`.
+/// the sample the guide names, and at every reading the kernel has to publish. The slot owns the
+/// guide and lends it to each `process`.
 pub struct Corrector {
     kernel: PitchCorrector,
     /// The kernel reads and writes separate buffers; the slot's block is copied through this.
@@ -157,11 +157,12 @@ mod tests {
             }
         });
 
-        // 375 blocks of 128 frames hold 100 hops of 480
+        // 375 blocks of 128 frames hold 100 hops of 480. A3 reads from the 512 window once it has
+        // filled the window, its centre 256 frames behind the reading
         assert_eq!(readings.len(), 100);
-        let lag_ms = 1024.0 / 48.0;
-        assert!((readings[0].position_ms - (100.0 + 10.0 - lag_ms)).abs() < 1e-9);
-        for pair in readings.windows(2) {
+        let lag_ms = 256.0 / 48.0;
+        assert!((readings[99].position_ms - (100.0 + 1000.0 - lag_ms)).abs() < 1e-9);
+        for pair in readings[10..].windows(2) {
             assert!((pair[1].position_ms - pair[0].position_ms - 10.0).abs() < 1e-9);
         }
         let heard = readings.last().unwrap();

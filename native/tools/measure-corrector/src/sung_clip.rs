@@ -127,6 +127,9 @@ pub fn load_take(name: &str, wav: &Path, guide: &Path) -> Result<(SungClip, f64)
     Ok((clip, offset))
 }
 
+/// Offsets this close in median miss line up equally well.
+const TIED_CENTS: f64 = 1.0;
+
 /// Where in the take `notes` line up best, in 10 ms steps: the offset with the lowest median miss
 /// over the notes that have singing under them, weighing notes covered so an empty stretch of the
 /// take cannot win by having one lucky note.
@@ -134,7 +137,7 @@ pub fn best_offset_ms(samples: &[f32], notes: &[MeantNote], search_ms: f64) -> f
     let points = crate::contour::read(samples, 0);
     let voiced: Vec<_> = points.iter().filter(|point| point.voiced()).collect();
     let steps = (search_ms / 10.0) as i64;
-    let mut best = (f64::INFINITY, 0.0);
+    let mut scores = Vec::with_capacity(2 * steps as usize + 1);
     for step in -steps..=steps {
         let offset = step as f64 * 10.0;
         let mut misses = Vec::with_capacity(voiced.len());
@@ -149,12 +152,21 @@ pub fn best_offset_ms(samples: &[f32], notes: &[MeantNote], search_ms: f64) -> f
         if misses.len() < voiced.len() / 4 {
             continue;
         }
-        let score = median(&misses);
-        if score < best.0 {
-            best = (score, offset);
-        }
+        scores.push((offset, median(&misses)));
     }
-    best.1
+    centre_of_lowest_run(&scores)
+}
+
+/// A long note in tune scores alike at every offset that keeps it under its note, so the lowest
+/// score is a run, not a point: the middle of that run is where the notes line up.
+fn centre_of_lowest_run(scores: &[(f64, f64)]) -> f64 {
+    let lowest = scores.iter().map(|(_, score)| *score).fold(f64::INFINITY, f64::min);
+    let Some(first) = scores.iter().position(|(_, score)| *score <= lowest + TIED_CENTS) else {
+        return 0.0;
+    };
+    let run = scores[first..].iter().take_while(|(_, score)| *score <= lowest + TIED_CENTS);
+    let last = run.last().map_or(scores[first].0, |(offset, _)| *offset);
+    (scores[first].0 + last) / 2.0
 }
 
 #[cfg(test)]
