@@ -33,14 +33,15 @@ a decision record and the developer's agreement.
 - **Block**: 128 frames at 48 kHz, 2.67 ms. The unit of every render and every ramp.
 - **Offline driver**: the test clock. It calls render in a loop with no device and no socket.
 - **Kernel**: a C++ DSP leaf compiled into the addon: the pitch corrector, the stretcher.
-- **Latency budget**: mouth-to-speaker time. Target 40 to 60 ms; under 30 ms the singer's own
-  voice fuses with the room and the echo disappears.
+- **Latency budget**: mouth-to-speaker time on the mic path, with the singer's effects on. Target
+  20 to 30 ms, where a singer stops hearing the speakers as a late copy of their own voice.
+  Decision 0008 has the evidence.
 - **Device**: the LAN box or desktop app that hosts the engine.
 
 ## Things we never compromise
 
-1. **The latency budget.** Every buffer, queue and resample on the mic path is a cost against
-   40 to 60 ms. Add one only with a measurement that shows the budget still holds.
+1. **The latency budget.** Every buffer, queue, resample and effect on the mic path is a cost
+   against 20 to 30 ms. Add one only with a measurement that shows the budget still holds.
 2. **The audio thread allocates nothing, locks nothing, calls nothing in the OS and never
    panics.** Audio never crosses to JavaScript. How parameters, commands and events cross is
    docs/design.md section 2.

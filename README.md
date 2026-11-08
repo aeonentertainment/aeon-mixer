@@ -5,7 +5,7 @@ Phones on the LAN, wired mics and wireless mics are the microphones. The mixer t
 streams and a backing track, and plays one mix to the room.
 
 A native engine owns the audio device's output callback. TypeScript drives it through a Node
-addon, and no audio crosses into JavaScript. Mouth to speaker, the target is 40 to 60 ms. The
+addon, and no audio crosses into JavaScript. Mouth to speaker, the target is 20 to 30 ms. The
 package is private and not yet published; Aeon Karaoke's device service is its one consumer.
 
 ## Use
