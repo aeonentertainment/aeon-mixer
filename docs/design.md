@@ -556,6 +556,13 @@ ring into the jitter buffer at the top of each block.
   time is concealed by the decoder, with in-band FEC from the next packet when that is already
   in hand. A packet that arrives after its time is counted late and dropped; it never silences
   or resets the stream.
+- A pause is not a loss. A phone's Opus runs with DTX, and through a pause its sequence number
+  holds while its timestamp runs on, as RFC 3551 4.1 has a sender that suppresses silence do.
+  Until a later packet arrives a pause and a loss look the same, so the buffer conceals the time
+  and keeps waiting for the same sequence number. The first packet after a pause carries it and
+  plays on time; a later one arriving first counts the awaited one lost. Lateness is judged on
+  the timestamp: a packet whose time the buffer has concealed is late. The marker bit a sender
+  sets after a pause is a SHOULD, so nothing relies on it.
 - A slot chooses its own delay unless the host pins one with `playoutDelayMs`. A stream opens at
   15 ms. Every half second the buffer notes the slack of the half second's latest and earliest
   packets against their due times. Once 20 notes, ten seconds, leave at least a block of room,
@@ -600,11 +607,13 @@ ring into the jitter buffer at the top of each block.
 
 Done when: a test feeds synthetic RTP with reordering, 30 ms jitter spikes and 5 percent loss
 through the offline driver and the output matches the source within the concealment's expected
-error; frames of 2.5, 5, 10 and 20 ms all pass; a packet arriving late never produces a gap
-longer than the frame it missed; a stream that pauses for two seconds resumes without a
-growing delay; a slot left to choose falls to the floor on a clean link on every frame size, stays
-exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a quiet moment, and
-loses at most 0.1 percent more of its packets to lateness than the same song at the opening delay.
+error; frames of 2.5, 5, 10 and 20 ms all pass; a packet arriving late never produces a gap longer
+than the frame it missed; a stream that pauses for two seconds resumes without a growing delay; a
+pause under a second with its sequence numbers contiguous loses nothing and every packet after it
+plays at the stream's delay; a slot left to choose falls to the floor on a clean link on every
+frame size, stays exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a
+quiet moment, and loses at most 0.1 percent more of its packets to lateness than the same song at
+the opening delay.
 
 ### 8.5 Backing: `engine/src/backing/`
 

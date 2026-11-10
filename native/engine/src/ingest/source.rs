@@ -232,6 +232,72 @@ mod tests {
         assert_eq!(stats.late, 0);
     }
 
+    /// Opus DTX on the wire: through a pause the sender's timestamp runs on and its sequence
+    /// number holds, so the first packet after it carries the very next one. Pauses of 360 ms,
+    /// libopus's gap between its DTX refreshes, and 900 ms, just under a new stream, on every
+    /// frame size: each part after a pause plays at the first part's delay, nothing is late,
+    /// lost or re-anchored, and the pause is concealment, not loss.
+    #[test]
+    fn a_dtx_pause_under_a_second_loses_nothing_and_plays_on_time() {
+        let signal = source(3 * RATE as usize);
+        let (parts, _) = signal.as_chunks::<{ RATE as usize }>();
+        let pauses = [0, 360 * RATE / 1000, 900 * RATE / 1000];
+        for frame in [120usize, 240, 480, 960] {
+            let mut sender = OpusSender::new(frame, 0xD7);
+            let mut sent = Vec::new();
+            let mut starts = Vec::new();
+            let mut start = 0i64;
+            for (part, pause) in parts.iter().zip(pauses) {
+                sender.pause(pause);
+                start += i64::from(pause);
+                starts.push(start);
+                sent.extend(sender.send_all(part, start));
+                start += part.len() as i64;
+            }
+            let arrivals = impair(&sent, Impairment::NONE, 12);
+            let mut rig = Rig::new(Codec::opus().unwrap());
+            rig.run(&arrivals, anchor_of(&arrivals) + start);
+            let expected = anchor_of(&arrivals) + sender.lookahead as i64;
+            let delays: Vec<i64> = parts
+                .iter()
+                .zip(&starts)
+                .map(|(part, start)| {
+                    let fit = compare(part, 960, &rig.out, expected + start, BLOCK as i64);
+                    assert!(fit.snr_db() > 9.0, "{frame}, from {start}: {fit:?}");
+                    fit.lag - start
+                })
+                .collect();
+            assert!((delays[0] - expected).abs() <= 10, "{frame}: {delays:?} for {expected}");
+            assert!(delays.iter().all(|d| (d - delays[0]).abs() <= 2), "{frame}: {delays:?}");
+            let stats = rig.stats();
+            assert_eq!((stats.late, stats.lost, stats.resyncs), (0, 0, 0), "{frame}: {stats:?}");
+            assert!(stats.concealed > 0, "{frame}: the pauses are concealed");
+        }
+    }
+
+    /// A pause and a loss together: the first packet after a pause never comes. The one after
+    /// it shows the loss, which is counted once, and the stream plays on at its delay.
+    #[test]
+    fn a_packet_lost_as_a_pause_ends_is_counted_lost_once() {
+        let signal = source(2 * RATE as usize);
+        let (first, second) = signal.split_at(RATE as usize);
+        let mut sender = OpusSender::new(960, 0xD8);
+        let mut sent = sender.send_all(first, 0);
+        let pause = 500 * RATE / 1000;
+        sender.pause(pause);
+        let resumed = SECOND + i64::from(pause);
+        sent.extend(sender.send_all(second, resumed));
+        sent.remove(50);
+        let arrivals = impair(&sent, Impairment::NONE, 13);
+        let mut rig = Rig::new(Codec::opus().unwrap());
+        rig.run(&arrivals, anchor_of(&arrivals) + resumed + second.len() as i64);
+        let expected = anchor_of(&arrivals) + sender.lookahead as i64 + resumed;
+        let fit = compare(second, 2 * 960, &rig.out, expected, BLOCK as i64);
+        assert!((fit.lag - expected).abs() <= 10 && fit.snr_db() > 9.0, "{expected}: {fit:?}");
+        let stats = rig.stats();
+        assert_eq!((stats.late, stats.lost, stats.resyncs), (0, 1, 0), "{stats:?}");
+    }
+
     /// A new SSRC or `ResetSlot` is a new singer: the stream re-anchors at the next packet, and
     /// what the old stream still had in hand, under a playout delay's worth, goes with it.
     #[test]

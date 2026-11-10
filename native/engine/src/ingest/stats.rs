@@ -7,11 +7,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 pub struct SlotStats {
     /// Packets taken from the ring.
     pub pushed: u32,
-    /// Packets missing when their samples fell due.
+    /// Packets that never came, known by a later one arriving first. A sender's pause, its
+    /// sequence number held while its timestamp runs on, is no loss.
     pub lost: u32,
     /// Packets that arrived after their samples fell due, and were dropped.
     pub late: u32,
-    /// Frames the decoder filled in for a missing packet or a skew correction.
+    /// Frames the decoder filled in for a missing packet, a pause or a skew correction.
     pub concealed: u32,
     /// Anchor moves: a new stream, or a one-frame skew correction.
     pub resyncs: u32,
