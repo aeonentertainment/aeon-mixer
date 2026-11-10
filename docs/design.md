@@ -165,8 +165,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 
 ## 5. Lifecycle
 
-- **Open.** `openEngine` picks the device, starts the driver with the silent graph, and returns
-  once the first block has rendered. The stream stays open until `close`.
+- **Open.** `openEngine` picks the device, or the timer clock where nothing plays locally,
+  starts the driver with the silent graph, and returns once the first block has rendered. The
+  stream stays open until `close`.
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
   stem buffers, everything pre-allocated. If the backing has an armed key or speed, a render
   job starts on the worker thread and `renderProgress` events report it. The mixer object
@@ -223,7 +224,8 @@ native/
     build.rs            cc compiles cpp/
     cpp/                vendored sources with licences and the commit they came from
   transport/            the network thread: UDP receive into packet rings, RTP return sender
-  devices/              Driver implementations: coreaudio, wasapi, alsa; the measure-sink binary
+  devices/              Driver implementations: coreaudio, wasapi, alsa, the timer clock;
+                        the measure-sink and measure-clock binaries
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
   tools/replay/         a slot's recording through the real chain on the offline driver
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
@@ -258,6 +260,9 @@ pub trait Driver {
 pub type Render = Box<dyn FnMut(Stereo<'_>) + Send + 'static>;
 pub struct StreamInfo { pub sample_rate: u32, pub period_frames: u32, pub output_latency_frames: u32 }
 pub struct Running { pub info: StreamInfo, /* stop() on drop */ }
+/// devices/src/timer/: the clock for a box with no sound card. `new(Arc<Stats>)`; its own thread
+/// renders a block at each deadline on the OS's monotonic clock. Built without the `hardware` feature.
+pub struct TimerDriver;
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
 pub struct OfflineDriver;
@@ -355,7 +360,8 @@ export type IngestKind = "rtp" | "l16" | "push";
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
-  output: { device?: string; periodFrames?: 64 | 128 } | { offline: true };
+  // `timer`: no device; the engine's own thread renders on the OS's clock (decision 0011)
+  output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   slots?: number; // fixed for the engine's life, default 8, at most 16
   playoutDelayMs?: number; // pins the ingest jitter buffer; left out, each slot chooses its own (8.4)
 }
@@ -520,6 +526,12 @@ and a realtime audio thread where the host grants one. Each reports what it got 
   latency, the callback timing distribution and the underrun count. Those numbers go into
   decision 0003 per OS before any crate is final.
 - Device enumeration lists outputs and inputs and marks the default. Hotplug is decided later.
+- The timer clock is the `Driver` for a box with no sound card. A thread of ours sleeps to each
+  block's absolute deadline on the monotonic clock and renders every block that has fallen due,
+  at most a second's worth, so the output clock keeps to wall time. Its period is one block and
+  its latency zero. The wait is the clock, between renders, as a backend's thread waits on its
+  device; render itself keeps section 2's rules. `measure-clock` prints its wakes in
+  `measure-sink`'s form. Decision 0011 has the numbers and what was rejected.
 
 `Capture` is `Driver`'s other half, and it is here before any backend has one. #40 has to record at
 a real input to measure a real output, and #52 will build its house-mic input on the same thing, so
