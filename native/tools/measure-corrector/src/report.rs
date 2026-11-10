@@ -196,7 +196,7 @@ pub fn table(result: &Value) -> String {
     }
     for (clip, conditions) in clips {
         let variants = &conditions["opus-lan"]["variants"];
-        if variants.is_null() || clip == "phone" {
+        if variants.is_null() || clip.starts_with("phone") {
             continue;
         }
         let read = |variant: &str| number(&variants[variant]["median_cents"], 1);

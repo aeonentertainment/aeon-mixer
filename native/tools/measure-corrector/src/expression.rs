@@ -19,7 +19,7 @@ pub const WARBLE_BAND: (f64, f64) = (3.0, 12.0);
 pub const VIBRATO_BAND: (f64, f64) = (4.0, 8.0);
 /// RMS cents in the vibrato band above which a note is said to have vibrato: about 14 cents of
 /// extent either side, the narrow end of what singers use on purpose.
-const HAS_VIBRATO_CENTS: f64 = 10.0;
+pub const HAS_VIBRATO_CENTS: f64 = 10.0;
 /// A note needs a second of contour to resolve 3 Hz with a window on it; less still resolves
 /// vibrato, so this is the shortest note read at all. Half a second is three cycles at 6 Hz.
 const SHORTEST_NOTE_MS: f64 = 500.0;
@@ -68,7 +68,7 @@ fn without_trend(series: &[f64]) -> Vec<f64> {
 
 /// A note's contour every 10 ms, in cents from the note in whatever octave it was sung. A short
 /// hole is bridged in a line. `None` when under four fifths of it is voiced.
-fn note_contour(points: &[Point], note: &MeantNote) -> Option<Vec<f64>> {
+pub fn note_contour(points: &[Point], note: &MeantNote) -> Option<Vec<f64>> {
     let from = note.start_ms + NOTE_LEAD_MS;
     let to = note.end_ms - NOTE_TAIL_MS;
     let meant = f64::from(note.midi);
