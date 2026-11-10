@@ -1,13 +1,13 @@
-//! The jitter buffer of docs/design.md 8.4. The first packet of a stream anchors its RTP
-//! timestamp to the output clock plus the playout delay; from then on every packet has a due
-//! time, and it is decoded in the block that time falls in. A packet missing when due is
-//! concealed, from the next packet's in-band FEC when there is one. Until a later packet comes,
-//! a missing packet and a sender's pause look the same, so the buffer conceals the time and
-//! keeps waiting for that sequence number; RFC 3551 4.1 has a pause hold the sequence number
-//! while the timestamp runs on. A packet arriving after its time is counted late and dropped,
-//! and the stream plays on. Clock skew is corrected one frame
-//! at a time, by moving the anchor a frame and dropping or concealing the frame that makes. A
-//! new SSRC, a gap over a second on either clock, or `reset` starts a new stream.
+//! The jitter buffer of docs/design.md 8.4. The first packet of a stream anchors its RTP timestamp
+//! to the output clock plus the playout delay; from then on every packet has a due time, and it is
+//! decoded in the block that time falls in. A packet missing when due is concealed, from the next
+//! packet's in-band FEC when there is one. Until a later packet comes, a missing packet and a
+//! sender's pause look the same, so the buffer conceals the time and keeps waiting for that
+//! sequence number; RFC 3551 4.1 has a pause hold the sequence number while the timestamp runs on.
+//! A packet arriving after its time is counted late and dropped, and the stream plays on. Clock
+//! skew is corrected one frame at a time, by moving the anchor a frame and dropping or concealing
+//! the frame that makes. A new SSRC, a gap over a second on either clock, or `reset` starts a new
+//! stream.
 
 use std::sync::Arc;
 
@@ -32,7 +32,8 @@ const SKEW_WINDOW: i64 = RATE as i64;
 const SKEW_MIN_PACKETS: u32 = 8;
 
 /// Decodes or concealments one pull may do. Two 120-frame packets cover a 128-frame block;
-/// the rest is room for a gap fill, a timestamp jump and the one overlap a skew drop discards.
+/// the rest is room for a gap fill, a timestamp jump, a pass over lost packets whose time is
+/// already concealed, and the one overlap a skew drop discards.
 const MAX_STEPS: usize = 8;
 
 /// Decoded samples waiting to play: the longest packet plus a block, with room to spare.
@@ -270,16 +271,19 @@ fn fill(
                 (decoded, true)
             }
         } else if let Some((distance, next)) = stream.next_in_hand(store) {
-            // A later packet came first, so this one is lost. Time concealed while it was
-            // awaited is not concealed again
-            stats.lost += 1;
+            // A later packet came first, so the ones before it are lost. Those whose time was
+            // concealed while they were awaited are passed over together, in one step
             let waited = i64::from(next.timestamp.wrapping_sub(stream.next_ts) as i32);
-            let uncovered = waited - i64::from(distance - 1) * stream.frame as i64;
-            if uncovered <= 0 {
-                stream.next_seq = stream.next_seq.wrapping_add(1);
+            let frame = stream.frame as i64;
+            let needed = if waited > 0 { (waited + frame - 1) / frame } else { 0 };
+            let covered = (i64::from(distance) - needed).max(0) as u16;
+            if covered > 0 {
+                stats.lost += u32::from(covered);
+                stream.next_seq = stream.next_seq.wrapping_add(covered);
                 continue;
             }
-            let uncovered = uncovered as usize;
+            stats.lost += 1;
+            let uncovered = (waited - i64::from(distance - 1) * frame) as usize;
             let fec = distance == 1 && uncovered <= MAX_FRAME;
             let frames = if fec { uncovered } else { uncovered.min(stream.frame) };
             codec.conceal(fec.then(|| next.payload()), &mut scratch[..frames]);
