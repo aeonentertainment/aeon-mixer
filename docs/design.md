@@ -107,6 +107,12 @@ What the engine reports so the rest of the device can follow:
   guide clock is the playhead less `backingOffsetMs` less the slot's mic-path latency, which the
   engine knows, plus a host-set `guideOffsetMs` for what it cannot know: the phone's capture and
   the Wi-Fi.
+- An engaged corrector delays its slot's voice by an amount that moves with the voice, and holds
+  it through a rest. `stats()` gives each slot `correctorDelayMs`, the delay as it stands, and
+  `correctorMaxDelayMs`, its 15 ms ceiling; both read 0 with correction off. A host shows
+  the first and budgets with the second. Neither enters a clock: nothing can play a live voice
+  early, and the guide clock and a pitch reading both name the corrector's input, ahead of its
+  delay. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) has the reasons.
 
 ## 4. Signal path
 
@@ -296,6 +302,7 @@ impl Graph {
 // engine/src/slot/
 pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16 }   // built on the control thread, followed on the audio thread
 pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
+pub struct CorrectorDelay;  // published once a block; Slot::corrector_delay() hands the control thread its Arc
 
 // engine/src/ingest/
 pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
@@ -387,6 +394,18 @@ export type SlotEffect =
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
   keyMask: number; // the key's pitch classes as bits, C in bit 0
+}
+
+/** The ingest counters are section 7.1's; section 3 says what a host may do with the delays. */
+export interface SlotStats {
+  pushed: number;
+  lost: number;
+  late: number;
+  concealed: number;
+  resyncs: number;
+  jitterMs: number;
+  correctorDelayMs: number;
+  correctorMaxDelayMs: number;
 }
 
 export interface Mixer {
