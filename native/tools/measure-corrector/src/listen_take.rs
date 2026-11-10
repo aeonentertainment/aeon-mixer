@@ -4,6 +4,8 @@ pub enum Take {
     Off,
     Key,
     Melody,
+    /// The melody take as the build before a change rendered it, read back from `listen --export`.
+    Before,
 }
 
 impl Take {
@@ -12,6 +14,7 @@ impl Take {
             Self::Off => "off",
             Self::Key => "key",
             Self::Melody => "melody",
+            Self::Before => "before",
         }
     }
 }

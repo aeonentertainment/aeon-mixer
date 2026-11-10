@@ -1061,6 +1061,9 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   where the voice is now. A published reading is still the longest window's, every 10 ms at its
   centre, so readings stay evenly spaced and in order whichever window steers.
   [Decision 0010](decisions/0010-pitch-reading.md) has the numbers.
+- A note lands at the singer's retune. Once the voice swings around it, the note is held: the
+  correction follows its centre over 120 ms and leaves the vibrato alone, which changes only the
+  control signal. [Decision 0013](decisions/0013-note-centre.md) has the numbers.
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
   growing, following it through a corrector's move and a moment unseen. Decision

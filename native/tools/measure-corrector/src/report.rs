@@ -289,11 +289,15 @@ pub fn known_voices_table(result: &Value) -> String {
             .expect("a string takes writes");
         }
     }
-    if let Some(rows) = voices["scoop"].as_object() {
-        for (row, value) in rows {
+    for (key, from) in [
+        ("scoop", "a held note"),
+        ("scoop_from_vibrato", "a note with vibrato"),
+        ("scoop_from_silence", "silence"),
+    ] {
+        for (row, value) in voices[key].as_object().into_iter().flatten() {
             writeln!(
                 table,
-                "| a 100 cent scoop over 150 ms, {row} | within 10 cents {} ms after it ends |",
+                "| a 100 cent scoop over 150 ms from {from}, {row} | within 10 cents {} ms after it ends |",
                 number(&value["settle_ms"], 0),
             )
             .expect("a string takes writes");

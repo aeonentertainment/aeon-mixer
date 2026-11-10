@@ -74,15 +74,39 @@ pub fn vibrato(rate: f64, depth: f64, flat: f64, strength: f32, retune_ms: f32) 
     (wet.iter().sum::<f64>() / wet.len() as f64, band(&wet) / band(&dry))
 }
 
+/// What a scooped voice does before its scoop starts, half a second in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Approach {
+    /// Holds steady below the note.
+    Held,
+    /// Holds below the note with 50 cents of vibrato at 5.5 Hz, which fades out over the scoop: a
+    /// glide out of a note the corrector is holding.
+    HeldWithVibrato,
+    /// Is silent: the scoop is how the note starts.
+    FromSilence,
+}
+
 /// #46's other gate: a voice that scoops `from` cents below A3 over `glide_ms` and holds. How long
 /// after the scoop ends the output stays within 10 cents of A3, in milliseconds; `None` if it never
 /// does in the second that follows.
-pub fn scoop_settle_ms(from: f64, glide_ms: f64, strength: f32, retune_ms: f32) -> Option<f64> {
+pub fn scoop_settle_ms(
+    approach: Approach,
+    from: f64,
+    glide_ms: f64,
+    strength: f32,
+    retune_ms: f32,
+) -> Option<f64> {
     let start = 500.0;
     let frames = RATE as usize * 2;
     let voice = harmonic_voice(frames, |ms| {
         let done = ((ms - start) / glide_ms).clamp(0.0, 1.0);
-        A3 * 2f64.powf(from * (done - 1.0) / 1200.0)
+        let vibrato = match approach {
+            Approach::HeldWithVibrato => 50.0 * (1.0 - done) * (TAU * 5.5 * ms / 1000.0).sin(),
+            Approach::Held => 0.0,
+            Approach::FromSilence if ms < start => return 0.0,
+            Approach::FromSilence => 0.0,
+        };
+        A3 * 2f64.powf((from * (done - 1.0) + vibrato) / 1200.0)
     });
     let output = through(&voice, strength, retune_ms, pulled_to_a3(frames));
     let landed = start + glide_ms;
@@ -146,17 +170,29 @@ pub fn rows() -> Value {
         }
     }
     let mut scoop_rows = serde_json::Map::new();
+    let mut vibrato_scoop_rows = serde_json::Map::new();
+    let mut silent_scoop_rows = serde_json::Map::new();
     let mut fence_rows = serde_json::Map::new();
     for (label, strength, retune_ms) in settings() {
-        scoop_rows.insert(
-            label.to_owned(),
-            json!({ "settle_ms": scoop_settle_ms(100.0, 150.0, strength, retune_ms) }),
-        );
+        for (approach, rows) in [
+            (Approach::Held, &mut scoop_rows),
+            (Approach::HeldWithVibrato, &mut vibrato_scoop_rows),
+            (Approach::FromSilence, &mut silent_scoop_rows),
+        ] {
+            let settle_ms = scoop_settle_ms(approach, 100.0, 150.0, strength, retune_ms);
+            rows.insert(label.to_owned(), json!({ "settle_ms": settle_ms }));
+        }
         let (dry, wet) = on_the_fence(30.0, strength, retune_ms);
         fence_rows
             .insert(label.to_owned(), json!({ "motion_in_cents": dry, "motion_out_cents": wet }));
     }
-    json!({ "vibrato": vibrato_rows, "scoop": scoop_rows, "on_the_fence": fence_rows })
+    json!({
+        "vibrato": vibrato_rows,
+        "scoop": scoop_rows,
+        "scoop_from_vibrato": vibrato_scoop_rows,
+        "scoop_from_silence": silent_scoop_rows,
+        "on_the_fence": fence_rows,
+    })
 }
 
 #[cfg(test)]
@@ -188,17 +224,17 @@ mod tests {
         assert!((natural + 12.0).abs() < 5.0, "came out {natural:+.1} cents from the note");
     }
 
-    // The textbook warble, reproduced: a voice whose vibrato crosses the midpoint between two
-    // notes flips the target every half cycle at a hard retune, and the output moves half as much
-    // again as the voice did. At a 40 ms retune the flip is smoothed away. This is the case the
-    // added-motion measure has to catch, so the test holds it to catching it
+    // The textbook warble: a voice whose vibrato crosses the midpoint between two notes, which
+    // flipped the target every half cycle at a hard retune and moved the output half as much again
+    // as the voice. The held note's centre picks the note now, so every setting keeps one note and
+    // the voice's own swing, within 10 percent
     #[test]
-    fn a_target_that_flips_reads_as_added_motion_and_a_slow_retune_removes_it() {
-        let (dry, hard) = on_the_fence(30.0, 1.0, 0.0);
-        assert!((dry - 30.0 / 2f64.sqrt()).abs() < 3.0, "the voice moved {dry} cents");
-        assert!(hard > 1.3 * dry, "hard retune moved {hard} cents from {dry}");
-        let (_, natural) = on_the_fence(30.0, 0.6, 40.0);
-        assert!(natural < dry, "natural settings moved {natural} cents from {dry}");
+    fn a_voice_on_the_fence_keeps_one_note_and_its_swing() {
+        for (label, strength, retune_ms) in settings() {
+            let (dry, wet) = on_the_fence(30.0, strength, retune_ms);
+            assert!((dry - 30.0 / 2f64.sqrt()).abs() < 3.0, "the voice moved {dry} cents");
+            assert!((wet - dry).abs() < 0.1 * dry, "{label} moved {wet} cents from {dry}");
+        }
     }
 
     // The bound row's own bound: 1.2 ms plus 1.125 periods of the voice
@@ -215,8 +251,8 @@ mod tests {
     // The scoop lands, and sooner the faster the retune
     #[test]
     fn a_scoop_settles_sooner_at_a_faster_retune() {
-        let hard = scoop_settle_ms(100.0, 150.0, 1.0, 0.0).expect("hard retune settles");
-        let soft = scoop_settle_ms(100.0, 150.0, 1.0, 80.0).expect("soft retune settles");
+        let hard = scoop_settle_ms(Approach::Held, 100.0, 150.0, 1.0, 0.0).expect("hard settles");
+        let soft = scoop_settle_ms(Approach::Held, 100.0, 150.0, 1.0, 80.0).expect("soft settles");
         assert!(hard < soft, "hard {hard} ms, soft {soft} ms");
     }
 }
