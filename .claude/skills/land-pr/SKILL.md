@@ -48,8 +48,7 @@ and the numbers. A failing row is a bug: fix it, push, return to step 1.
 Check the stop list below. If nothing on it applies: `git fetch`, confirm the head is still the
 one you proved and green, then `gh pr merge <n> --squash --match-head-commit <sha>` with that
 head, so a push that slipped in fails the merge and sends you back to step 1. Then close the
-issue the PR finishes,
-with a comment naming the PRs and where any leftover went.
+issue the PR finishes, with a comment naming the PRs and where any leftover went.
 
 ### Stop and ask instead of merging
 
