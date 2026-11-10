@@ -505,7 +505,37 @@ and a realtime audio thread where the host grants one. Each reports what it got 
 - `measure-sink` opens the device, runs for a minute, and prints the period, the reported
   latency, the callback timing distribution and the underrun count. Those numbers go into
   decision 0003 per OS before any crate is final.
-- Device enumeration lists outputs and marks the default. Hotplug is decided later.
+- Device enumeration lists outputs and inputs and marks the default. Hotplug is decided later.
+
+`Capture` is `Driver`'s other half, and it is here before any backend has one. #40 has to record at
+a real input to measure a real output, and #52 will build its house-mic input on the same thing, so
+both follow this rather than each other.
+
+```rust
+// devices/src/
+pub trait Capture { fn start(self: Box<Self>, sink: Sink) -> Result<Capturing, DriverError>; }
+pub type Sink = Box<dyn FnMut(Captured<'_>) + Send + 'static>;
+pub struct Captured<'a> { pub samples: &'a [f32], pub at: Instant }
+pub struct CaptureRequest { pub device: Option<String>, pub period_frames: u32, pub channel: u16 }
+pub struct CaptureInfo { pub sample_rate: u32, pub period_frames: u32, pub channels: u16, pub input_latency_frames: Option<u32> }
+pub struct Capturing { pub info: CaptureInfo, /* stop() on drop */ }
+pub fn capture(request: CaptureRequest, stats: Arc<Stats>) -> Box<dyn Capture + Send>;
+pub fn inputs() -> Result<Vec<Input>, DriverError>;   // Input has Output's fields
+```
+
+- `start` hands `sink` to the device's capture thread and returns once the stream runs. Dropping the
+  `Capturing` stops it. The thread is realtime, so a sink allocates nothing, locks nothing and
+  returns at once.
+- `samples` is one channel as f32 at 48 kHz, the channel asked for. A device that cannot give 48 kHz
+  fails to open, because the engine never resamples.
+- `at` is when the thread woke to receive them. The samples were on the hardware before `at`, however
+  late the wake was. It lets a caller compare the input with an output on the host's clock, the only
+  clock two devices share.
+- `input_latency_frames` is what the OS says lies between the hardware and a delivery, beyond the
+  period, and none when it says nothing. No software can check it.
+- `stats` records the stream as an output's does. Its underruns are frames the device lost because
+  nobody took them in time, after which the count of frames delivered no longer says the time.
+- It holds no ring, drift correction or slot. Those are #52's, and a sink is where they attach.
 
 Done when: decision 0003 holds the measured period, latency and glitch count on a Mac, a
 Windows laptop and a Linux box, and the backends pass `cargo test` with the device code behind
