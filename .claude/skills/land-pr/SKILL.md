@@ -15,10 +15,16 @@ Follow the `babysit-pr` skill for watching, rate limits and review findings. **G
 on the latest head: required checks pass, the review bots have reviewed that head, every review
 thread is resolved, and the PR is neither BEHIND nor DIRTY.
 
+`babysit-pr` and `leaving-pr-comments` are user-level skills on the developer's machines. Without
+them: watch through the harness instead of polling, check every bot finding against the source,
+fix the real ones, reply to a false positive with a written reason and resolve it, and rebase
+when `main` moves.
+
 ## 2. Prove it end to end
 
 The engine's own suites ran in step 1. This step runs the PR's engine where it ships: inside Aeon
-Karaoke's device service.
+Karaoke's device service. When the PR changes nothing the engine does (docs, CI), the PR comment
+says so and why, and step 2 is done.
 
 - Build the PR head (`pnpm install`, `vp run build:native`) and install that build into an Aeon
   Karaoke worktree off its `origin/main`.
