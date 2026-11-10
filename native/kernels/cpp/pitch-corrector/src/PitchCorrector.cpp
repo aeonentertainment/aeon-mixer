@@ -1,5 +1,6 @@
 #include "aeon/dsp/PitchCorrector.h"
 
+#include "aeon/dsp/NoteCentre.h"
 #include "aeon/dsp/PitchReader.h"
 #include "aeon/dsp/PitchShifter.h"
 
@@ -25,6 +26,7 @@ struct PitchCorrector::State {
   double rate;
   int hop;
   PitchReader reader;
+  NoteCentre note;
   PitchShifter shifter;
   std::vector<float> wet;
   int hopFill = 0;
@@ -47,6 +49,7 @@ struct PitchCorrector::State {
       : rate(sampleRate),
         hop(std::max(1, int(std::lround(sampleRate * kHopSeconds)))),
         reader(sampleRate),
+        note(kHopSeconds),
         shifter(sampleRate),
         wet(size_t(hop)),
         crossfadeStep(float(1.0 / (sampleRate * kCrossfadeSeconds))) {}
@@ -72,10 +75,15 @@ struct PitchCorrector::State {
     return best;
   }
 
-  // Which note comes from the reading itself, so a glide does not reach a new note before the
-  // voice does; how far to move comes from where the voice is now
+  // While a note lands, which note comes from the reading itself, so a glide does not reach a new
+  // note before the voice does; a held note's comes from its centre, so vibrato across a midpoint
+  // cannot flip it. How far to move comes from where the voice is now either way
   void retarget() {
-    targetMidi = reader.voiced() ? nearestTarget(reader.midi()) : kNoTarget;
+    const float heard = note.holding() ? note.centre() : reader.midi();
+    const int next = reader.voiced() ? nearestTarget(heard) : kNoTarget;
+    // A held note that turns into another lands on it at the singer's retune, not the centre's pace
+    if (note.holding() && next != targetMidi) note.land();
+    targetMidi = next;
     const bool correcting = targetMidi != kNoTarget;
     error = correcting ? float(targetMidi) - reader.midi() : 0;
     targetShift = correcting ? strength * (float(targetMidi) - midiNow) : 0;
@@ -88,6 +96,9 @@ struct PitchCorrector::State {
       // shifter's own delay takes back what it trails the input by
       const float behind = float(reader.lagSamples()) + 0.5f * float(hop) - shifter.delaySamples();
       midiNow = reader.midiAfter(std::max(0.0f, behind));
+      note.hear(midiNow);
+    } else if (!reader.voiced()) {
+      note.lose();
     }
     retarget();
   }
@@ -109,12 +120,15 @@ void PitchCorrector::reset() {
   s.shift = 0;
   // Back to the dry input, crossfading into correction again as on a fresh start
   s.wetGain = 0;
+  s.note.lose();
   s.shifter.reset();
 }
 
 void PitchCorrector::setTarget(PitchClassMask mask, float strength, float retuneMs) {
   State &s = *state_;
-  s.mask = mask & kEveryPitchClass;
+  const PitchClassMask next = mask & kEveryPitchClass;
+  if (next != s.mask) s.note.land();
+  s.mask = next;
   s.strength = std::clamp(strength, 0.0f, 1.0f);
   s.retuneMs = std::max(0.0f, retuneMs);
   // A new target counts from the last reading at once, so a guide boundary lands where the host put it
@@ -129,7 +143,9 @@ void PitchCorrector::process(const float *in, float *out, int frames) {
     const int n = std::min(frames - done, s.hop - s.hopFill);
     s.reader.push(in + done, n);
 
-    const double easeSamples = s.retuneMs * s.rate / 1000.0;
+    // A held note moves its correction no faster than its centre, so the vibrato stays the singer's
+    const double easeSeconds = s.note.holding() ? std::max(double(s.retuneMs) / 1000.0, NoteCentre::holdSeconds()) : s.retuneMs / 1000.0;
+    const double easeSamples = easeSeconds * s.rate;
     s.shift = easeSamples <= 0 ? s.targetShift : s.shift + (s.targetShift - s.shift) * float(1 - std::exp(-n / easeSamples));
     s.shifter.setSemitones(s.shift);
     s.shifter.process(in + done, s.wet.data(), n);

@@ -5,6 +5,7 @@
 
 mod added_latency;
 mod audio;
+mod before_takes;
 mod chain;
 mod clip_source;
 mod condition;
@@ -34,6 +35,7 @@ use std::process::ExitCode;
 use engine::slot::guide::{Guide, Note};
 use serde_json::{Map, Value, json};
 
+use crate::before_takes::BeforeTakes;
 use crate::chain::frames_of_ms;
 use crate::condition::Condition;
 use crate::listen::ListenSource;
@@ -48,7 +50,8 @@ usage:
   measure-corrector table RESULT.json
   measure-corrector diff BEFORE.json AFTER.json [--tolerance N]
   measure-corrector listen --vocadito DIR --golden DIR --out CLIPS --key-out KEYDIR [--seed N]
-                           [--phone WAV --phone-guide JSON]
+                           [--before TAKES] [--phone WAV --phone-guide JSON]
+  measure-corrector listen --vocadito DIR --golden DIR --export TAKES [--phone WAV --phone-guide JSON]
   measure-corrector score --sheet FILLED.csv --key answer-key.json
 
   --vocadito DIR   vocadito unzipped, from zenodo.org/records/5578807, outside this repo
@@ -56,6 +59,8 @@ usage:
                    pitch-guide.json
   --variant        one more corrector to compare: label:off|key|melody:strength:retune_ms
   --phone WAV      a person's recorded take; its guide file comes from the same song
+  --export TAKES   write only the melody takes, for the build after a change to compare against
+  --before TAKES   hear off, the exported melody takes and this build's melody, not off, key and melody
   --tolerance N    leave out numbers that moved by N or less (default 0)";
 
 /// The clips `auto-tune.md`'s rows read.
@@ -287,6 +292,13 @@ fn run() -> Result<(), String> {
         "listen" => {
             let vocadito_dir = flags.path("--vocadito")?;
             let golden = flags.path("--golden")?;
+            if let Some(export) = flags.get("--export") {
+                let sources = listen_sources(&flags, &golden, &vocadito_dir)?;
+                let training = vocadito::load(&vocadito_dir, TRAINING_CLIP)?;
+                listen::export_melody(&sources, &training, Path::new(export))?;
+                println!("melody takes for a later set's before: {export}");
+                return Ok(());
+            }
             let (clips, key) = (flags.path("--out")?, flags.path("--key-out")?);
             listen::check_places(&clips, &key)?;
             let seed = match flags.get("--seed") {
@@ -295,7 +307,9 @@ fn run() -> Result<(), String> {
             };
             let sources = listen_sources(&flags, &golden, &vocadito_dir)?;
             let training = vocadito::load(&vocadito_dir, TRAINING_CLIP)?;
-            listen::render_set(&sources, Some(&training), &clips, &key, seed)?;
+            let before = flags.get("--before").map(|dir| BeforeTakes::load(Path::new(dir)));
+            let before = before.transpose()?;
+            listen::render_set(&sources, Some(&training), &clips, &key, seed, before.as_ref())?;
             println!("clips, sheet and procedure: {}", clips.display());
             println!("answer key, kept apart:     {}", key.display());
         }

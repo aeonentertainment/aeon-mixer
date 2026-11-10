@@ -6,10 +6,12 @@ use crate::pitch::{Pitch, PitchClassMask};
 /// Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 5 ms it reads
 /// the input, from the shortest window that can vouch for the voice; the distance from where the
 /// voice is now to the nearest class in the target, scaled by the strength and eased in over the
-/// retune time, becomes a transposition a time-domain shifter applies. The output trails the input
-/// by 1.2 ms plus at most 1.125 periods of the voice. At strength 0 the output is the input itself
-/// with no delay, and turning the strength up from or down to 0 crossfades over 20 ms; it reads
-/// either way. docs/decisions/0010-pitch-reading.md says why.
+/// retune time, becomes a transposition a time-domain shifter applies. Once the voice swings
+/// around a held note, the ease slows to 120 ms, so the note's centre is corrected and the vibrato
+/// is the singer's. The output trails the input by 1.2 ms plus at most 1.125 periods of the voice.
+/// At strength 0 the output is the input itself with no delay, and turning the strength up from or
+/// down to 0 crossfades over 20 ms; it reads either way. Decisions 0010 and 0013 in docs/decisions
+/// say why.
 ///
 /// The audio thread calls `process`, and `set_target` between calls. Nothing allocates after
 /// `new`.
@@ -105,7 +107,7 @@ mod tests {
     use super::*;
     use crate::pitch::{EVERY_PITCH_CLASS, pitch_class_of};
     use crate::test_support::{
-        RATE, buzz, cents_between, harmonic_tone, median_pitch, midi_hz, sung,
+        RATE, buzz, cents_between, cents_track, harmonic_tone, median_pitch, midi_hz, sung,
     };
 
     /// `input` through `corrector` in runs of `block` frames, as a host's buffers would arrive,
@@ -287,6 +289,105 @@ mod tests {
             let output = corrected(&mut corrector, &voice, 128);
             let cents = cents_between(median_pitch(&output, 0.3, 0.7), centre);
             assert!(cents.abs() < 1.0, "MIDI {midi} came out {cents:+.1} cents off");
+        }
+    }
+
+    /// A voice at `cents_at(seconds)` cents from A3: silent where that says `None`.
+    fn voice_at(seconds: f64, cents_at: impl Fn(f64) -> Option<f64>) -> Vec<f32> {
+        let a3 = midi_hz(57.0);
+        let frames = (seconds * f64::from(RATE)) as usize;
+        let hz = |i: usize| {
+            cents_at(i as f64 / f64::from(RATE)).map_or(0.0, |c| a3 * 2f64.powf(c / 1200.0))
+        };
+        let voice = sung(frames, &buzz(), hz);
+        // `sung` keeps its phase running through silence; the silence itself is zero
+        voice
+            .into_iter()
+            .enumerate()
+            .map(|(i, sample)| if hz(i) > 0.0 { sample } else { 0.0 })
+            .collect()
+    }
+
+    fn vibrato(depth: f64, rate: f64, seconds: f64) -> f64 {
+        depth * (std::f64::consts::TAU * rate * seconds).sin()
+    }
+
+    fn mean(values: &[f64]) -> f64 {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+
+    /// How far `values` swing about their mean, RMS.
+    fn swing(values: &[f64]) -> f64 {
+        let centre = mean(values);
+        (values.iter().map(|v| (v - centre).powi(2)).sum::<f64>() / values.len() as f64).sqrt()
+    }
+
+    // #46's done-when: a voice 30 cents flat with 50 cents of vibrato at 5.5 Hz comes out with its
+    // centre within 5 cents of the note and its vibrato within 10 percent of the voice's, at full
+    // strength and the default 40 ms retune
+    #[test]
+    fn a_held_note_is_corrected_and_its_vibrato_kept() {
+        let voice = voice_at(4.0, |t| Some(-30.0 + vibrato(50.0, 5.5, t)));
+        let mut corrector = PitchCorrector::new(RATE);
+        corrector.set_target(pitch_class_of(57), 1.0, 40.0);
+        let output = corrected(&mut corrector, &voice, 128);
+
+        let (sung, heard) = (
+            cents_track(&voice, 1.0, 3.9, midi_hz(57.0)),
+            cents_track(&output, 1.0, 3.9, midi_hz(57.0)),
+        );
+        assert!(mean(&heard).abs() < 5.0, "centre {:+.1} cents from the note", mean(&heard));
+        let kept = swing(&heard) / swing(&sung);
+        assert!((kept - 1.0).abs() < 0.1, "kept {kept:.2} of the vibrato");
+    }
+
+    // A voice whose vibrato crosses the midpoint of A3 and B flat stays on one note: every reading
+    // is nearer A3 than B flat, where a target that flipped each half cycle swung it a semitone
+    #[test]
+    fn a_voice_on_the_midpoint_holds_one_note() {
+        let voice = voice_at(4.0, |t| Some(50.0 + vibrato(30.0, 5.5, t)));
+        let mut corrector = PitchCorrector::new(RATE);
+        corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
+        let output = corrected(&mut corrector, &voice, 128);
+
+        let heard = cents_track(&output, 1.0, 3.9, midi_hz(57.0));
+        let lands_on = |cents: f64| (cents / 100.0).round();
+        assert!(
+            heard.iter().all(|c| lands_on(*c) == lands_on(heard[0])),
+            "the note flipped: {heard:?}"
+        );
+        let kept = swing(&heard) / swing(&cents_track(&voice, 1.0, 3.9, midi_hz(57.0)));
+        assert!((kept - 1.0).abs() < 0.1, "kept {kept:.2} of the swing");
+    }
+
+    // A note that starts with a scoop lands at the retune, as before the centre held notes: a
+    // 100 cent scoop over 150 ms from silence is within 10 cents of the note 40 ms after it ends,
+    // read in a 21 ms window
+    #[test]
+    fn a_note_that_starts_with_a_scoop_lands_at_the_retune() {
+        let voice =
+            voice_at(1.5, |t| (t >= 0.5).then(|| -100.0 * (1.0 - ((t - 0.5) / 0.15).min(1.0))));
+        let mut corrector = PitchCorrector::new(RATE);
+        corrector.set_target(pitch_class_of(57), 1.0, 40.0);
+        let output = corrected(&mut corrector, &voice, 128);
+
+        let heard = cents_track(&output, 0.65 + 0.040, 1.5, midi_hz(57.0));
+        assert!(heard.iter().all(|c| c.abs() < 10.0), "after the scoop: {heard:?}");
+    }
+
+    // A held note with vibrato that leaps two semitones lands on the new one at the retune, not at
+    // the held centre's pace: within 10 cents, on average over each 200 ms, from 150 ms after
+    #[test]
+    fn a_held_note_that_leaps_lands_on_the_next() {
+        let voice =
+            voice_at(3.0, |t| Some(if t < 1.5 { 0.0 } else { 200.0 } + vibrato(40.0, 5.5, t)));
+        let mut corrector = PitchCorrector::new(RATE);
+        corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
+        let output = corrected(&mut corrector, &voice, 128);
+
+        let heard = cents_track(&output, 1.65, 3.0, midi_hz(59.0));
+        for window in heard.chunks(20) {
+            assert!(mean(window).abs() < 10.0, "centred {:+.1} cents from B3", mean(window));
         }
     }
 

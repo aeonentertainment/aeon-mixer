@@ -48,7 +48,8 @@ cargo run --release -p measure-corrector -- score --sheet all-sheets.csv --key a
 
 The bar is the one in Aeon Karaoke's `docs/open-problems/auto-tune.md`: with at least three
 listeners, every listener ranks melody above or equal to off on every source, and nobody reports
-warble on a corrected take. Warble reported on the off take fails nothing: it is the control, and
+warble on a corrected take. When the key has a `before` take, the corrector a change replaces,
+every listener must also rank melody above or equal to it. Warble reported on the off take fails nothing: it is the control, and
 says how often that ear hears warble in the singer. Three listeners can show a problem; they cannot
 show there is none, so quote the responses and not just the verdict.
 
