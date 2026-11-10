@@ -112,7 +112,7 @@ What the engine reports so the rest of the device can follow:
   `correctorMaxDelayMs`, its 15 ms ceiling; both read 0 with correction off. A host shows
   the first and budgets with the second. Neither enters a clock: nothing can play a live voice
   early, and the guide clock and a pitch reading both name the corrector's input, ahead of its
-  delay. Decision [0006](decisions/0006-reporting-the-corrector-delay.md) has the reasons.
+  delay. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) has the reasons.
 
 ## 4. Signal path
 

@@ -1,4 +1,4 @@
-# 0006: What a host is told about the corrector's delay
+# 0009: What a host is told about the corrector's delay
 
 **Status:** accepted, 2026-11-06, ahead of the code in #44.
 
