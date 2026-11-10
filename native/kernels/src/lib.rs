@@ -1,6 +1,7 @@
 //! The DSP leaves the engine runs on the audio thread: the pitch corrector and its detector, the
-//! stretcher, the reverb, the voice shifter. The C++ ones sit behind the `extern "C"` shims in cpp/shim, and this
-//! crate is the only place that calls them, so the engine keeps `#![forbid(unsafe_code)]`.
+//! stretcher, the reverb, the voice shifter. The C++ ones sit behind the `extern "C"` shims in
+//! cpp/shim, and this crate is the only place that calls them, so the engine keeps
+//! `#![forbid(unsafe_code)]`.
 //! Every `process` allocates nothing and locks nothing once its kernel is built.
 
 mod corrector;
