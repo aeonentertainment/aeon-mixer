@@ -9,7 +9,7 @@ use crate::pitch::{Pitch, PitchClassMask};
 /// retune time, becomes a transposition a time-domain shifter applies. The output trails the input
 /// by 1.2 ms plus at most 1.125 periods of the voice. At strength 0 the output is the input itself
 /// with no delay, and turning the strength up from or down to 0 crossfades over 20 ms; it reads
-/// either way. docs/decisions/0006-pitch-reading.md says why.
+/// either way. docs/decisions/0010-pitch-reading.md says why.
 ///
 /// The audio thread calls `process`, and `set_target` between calls. Nothing allocates after
 /// `new`.

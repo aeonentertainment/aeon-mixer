@@ -647,7 +647,7 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 - At strength zero the corrector is bypassed with no delay and still reads pitch.
 - The corrector reads every 5 ms from the shortest window that holds the voice and steers from
   where the voice is now. A published reading is the raw one, placed at its own window's centre, so
-  its lag follows the voice. [Decision 0006](decisions/0006-pitch-reading.md) has the numbers.
+  its lag follows the voice. [Decision 0010](decisions/0010-pitch-reading.md) has the numbers.
 - The slot drives two stages from `slot::effects`, each in place on its mono block.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and

@@ -1,4 +1,4 @@
-# 0006: How the corrector reads pitch
+# 0010: How the corrector reads pitch
 
 ## The problem
 

@@ -12,7 +12,7 @@ namespace aeon::dsp {
  * it found, and does not leap from the last note; the longest window has the last word, so a low
  * voice reads as late as it must and a high one as soon as it can. A reading that stays sure also
  * tracks the slope of the pitch, so a caller can say where the voice has gone since the window's
- * centre. docs/decisions/0006-pitch-reading.md has the numbers behind each choice.
+ * centre. docs/decisions/0010-pitch-reading.md has the numbers behind each choice.
  *
  * A host calls `push` with every sample, and `read` and `glance` from its audio thread. Nothing
  * allocates after construction.

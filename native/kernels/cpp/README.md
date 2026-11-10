@@ -16,7 +16,7 @@ Notes on the copies:
 
 - `pitch-corrector/` started as that commit. `PitchReader`, the corrector's use of it and the
   period refinement in `YinDetector` are this repo's, for
-  [decision 0006](../../../docs/decisions/0006-pitch-reading.md), and Aeon Karaoke's GStreamer
+  [decision 0010](../../../docs/decisions/0010-pitch-reading.md), and Aeon Karaoke's GStreamer
   element keeps its own copy until it goes. Do not copy over them from upstream.
 - One `signalsmith-linear` serves both kernels. The corrector's own vendored
   `lib/dsp/vendor/signalsmith-linear/fft.h` is byte-identical to linear 0.6.6's, and 0.6.6 is
