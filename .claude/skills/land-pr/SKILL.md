@@ -7,7 +7,8 @@ description: Land a PR in aeon-mixer: babysit it, prove it end to end in Aeon Ka
 
 Agent PRs here merge on green. The developer answers questions, not merge buttons, so a PR that
 is proven and green lands without waiting for anyone. Landing is three steps, in order. Every
-new push sends you back to step 1.
+new push sends you back to step 1. The stop list at the end applies from the first step: the
+moment one of its conditions holds, stop and ask instead of waiting for green.
 
 ## 1. Babysit to green
 
@@ -45,7 +46,9 @@ and the numbers. A failing row is a bug: fix it, push, return to step 1.
 ## 3. Merge
 
 Check the stop list below. If nothing on it applies: `git fetch`, confirm the head is still the
-one you proved and green, then `gh pr merge <n> --squash`. Then close the issue the PR finishes,
+one you proved and green, then `gh pr merge <n> --squash --match-head-commit <sha>` with that
+head, so a push that slipped in fails the merge and sends you back to step 1. Then close the
+issue the PR finishes,
 with a comment naming the PRs and where any leftover went.
 
 ### Stop and ask instead of merging
