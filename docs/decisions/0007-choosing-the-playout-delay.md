@@ -187,7 +187,7 @@ something a breath already solves. If a slot is never quiet it stays where it op
   late enough. SILK is the
   only layer with FEC ([RFC 6716](https://www.rfc-editor.org/rfc/rfc6716.txt)), so 2.5 and 5 ms frames
   never had it and 20 ms frames miss it at 15 ms anyway. This costs only 10 ms streams on a lossy link
-  and I expect few of those: mediasoup sends 20 and #335's native module will send 2.5 or 5.
+  and I expect few of those: mediasoup sends 20 and aeonentertainment/aeon-karaoke#335's native module will send 2.5 or 5.
 - A stream with long frames shows a short stall less often. A 3 ms stall catches one 20 ms frame in
   seven, so ten clean-looking seconds are easy to get and the fall can go too far. In a test at one such
   stall a second, a stream fell to the floor and lost 4 packets in a minute, 0.13 percent, a little over
