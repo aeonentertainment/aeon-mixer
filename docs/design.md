@@ -133,7 +133,7 @@ gain and pan into the stereo bus. The meter sits after the corrector and before 
 gain, so the level words tell the singer about their singing, not the room, and mute never
 changes them. The corrector costs a singer who asks for it a delay that moves with the voice,
 from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
-stops at. Decision [0006](decisions/0006-reporting-the-corrector-delay.md) weighs that. Off, it hands
+stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
 the voice over bit for bit with no delay and still reads pitch. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots, and a PCM ring
 a device's capture thread fills for `capture` slots. Slots are mono and pan with a constant-power
