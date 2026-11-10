@@ -109,10 +109,8 @@ a decision record and the developer's agreement.
   title and body become the one commit on `main`.
 - Work is tracked in GitHub issues. The merged PR is the record. Do not commit plans, notes or
   checklists.
-- When babysitting: watch the PR and end the turn; the harness wakes you on checks, comments
-  and conflicts. Verify each bot finding against the source, fix real ones, dismiss false
-  positives with a written reason. Stay quiet when nothing is new. Stop when the bots are
-  green on the latest commit.
+- Agent PRs merge on green once proven end to end in Aeon Karaoke; the `land-pr` skill has
+  the steps and the changes that stop for the developer.
 
 ## Documentation
 
