@@ -70,8 +70,8 @@ a decision record and the developer's agreement.
 4. **Editing another workstream's files.** Parallel work is split by directory in
    docs/design.md section 10. In a shared file, add your own line and leave the rest.
 5. **Running a fork's pull request on our own runners.** It would run a stranger's code on that
-   machine. Every `runs-on` that can name our runner sends a fork to a GitHub-hosted one, and
-   the repository holds outside contributors' runs for approval.
+   machine. Every job that can name our runner either skips a fork or sends it to a
+   GitHub-hosted one, and the repository holds outside contributors' runs for approval.
 
 ## Commands
 
