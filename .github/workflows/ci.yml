@@ -1,5 +1,10 @@
 # One job per OS, four gates each: cargo (fmt, clippy, test), the addon build, vp check and
 # vp test, then vp pack. The "CI" gate job is the one name branch protection requires.
+#
+# A fork's pull request never runs on our own runner box: it would run a stranger's code there.
+# Every runs-on sends a fork to a GitHub-hosted runner. A fork can rewrite this file, so the
+# repository setting that holds outside contributors' runs for approval is the real lock, and
+# this is what an approved run then gets.
 name: CI
 
 on:
@@ -24,7 +29,7 @@ jobs:
         # Mac and Windows only by hand: their minutes count 10x and 2x, and at every push they spent
         # a month's included minutes in six days.
         include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"name":"linux-x64"},{"name":"darwin-arm64","os":"macos-15"},{"name":"win32-x64","os":"windows-2025"}]' || '[{"name":"linux-x64"}]') }}
-    runs-on: ${{ matrix.os || vars.LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.os || (!github.event.pull_request.head.repo.fork && vars.LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -68,6 +73,6 @@ jobs:
     name: CI
     needs: build
     if: always()
-    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ (!github.event.pull_request.head.repo.fork && vars.LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - run: test "${{ needs.build.result }}" = success
