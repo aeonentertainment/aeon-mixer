@@ -88,9 +88,8 @@ the way they do, and the table says so.
   and held notes gone still. Through Opus, `off` is the codec's share.
 
 LSD charges pitch as much as damage: 20 cents of pitch alone costs about 5.5 dB of it on a real
-voice, and MCD about 1.5. A strength-0.6 corrector leaves more pitch error than a full one, so a
-lower LSD there does not mean fewer artefacts. Read MCD and the artefact columns for damage, and
-LSD as everything that changed.
+voice, and MCD about 1.5. A corrector that lands notes closer reads a lower LSD with the same
+artefacts. Read MCD and the artefact columns for damage, and LSD as everything that changed.
 
 ## The blind listen
 

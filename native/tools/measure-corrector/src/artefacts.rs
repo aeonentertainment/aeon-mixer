@@ -20,8 +20,8 @@ const FAST_WINDOW: usize = 1024;
 /// A jump between two readings 10 ms apart this close to an octave is the detector or the shifter
 /// slipping, not a singer.
 const OCTAVE_CENTS: (f64, f64) = (900.0, 1500.0);
-/// A held note that moves less than this, its slope off, sounds machined. A YIN reading of a steady
-/// tone wanders by under a cent; vocadito's singers hold a note to 4 to 10 cents RMS.
+/// A held note that moves less than this, its slope off, sounds machined. A steady tone reads 0.2
+/// cents; the steadiest held note on vocadito 2, 6, 10 and 19 moves 3.4, and their medians 9 to 51.
 const STILL_CENTS: f64 = 3.0;
 const HELD_NOTE_MS: f64 = 500.0;
 
