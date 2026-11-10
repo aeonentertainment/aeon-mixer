@@ -6,6 +6,10 @@ streams and a backing track and plays one mix to the room. Aeon Karaoke's device
 depend on this package in place of its GStreamer engine, so the public API here is a contract,
 not an experiment.
 
+This repository will be public and the package published; it is private only while CI settles on
+our own runner box. Write every doc, comment, issue and commit as public text, with nothing
+about Aeon Karaoke's cloud, customers or keys in it.
+
 The engine is a native core that owns the audio device's output callback, behind a TypeScript
 API. [docs/design.md](docs/design.md) is the design: read its shared sections once, then the
 section for the module you are changing. [docs/decisions](docs/decisions) holds the reasons.
@@ -36,7 +40,11 @@ a decision record and the developer's agreement.
 - **Latency budget**: mouth-to-speaker time on the mic path, with the singer's effects on. Target
   20 to 30 ms, where a singer stops hearing the speakers as a late copy of their own voice.
   Decision 0008 has the evidence.
-- **Device**: the LAN box or desktop app that hosts the engine.
+- **Sounding incredible**: what the corrector and the voice stage are for. A singer who sings
+  well already does and needs neither; one who does not, or who is shy, turns correction on.
+  Each is the singer's own choice, per slot.
+- **Device**: the LAN box or desktop app that hosts the engine. The box will have mic ports, so
+  a plugged-in mic is as real a slot as a phone.
 
 ## Things we never compromise
 
@@ -61,6 +69,9 @@ a decision record and the developer's agreement.
    event loop and starves the device service. Await the event or promise instead.
 4. **Editing another workstream's files.** Parallel work is split by directory in
    docs/design.md section 10. In a shared file, add your own line and leave the rest.
+5. **Running a stranger's code on the runner box.** Once this repository is public, a pull
+   request from a fork must never run on our own runners, where its workflow would execute
+   outside code on that machine. Fork PRs run on GitHub-hosted runners.
 
 ## Commands
 
