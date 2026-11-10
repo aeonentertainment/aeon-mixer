@@ -51,6 +51,19 @@ pub fn midi_hz(midi: f64) -> f64 {
     440.0 * 2f64.powf((midi - 69.0) / 12.0)
 }
 
+/// A YIN reading of `signal` every 10 ms from `from` to `to` seconds, in cents from `reference` Hz.
+/// The 1024-sample window keeps 98 percent of a 5.5 Hz vibrato's depth; unvoiced frames are left out.
+pub fn cents_track(signal: &[f32], from: f64, to: f64, reference: f64) -> Vec<f64> {
+    let rate = f64::from(RATE);
+    let mut yin = YinDetector::new(RATE, 1024);
+    ((from * rate) as usize + 1024..=(to * rate) as usize)
+        .step_by(RATE as usize / 100)
+        .map(|end| f64::from(yin.analyze(&signal[end - 1024..end]).hz))
+        .filter(|hz| *hz > 0.0)
+        .map(|hz| cents_between(hz, reference))
+        .collect()
+}
+
 /// The median YIN reading over every 10 ms frame between `from` and `to` seconds of `signal`.
 pub fn median_pitch(signal: &[f32], from: f64, to: f64) -> f64 {
     let rate = f64::from(RATE);

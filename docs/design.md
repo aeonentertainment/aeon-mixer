@@ -648,6 +648,9 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 - The corrector reads every 5 ms from the shortest window that holds the voice and steers from
   where the voice is now. A published reading is the raw one, placed at its own window's centre, so
   its lag follows the voice. [Decision 0010](decisions/0010-pitch-reading.md) has the numbers.
+- A note lands at the singer's retune. Once the voice swings around it, the note is held: the
+  correction follows its centre over 120 ms and leaves the vibrato alone, which changes only the
+  control signal. [Decision 0013](decisions/0013-note-centre.md) has the numbers.
 - The slot drives two stages from `slot::effects`, each in place on its mono block.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and

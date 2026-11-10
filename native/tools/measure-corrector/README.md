@@ -74,8 +74,20 @@ cargo run --release -p measure-corrector -- listen \
   --key-out ~/Library/Caches/aeon-mixer/listen-key
 ```
 
-It refuses to write inside a repo, over existing files, or with the key beside the clips. Hand a
-listener the clips folder and nothing else: it holds [LISTENING.md](LISTENING.md), which is the whole
+It refuses to write inside a repo, over existing files, or with the key beside the clips.
+
+To put a change to the corrector beside the one it replaces, export the melody takes from a build
+without the change, then render the set from a build with it. Each source is then heard as off,
+before and melody, and the training pair is the earlier build's:
+
+```bash
+git switch main        && cargo run --release -p measure-corrector -- listen ... --export ~/Library/Caches/aeon-mixer/listen-before
+git switch your-branch && cargo run --release -p measure-corrector -- listen ... --before ~/Library/Caches/aeon-mixer/listen-before \
+  --out ~/Library/Caches/aeon-mixer/listen/clips --key-out ~/Library/Caches/aeon-mixer/listen-key
+```
+
+The exported folder names its takes, so it stays with the key. Hand a listener the clips folder and
+nothing else: it holds [LISTENING.md](LISTENING.md), which is the whole
 procedure, the sheet and the audio credits. Then score the sheets:
 
 ```bash
