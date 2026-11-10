@@ -13,3 +13,7 @@ devices = { path = "devices" }
 engine = { path = "engine" }
 kernels = { path = "kernels" }
 transport = { path = "transport" }
+
+# DSP at -O0 makes the debug test run crawl; the C++ kernels are optimised in every profile too
+[profile.dev.package.kernels]
+opt-level = 2
