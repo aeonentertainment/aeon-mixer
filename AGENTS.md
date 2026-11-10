@@ -43,8 +43,8 @@ a decision record and the developer's agreement.
 - **Sounding incredible**: what the corrector and the voice stage are for. A singer who sings
   well already does and needs neither; one who does not, or who is shy, turns correction on.
   Each is the singer's own choice, per slot.
-- **Device**: the LAN box or desktop app that hosts the engine. The box will have mic ports, so
-  a plugged-in mic is as real a slot as a phone.
+- **Device**: the LAN box or desktop app that hosts the engine. A house mic plugged into it is
+  as real a slot as a phone.
 
 ## Things we never compromise
 
@@ -69,9 +69,6 @@ a decision record and the developer's agreement.
    event loop and starves the device service. Await the event or promise instead.
 4. **Editing another workstream's files.** Parallel work is split by directory in
    docs/design.md section 10. In a shared file, add your own line and leave the rest.
-5. **Running a stranger's code on the runner box.** Once this repository is public, a pull
-   request from a fork must never run on our own runners, where its workflow would execute
-   outside code on that machine. Fork PRs run on GitHub-hosted runners.
 
 ## Commands
 
