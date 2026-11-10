@@ -90,10 +90,14 @@ semitone at the same delay, so Aeon Karaoke's rule that a song without a guide i
 carry over to this engine.
 
 Whether it fits the budget needs a mic-path figure, and the hardware ones do not exist. As arithmetic
-across sources, a house mic over l16 is about 22 to 25 ms offline, plus 9.8 to 20 ms of output on a
-Mac, plus the 15 ms ceiling: 47 to 60 ms, inside the budget. A phone is over it before correction
-starts, at 71 to 114 ms with 20 ms frames and its capture, and correction adds about 5 ms on average to
-that. The sender's frame size is worth far more there: 21.5 ms by #61's measurements.
+across sources, against decision 0008's 20 to 30 ms with correction included, every path is over it
+today. A house mic over l16 is about 22 to 25 ms offline plus 9.8 to 20 ms of output on a Mac, 32 to
+45 ms, before correction adds anything; the 15 ms ceiling takes it to 47 to 60 ms. A phone is 71 to
+114 ms with 20 ms frames and its capture, and correction adds about 5 ms on average to that. So the
+corrector's delay is one of several stages that have to shrink: #56's chosen playout delay takes
+about 11 ms off the engine's share, and the sender's frame size is worth 21.5 ms by #61's
+measurements. None of this changes the `stats()` contract; a budget that counts the corrector is
+what `correctorMaxDelayMs` is for.
 
 ## Timing the corrector in measure-latency
 
