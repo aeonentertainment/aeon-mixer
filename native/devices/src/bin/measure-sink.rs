@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use devices::{Output, Request, Stats, outputs};
+use devices::{Output, Request, Stats, Summary, ms, outputs};
 #[cfg(windows)]
 use devices::{WasapiDriver, WasapiMode};
 use engine::block::{RATE, Stereo};
@@ -78,15 +78,10 @@ fn main() -> ExitCode {
             ms(Duration::from_secs_f64(f64::from(frames) / f64::from(RATE)))
         )
     };
-    let period = Duration::from_secs_f64(f64::from(info.period_frames) / f64::from(RATE));
-    let late = period.mul_f64(1.5);
     let chosen = outputs.iter().find(|output| match &args.request.device {
         Some(id) => &output.id == id,
         None => output.is_default,
     });
-    let interval =
-        |fraction: f64| report.percentile(fraction).map(ms).unwrap_or_else(|| "-".into());
-    let yes = |flag: bool| if flag { "yes" } else { "no" };
 
     println!(
         "measure-sink, {} {}, {} s",
@@ -99,25 +94,7 @@ fn main() -> ExitCode {
     println!("rate       {} Hz", info.sample_rate);
     println!("period     {} (asked {})", frames(info.period_frames), args.request.period_frames);
     println!("latency    {}, as the OS reports it", frames(info.output_latency_frames));
-    println!("realtime   {}", yes(report.realtime));
-    println!(
-        "callbacks  {} in {:.1} s, {:.0} expected",
-        report.callbacks,
-        ran.as_secs_f64(),
-        ran.as_secs_f64() / period.as_secs_f64(),
-    );
-    println!(
-        "interval   min {}  p50 {}  p90 {}  p99 {}  p99.9 {}  max {} ms",
-        report.shortest.map(ms).unwrap_or_else(|| "-".into()),
-        interval(0.5),
-        interval(0.9),
-        interval(0.99),
-        interval(0.999),
-        report.longest.map(ms).unwrap_or_else(|| "-".into()),
-    );
-    println!("late       {} over 1.5 periods ({} ms)", report.at_least(late), ms(late));
-    println!("underruns  {}", report.underruns);
-    println!("failed     {}", yes(report.failed));
+    println!("{}", Summary { report: &report, period_frames: info.period_frames, ran });
     if report.failed { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
@@ -178,8 +155,4 @@ fn render(tone: bool) -> Render {
 fn describe(output: &Output) -> String {
     let default = if output.is_default { " (default)" } else { "" };
     format!("{}  {}{default}", output.id, output.name)
-}
-
-fn ms(duration: Duration) -> String {
-    format!("{:.2}", duration.as_secs_f64() * 1000.0)
 }

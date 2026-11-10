@@ -58,6 +58,10 @@ await engine.close();
 - **`rtpReturn`** sends the mix to mediasoup's PlainTransport as 10 ms Opus with in-band FEC.
   `host` is an IP address, never a name.
 - **Reactions** play through `engine.reactions.play` between songs and during them.
+- **The timer engine**, `openEngine({ output: { timer: true } })`, is for a box with no sound
+  card. It opens no device; its own thread renders a block at each deadline on the OS's
+  monotonic clock, and the mix leaves on `rtpReturn`. `measure-clock` prints its timing:
+  `cargo run --release -p devices --bin measure-clock` in `native/`.
 - **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
   renders only when its caller runs `engine.pump(blocks)`. The tests run on it.
 

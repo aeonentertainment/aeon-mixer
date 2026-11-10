@@ -21,11 +21,23 @@ use crate::mixer::Mixer;
 use crate::rtp_return::RtpReturnInput;
 use crate::slot_params::SlotParamsInput;
 
+/// What drives the audio thread.
+#[napi(string_enum = "lowercase")]
+pub enum ClockKind {
+    /// The offline driver, pumped from JavaScript.
+    Offline,
+    /// The timer clock, for a box with no sound card: no device, and nothing to pump.
+    Timer,
+    /// An OS output.
+    Device,
+}
+
 #[napi(object)]
 pub struct OpenOptions {
-    /// The offline driver, pumped from JavaScript, instead of a device.
-    pub offline: bool,
-    /// An id from `outputs`, or the default output.
+    // A literal union, so `src/` passes plain strings rather than a const enum it cannot import
+    #[napi(ts_type = "'offline' | 'timer' | 'device'")]
+    pub clock: ClockKind,
+    /// A device clock's output: an id from `outputs`, or the default output.
     pub device: Option<String>,
     pub period_frames: u32,
     /// The jitter buffer's playout delay for every `rtp` and `l16` slot.
@@ -64,10 +76,13 @@ impl Engine {
         let network = Network::spawn()?;
         let (audio, controls) = AudioThread::new();
         let Controls { params, commands, events, retired, reactions } = controls;
-        let clock = if options.offline {
-            Clock::Offline(Box::new(engine::driver::OfflineDriver::new(audio.into_render())))
-        } else {
-            Clock::open(options.device, options.period_frames, audio.into_render())?
+        let render = audio.into_render();
+        let clock = match options.clock {
+            ClockKind::Offline => {
+                Clock::Offline(Box::new(engine::driver::OfflineDriver::new(render)))
+            }
+            ClockKind::Timer => Clock::timer(render)?,
+            ClockKind::Device => Clock::open(options.device, options.period_frames, render)?,
         };
         let deliver = on_events.build_threadsafe_function().build()?;
         let events = EventsThread::spawn(events, retired, clock.stats(), deliver);
@@ -107,7 +122,7 @@ impl Engine {
         })
     }
 
-    /// The outputs this OS offers, the default marked. Empty on the offline clock.
+    /// The outputs this OS offers, the default marked. Empty on the offline and timer clocks.
     #[napi]
     pub fn outputs(&self) -> Result<Vec<OutputEntry>> {
         self.clock()?.outputs()
@@ -118,7 +133,9 @@ impl Engine {
     pub fn pump(&mut self, blocks: u32) -> Result<Float32Array> {
         match self.clock.as_mut().ok_or_else(closed)? {
             Clock::Offline(driver) => Ok(Float32Array::new(driver.pump(blocks as usize))),
-            Clock::Device { .. } => Err(Error::from_reason("a device engine keeps its own clock")),
+            Clock::Timer { .. } | Clock::Device { .. } => {
+                Err(Error::from_reason("this engine keeps its own clock"))
+            }
         }
     }
 

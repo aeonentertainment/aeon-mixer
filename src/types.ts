@@ -13,7 +13,11 @@ export type IngestKind = "rtp" | "l16" | "push";
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
-  output: { device?: string; periodFrames?: 64 | 128 } | { offline: true };
+  /**
+   * A device; `timer` for a box with no sound card, whose own thread renders on the OS's clock
+   * and whose mix leaves only on a mixer's `rtpReturn`; `offline` for tests, which pump it.
+   */
+  output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   /** Fixed for the engine's life, default 8, at most 16. */
   slots?: number;
   /** The ingest jitter buffer, default 15. */

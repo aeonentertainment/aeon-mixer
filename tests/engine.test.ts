@@ -86,6 +86,28 @@ test("the engine reads the master level of what it plays, with no mixer live", a
   await engine.close();
 });
 
+test("a timer engine keeps its own clock: it plays and meters with nobody pumping", async () => {
+  const engine = await openEngine({ output: { timer: true } });
+  expect(engine.pump).toBeUndefined();
+  expect(engine.output).toEqual({ sampleRate: 48000, periodFrames: 128, latencyMs: 0 });
+  expect(await engine.outputDevices()).toEqual([]);
+
+  const reading = new Promise<[rmsDb: number, peakDb: number]>((resolve) => {
+    const off = engine.on("masterLevel", (rmsDb, peakDb) => {
+      if (rmsDb < -60) return;
+      off();
+      resolve([rmsDb, peakDb]);
+    });
+  });
+  engine.reactions.play(sine(0.5, METER_WINDOW * 3), 1);
+
+  // A meter window of the half-scale sine, rendered by the timer's own thread
+  const [rmsDb, peakDb] = await reading;
+  expect(Math.abs(peakDb - -6.02)).toBeLessThan(LEVEL_TOLERANCE_DB);
+  expect(rmsDb).toBeLessThanOrEqual(-9.03 + LEVEL_TOLERANCE_DB);
+  await engine.close();
+});
+
 test("options and reaction buffers are checked before anything crosses", async () => {
   await expect(openEngine({ output: { offline: true }, slots: 17 })).rejects.toThrow(RangeError);
   await expect(openEngine({ output: { offline: true }, slots: 0 })).rejects.toThrow(RangeError);
