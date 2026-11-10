@@ -15,12 +15,12 @@ they are set are presets, and presets live with the host. Two voices ship first:
 
 | Voice    | Pitch | Formants          | Tilt | Added delay | CPU, one slot, M2 Pro |
 | -------- | ----- | ----------------- | ---- | ----------- | --------------------- |
-| Deeper   | 0     | -2, a factor 0.89 | none | 0 samples   | 0.78 %                |
-| Brighter | 0     | +2, a factor 1.12 | none | 0 samples   | 0.79 %                |
+| Deeper   | 0     | -2, a factor 0.89 | none | 0 samples   | 0.78 to 0.81 %        |
+| Brighter | 0     | +2, a factor 1.12 | none | 0 samples   | 0.79 to 0.83 %        |
 | Off      |       |                   |      | 0 samples   | 0.003 %               |
 
 CPU is the kernel at 48 kHz in 128-frame blocks over vocadito clips 2, 4, 10, 11, 19 and 23, release
-build. Nobody has heard either voice. Each needs a listen before it ships, and the settings above
+build, across two runs. Nobody has heard either voice. Each needs a listen before it ships, and the settings above
 are where the listen starts, not where it has to end.
 
 Higher and lower, an octave up and down, wait. They will come through the corrector's shifter, so a
@@ -133,9 +133,11 @@ asked for, over those within 30 dB of its loudest.
 | Brighter | 82 to 220 Hz | within 0.4 cent | 0.5 to 1.4 dB  | 4.1 to 5.0 dB            |
 
 - **No delay.** A click after a phrase, and the onset of a tone after silence, leave a formant voice
-  on the sample they entered. The filter is causal and holds nothing back. Its phase still moves
-  near a formant, as any resonance's does, but the voice is never later than it was.
-- **Peaks rise at the same power.** On the listen clips the two voices' peaks reached up to 3.2 dB
+  on the sample they entered, so the stage holds back no sample. The filter is causal, and like any
+  resonance its phase moves near the formants it moves. On a steady vowel from 82 to 440 Hz the
+  output lines up with the input best at no lag for brighter, and 2 to 9 samples late for deeper,
+  under 0.2 ms. That is phase, the same thing an equaliser does, not a held sample.
+- **Peaks rise at the same power.** On the listen clips the two voices' peaks reached up to 3.3 dB
   over the input's. The master's soft clipper takes anything over full scale; nothing hard-clips.
 - **Level holds.** Across the bench clips the level changed by 0.22 dB or less.
 
