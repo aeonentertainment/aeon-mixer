@@ -128,10 +128,14 @@ What the engine reports so the rest of the device can follow:
 The topology is fixed. Adding a feature means adding a stage to a chain, a stem to the backing
 path or an output to the master, never a general graph.
 
-**A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, reverb,
-gain and pan into the stereo bus. The meter sits after the corrector and before the reverb and
-gain, so the level words tell the singer about their singing, not the room, and mute never
-changes them. The corrector costs a singer who asks for it a delay that moves with the voice,
+**A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, voice, reverb,
+gain and pan into the stereo bus. The meter sits after the corrector and before the voice, reverb
+and gain, so the level words tell the singer about their singing, not the effect or the room, and
+mute never changes them. Pitch readings come from the corrector, ahead of the voice, so the
+display's trail and the score judge the singing. The voice moves formants only and adds no sample.
+It comes after the corrector, which reads the singer's own voice, and before the reverb, so the
+room hears the voice the singer chose. Decision [0014](decisions/0014-the-first-voices.md) has the
+reasons. The corrector costs a singer who asks for it a delay that moves with the voice,
 from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
 stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
 the voice over bit for bit with no delay and still reads pitch. The source is a
@@ -295,7 +299,9 @@ pub struct Params { pub slots: [SlotParams; MAX_SLOTS], pub stems: StemGains }
 #[derive(Clone, Copy)]
 pub struct SlotParams { pub gain: f32, pub pan: f32, pub mute: bool, pub solo: bool, pub effects: EffectParams, pub guide_offset_ms: f32 }
 #[derive(Clone, Copy)]
-pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams }
+pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams }
+#[derive(Clone, Copy)]
+pub struct VoiceParams { pub enabled: bool, pub formant_semitones: f32 }   // -12 to 12; off is the voice itself
 
 // engine/src/command.rs
 pub enum Command {
@@ -444,7 +450,8 @@ export interface SlotSettings {
 }
 export type SlotEffect =
   | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
-  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number };
+  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
+  | { kind: "voice"; enabled: boolean; formantSemitones: number };
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
   keyMask: number; // the key's pitch classes as bits, C in bit 0
@@ -822,16 +829,25 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   then carry no target and no error, since nothing pulls.
 - A reading carries the note the follower set for the run it closes and the kernel's error at
   that reading, so the target and the error a host shows are the ones the shifter acts on.
-- The slot drives two stages from `slot::effects`, each in place on its mono block.
+- The slot drives three stages from `slot::effects`, each in place on its mono block.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
   calls `on_reading` per reading for the slot to push as `Event::Pitch`.
-  `Reverb::process(params, block)` takes the reverb knobs.
+  `Voice::process(params, block)` runs the voice shifter at the voice's formant move and no
+  transposition, so it adds no sample. `Reverb::process(params, block)` takes the reverb knobs.
+- A voice is a formant move in semitones from the singer's own. Voice names and their settings
+  are presets and live with the host. Off, or on at 0, the stage hands the voice over bit for
+  bit.
+- A voice that moves pitch will come through the corrector's shifter, which takes the
+  transposition into its own ratio, so a voice and correction cost one delay and not two, and
+  `correctorDelayMs` reports it. Its knob joins the contract with that work, not before.
 
 Done when: the corrector through its shim pulls harmonic tones from 82 to 880 Hz onto the asked
 pitch class within the tolerances the C++ tests use; the stretcher moves a tone by the asked
 semitones; the follower changes target within one block of each edge of a known guide; the
-pitch event cadence is 10 ms.
+pitch event cadence is 10 ms; each first voice in decision 0014 moves a known vowel's formants
+within the tolerances its test names and leaves its pitch, an off voice is bit-identical to none,
+and a click and a tone through a voice leave on the sample they entered.
 
 ### 8.7 Return branch: `engine/src/return_ring.rs`, the push in `engine/src/master.rs`, `transport/src/{packetizer,send}.rs`
 
