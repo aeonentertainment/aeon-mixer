@@ -1,5 +1,5 @@
 {
-  "name": "@aeon/mixer",
+  "name": "@aeonentertainment/mixer",
   "version": "0.0.0",
   "private": true,
   "description": "Low-latency LAN audio mixer for Aeon Karaoke: phone and house mics, a backing track, one mix to the room.",
