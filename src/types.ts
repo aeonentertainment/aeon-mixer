@@ -58,7 +58,12 @@ export interface SlotSettings {
 
 export type SlotEffect =
   | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
-  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number };
+  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
+  /**
+   * A formant move in semitones from the singer's own, -12 to 12, with no change of pitch and no
+   * added delay. Decision 0014 has the first voices' settings.
+   */
+  | { kind: "voice"; enabled: boolean; formantSemitones: number };
 
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
