@@ -18,7 +18,10 @@ A slot's delay belongs to its stream, and the engine chooses it while the stream
 - After the fall, three late notes out of 20 raise it to cover them, at most back to where it opened.
 - A move waits for 21 ms of the slot under -30 dBFS. Falling decodes and drops what it skips, so the
   decoder stays whole. Rising fills with silence.
-- A host that sets `playoutDelayMs` pins the delay, exactly as today.
+- A host that sets `playoutDelayMs` pins the delay, exactly as today. Leaving it out used to mean a
+  fixed 15 ms and now means each slot chooses: a change to published behaviour, decided with the
+  developer on #56. The package is at 0.0.0 with no release to bump, so this note is the record; the
+  first release carries it.
 - `stats()` adds `playoutDelayMs` and `lateAtOpening`, the late packets that would also have been
   late had the delay stayed where it opened.
 
@@ -178,7 +181,10 @@ something a breath already solves. If a slot is never quiet it stays where it op
 
 ## What it costs
 
-- A 10 ms stream under 13 ms has no in-band FEC. The next packet is not in hand in time. SILK is the
+- A 10 ms stream under 12.67 ms, its frame and a block, is no longer sure of in-band FEC. The lost
+  frame decodes at the first block that needs it, up to a block before it falls due, and the next
+  packet lands about 10 ms after the lost one; below 12.67 ms it is in hand only when the block falls
+  late enough. SILK is the
   only layer with FEC ([RFC 6716](https://www.rfc-editor.org/rfc/rfc6716.txt)), so 2.5 and 5 ms frames
   never had it and 20 ms frames miss it at 15 ms anyway. This costs only 10 ms streams on a lossy link
   and I expect few of those: mediasoup sends 20 and #335's native module will send 2.5 or 5.

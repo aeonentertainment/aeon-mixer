@@ -585,7 +585,8 @@ ring into the jitter buffer at the top of each block.
   the next packet in hand, a delay over the frame and a block. At the 15 ms a stream opens at, 10 ms
   frames get it. The packet after a lost 20 ms frame arrives 5 ms after that frame falls due, so
   mediasoup's 20 ms streams get the decoder's own concealment. A 10 ms stream whose delay has fallen
-  under 13 ms gets the same.
+  under 12.67 ms, the frame and a block, is no longer sure of it: whether the next packet is in hand
+  depends on where the block falls.
 - `l16` slots take stereo 16-bit big-endian at 48 kHz, as the house-mic sender sends today, and
   fold to mono. `push` slots take interleaved stereo f32 from the control thread and fold to
   mono too. The ring holds 100 ms, and `push` returns how many frames fit; the rest is the
