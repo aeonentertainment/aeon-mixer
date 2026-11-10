@@ -1,0 +1,15 @@
+[package]
+name = "measure-corrector"
+description = "The pitch corrector's numbers and blind-listen set, on the real slot chain and the offline driver."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+assert_no_alloc = "1.1"
+cpu-time = "1.0"
+engine = { workspace = true }
+kernels = { workspace = true }
+opus = "0.4.0"
+serde_json = "1"
