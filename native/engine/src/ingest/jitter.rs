@@ -1,10 +1,13 @@
-//! The jitter buffer of docs/design.md 8.4. The first packet of a stream anchors its RTP
-//! timestamp to the output clock plus the playout delay; from then on every packet has a due
-//! time, and it is decoded in the block that time falls in. A packet missing when due is
-//! concealed, from the next packet's in-band FEC when there is one. A packet arriving after its
-//! time is counted late and dropped, and the stream plays on. Clock skew is corrected one frame
-//! at a time, by moving the anchor a frame and dropping or concealing the frame that makes. A
-//! new SSRC, a gap over a second on either clock, or `reset` starts a new stream.
+//! The jitter buffer of docs/design.md 8.4. The first packet of a stream anchors its RTP timestamp
+//! to the output clock plus the playout delay; from then on every packet has a due time, and it is
+//! decoded in the block that time falls in. A packet missing when due is concealed, from the next
+//! packet's in-band FEC when there is one. Until a later packet comes, a missing packet and a
+//! sender's pause look the same, so the buffer conceals the time and keeps waiting for that
+//! sequence number; RFC 3551 4.1 has a pause hold the sequence number while the timestamp runs on.
+//! A packet arriving after its time is counted late and dropped, and the stream plays on. Clock
+//! skew is corrected one frame at a time, by moving the anchor a frame and dropping or concealing
+//! the frame that makes. A new SSRC, a gap over a second on either clock, or `reset` starts a new
+//! stream.
 
 use std::sync::Arc;
 
@@ -29,7 +32,8 @@ const SKEW_WINDOW: i64 = RATE as i64;
 const SKEW_MIN_PACKETS: u32 = 8;
 
 /// Decodes or concealments one pull may do. Two 120-frame packets cover a 128-frame block;
-/// the rest is room for a gap fill, a timestamp jump and the one overlap a skew drop discards.
+/// the rest is room for a gap fill, a timestamp jump, a pass over lost packets whose time is
+/// already concealed, and the one overlap a skew drop discards.
 const MAX_STEPS: usize = 8;
 
 /// Decoded samples waiting to play: the longest packet plus a block, with room to spare.
@@ -129,13 +133,14 @@ impl JitterBuffer {
             return self.anchor(packet);
         }
         let ahead = packet.seq.wrapping_sub(stream.next_seq) as i16;
-        if ahead < 0 {
+        let due = stream.due(packet.timestamp);
+        if ahead >= 0 && (due - stream.fifo_end).abs() > REANCHOR_GAP {
+            return self.anchor(packet);
+        }
+        // Behind the cursor in sequence, or in time: its frame was concealed while it was awaited
+        if ahead < 0 || (packet.timestamp.wrapping_sub(stream.next_ts) as i32) < 0 {
             self.stats.late += 1;
             return;
-        }
-        let due = stream.due(packet.timestamp);
-        if (due - stream.fifo_end).abs() > REANCHOR_GAP {
-            return self.anchor(packet);
         }
         if ahead as usize >= STORE {
             // Too far ahead to hold; it is counted lost as the cursor passes it
@@ -249,7 +254,7 @@ fn fill(
         // SSRC says so: an old stream's leftovers never decode into a new one
         let at = usize::from(stream.next_seq) % STORE;
         let present = store[at].as_ref().is_some_and(|packet| stream.owns(packet, stream.next_seq));
-        let frames = if present {
+        let (frames, consumed) = if present {
             let packet = store[at].as_ref().expect("checked present");
             if packet.timestamp != stream.next_ts {
                 stream.next_ts = packet.timestamp;
@@ -260,31 +265,45 @@ fn fill(
             if decoded == 0 {
                 codec.conceal(None, &mut scratch[..stream.frame]);
                 stats.concealed += 1;
-                stream.frame
+                (stream.frame, true)
             } else {
-                decoded
+                stream.frame = decoded;
+                (decoded, true)
             }
-        } else {
-            let following = stream.next_seq.wrapping_add(1);
-            let next = store[usize::from(following) % STORE]
-                .as_ref()
-                .filter(|p| stream.owns(p, following));
-            let frames = next
-                .map(|packet| packet.timestamp.wrapping_sub(stream.next_ts) as usize)
-                .filter(|missing| (1..=MAX_FRAME).contains(missing))
-                .unwrap_or(stream.frame);
-            codec.conceal(next.map(Packet::payload), &mut scratch[..frames]);
+        } else if let Some((distance, next)) = stream.next_in_hand(store) {
+            // A later packet came first, so the ones before it are lost. Those whose time was
+            // concealed while they were awaited are passed over together, in one step
+            let waited = i64::from(next.timestamp.wrapping_sub(stream.next_ts) as i32);
+            let frame = stream.frame as i64;
+            let needed = if waited > 0 { (waited + frame - 1) / frame } else { 0 };
+            let covered = (i64::from(distance) - needed).max(0) as u16;
+            if covered > 0 {
+                stats.lost += u32::from(covered);
+                stream.next_seq = stream.next_seq.wrapping_add(covered);
+                continue;
+            }
             stats.lost += 1;
+            let uncovered = (waited - i64::from(distance - 1) * frame) as usize;
+            let fec = distance == 1 && uncovered <= MAX_FRAME;
+            let frames = if fec { uncovered } else { uncovered.min(stream.frame) };
+            codec.conceal(fec.then(|| next.payload()), &mut scratch[..frames]);
             stats.concealed += 1;
-            frames
+            (frames, true)
+        } else {
+            // Nothing in hand: a pause, or a loss not yet known as one. The time is concealed and
+            // the sequence number still awaited, so a sender resuming after a pause plays on time
+            codec.conceal(None, &mut scratch[..stream.frame]);
+            stats.concealed += 1;
+            (stream.frame, false)
         };
 
         // Overlap means a skew correction pulled the stream a frame earlier: that frame goes
         let overlap = ((stream.fifo_end - due) as usize).min(frames);
         fifo.push(&scratch[overlap..frames]);
         stream.fifo_end = stream.fifo_end.max(due + frames as i64);
-        stream.frame = frames;
-        stream.next_seq = stream.next_seq.wrapping_add(1);
+        if consumed {
+            stream.next_seq = stream.next_seq.wrapping_add(1);
+        }
         stream.next_ts = stream.next_ts.wrapping_add(frames as u32);
     }
 }
@@ -292,6 +311,15 @@ fn fill(
 impl Stream {
     fn owns(&self, packet: &Packet, seq: u16) -> bool {
         packet.ssrc == self.ssrc && packet.seq == seq
+    }
+
+    /// The nearest packet of this stream held past the cursor, and how many sequence numbers on.
+    fn next_in_hand<'a>(&self, store: &'a [Option<Packet>]) -> Option<(u16, &'a Packet)> {
+        (1..STORE as u16).find_map(|distance| {
+            let seq = self.next_seq.wrapping_add(distance);
+            let packet = store[usize::from(seq) % STORE].as_ref()?;
+            self.owns(packet, seq).then_some((distance, packet))
+        })
     }
 
     /// The output frame a timestamp plays at, under the anchor.
@@ -398,11 +426,9 @@ mod tests {
             assert_eq!(moved.signum(), direction);
             let stats = jitter.stats();
             assert!((5..=7).contains(&stats.resyncs), "{rate}: {stats:?}");
-            assert_eq!(stats.late, 0, "{rate}: {stats:?}");
-            // A slow sender's corrections each conceal a frame; a fast one's each drop one. The
-            // rest of the concealment is the second after the stream ends.
-            let corrections = stats.resyncs * u32::from(rate < 1.0);
-            assert_eq!(stats.concealed - stats.lost, corrections, "{rate}: {stats:?}");
+            // The second of concealment after the stream ends is a pause until a later packet
+            // says otherwise, so a clean link loses nothing
+            assert_eq!((stats.late, stats.lost), (0, 0), "{rate}: {stats:?}");
         }
     }
 
