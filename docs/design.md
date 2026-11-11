@@ -441,7 +441,7 @@ export interface Mixer {
   /**
    * Writes every datagram that reaches an `rtp` or `l16` slot's port to a new pcap file at `path`,
    * with the moment the network thread read it, until `null`, another path or `destroy`. Throws
-   * for a `push` slot or a path that exists. A recording holds a singer's voice: section 8.4.
+   * for a `push` or `capture` slot, or a path that exists. A recording holds a singer's voice: section 8.4.
    */
   recordSlot(index: number, path: string | null): void;
   /**
@@ -678,7 +678,7 @@ ring into the jitter buffer at the top of each block.
 - The control thread creates the file, never over an existing one, and writes its header, so a
   bad path fails the call. Each record is written whole, so a process that dies leaves a file
   that reads up to its last packet. A host turns recording on after `start`, so a replay begins
-  where the live slot did. A `push` slot records nothing yet.
+  where the live slot did. A `push` or `capture` slot records nothing yet.
 - A recording holds a singer's voice and their phone's LAN address. One is made only when a
   person turns it on, it stays on the device, and nothing in this package sends it anywhere
   (never-compromise 3). The host decides where it goes and when it is deleted.
