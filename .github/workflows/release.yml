@@ -1,0 +1,177 @@
+# A release is one tarball that holds the TypeScript build and the prebuilt addon for every
+# platform, so installing it needs no Rust toolchain and runs no install script. Pushing a tag
+# `v<version>` attaches it to a GitHub release. A pull request that touches the release builds
+# and install-tests the same tarball without releasing it.
+#
+# Every job runs on a GitHub-hosted runner: a release is built on a clean machine, and npm's
+# trusted publishing does not accept our own runners.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - package.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  addon:
+    name: addon (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: darwin-arm64, os: macos-15 }
+          # Built on Apple silicon for Intel, so it is the one addon no job loads
+          - { name: darwin-x64, os: macos-15, target: x86_64-apple-darwin }
+          - { name: win32-x64-msvc, os: windows-2025 }
+          # Ubuntu 22.04 so the addon needs no newer glibc than 2.35
+          - { name: linux-x64-gnu, os: ubuntu-22.04 }
+          - { name: linux-arm64-gnu, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        with:
+          node-version-file: package.json
+          cache: true
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: native
+          key: release-${{ matrix.name }}
+      - run: vp run build:native ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+      - if: ${{ !matrix.target }}
+        run: vp test
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-addon-${{ matrix.name }}
+          path: native/binding/index.${{ matrix.name }}.node
+          if-no-files-found: error
+
+  pack:
+    name: pack
+    needs: addon
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        with:
+          node-version-file: package.json
+          cache: true
+      - name: The tag names the version in package.json
+        if: github.ref_type == 'tag'
+        run: test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-addon-*
+          path: native/binding
+          merge-multiple: true
+      - run: vp pack
+      - run: vp pm pack
+      - name: The tarball holds every platform's addon
+        run: |
+          tar -tzf aeonentertainment-mixer-*.tgz > files.txt
+          for platform in darwin-arm64 darwin-x64 win32-x64-msvc linux-x64-gnu linux-arm64-gnu; do
+            grep -qx "package/native/binding/index.$platform.node" files.txt
+          done
+          grep -qx package/dist/index.mjs files.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-tarball
+          path: aeonentertainment-mixer-*.tgz
+          if-no-files-found: error
+
+  # A fresh project installs the tarball with scripts off and no checkout, then renders on the
+  # offline engine: the proof that a consumer needs nothing but npm.
+  install:
+    name: install (${{ matrix.os }}, node ${{ matrix.node }})
+    needs: pack
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04-arm, macos-15, windows-2025]
+        node: [24]
+        include:
+          - { os: ubuntu-24.04, node: 20 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-tarball
+      - run: |
+          npm init -y > /dev/null
+          npm install --ignore-scripts ./aeonentertainment-mixer-*.tgz
+          cat > smoke.mjs <<'EOF'
+          import { openEngine } from "@aeonentertainment/mixer";
+          const engine = await openEngine({ output: { offline: true } });
+          const block = engine.pump(1);
+          if (block.length !== 256) throw new Error(`a block is ${block.length} samples, not 256`);
+          await engine.close();
+          console.log("rendered a block on", process.platform, process.arch, process.version);
+          EOF
+          node smoke.mjs
+
+  release:
+    name: GitHub release
+    if: github.ref_type == 'tag'
+    needs: [pack, install]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-tarball
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tarball=$(ls aeonentertainment-mixer-*.tgz)
+          integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+          gh release create "$GITHUB_REF_NAME" "$tarball" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$GITHUB_REF_NAME" --notes "npm integrity: \`$integrity\`"
+
+  # Off until the npm package names this workflow as its trusted publisher; the repository
+  # variable NPM_PUBLISH turns it on. No token: npm trades the job's OIDC identity for one.
+  npm:
+    name: npm publish
+    if: github.ref_type == 'tag' && vars.NPM_PUBLISH == 'true'
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-tarball
+      - run: npm install -g npm@^11.5.1
+      - run: npm publish ./aeonentertainment-mixer-*.tgz --access public

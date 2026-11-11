@@ -28,9 +28,10 @@ graph is a fixed topology: slots, a backing path, a master.
   thread sharing parameters, commands, events and graphs. The compiler refuses a data race
   there. The DSP leaves are buffer-in, buffer-out functions; each costs about a hundred lines
   of shim, not a rewrite, and the corrector's measured behaviour comes with it unchanged.
-- napi-rs because Aeon Karaoke installs this package from npm into Node 24 and Electron, and
-  napi-rs publishes a prebuilt addon per platform as an optional dependency and generates the
-  TypeScript types from the Rust.
+- napi-rs because Aeon Karaoke installs this package into Node and Electron with no toolchain,
+  and napi-rs builds a prebuilt addon for every platform, loads the one that matches, and
+  generates the TypeScript types from the Rust. A release ships them all in one tarball
+  (design.md 8.0).
 - The device opens once because every reopen is a pop and, on Windows in exclusive mode, a
   fight with every other app. A room-lifetime engine also puts the reaction sounds and the echo
   canceller's reference where the audio already is.

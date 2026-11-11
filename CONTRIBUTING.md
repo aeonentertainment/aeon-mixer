@@ -24,6 +24,13 @@ vp check && vp test
 Titles are conventional commits in plain language. If an agent did the work, say which model and
 harness at the end of the body.
 
+## Releasing
+
+Set `version` in `package.json` in a pull request. Once it merges, push the tag `v<version>` on
+that commit. The Release workflow builds the addon on every platform, installs the tarball into
+an empty project on each OS, and attaches it to a GitHub release. Nothing is built or published
+from a laptop.
+
 ## Security
 
 Do not open a public issue for a vulnerability. See [SECURITY.md](SECURITY.md).
