@@ -512,6 +512,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
+name = "replay"
+version = "0.0.0"
+dependencies = [
+ "assert_no_alloc",
+ "engine",
+ "opus",
+ "transport",
+]
+
+[[package]]
 name = "rtrb"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -853,6 +863,7 @@ dependencies = [
  "engine",
  "mio",
  "opus",
+ "rtrb",
 ]
 
 [[package]]

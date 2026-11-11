@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["engine", "kernels", "node", "devices", "transport", "tools/measure-corrector"]
+members = [
+  "engine",
+  "kernels",
+  "node",
+  "devices",
+  "transport",
+  "tools/measure-corrector",
+  "tools/replay",
+]
 
 [workspace.package]
 version = "0.0.0"

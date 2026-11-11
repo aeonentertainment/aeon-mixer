@@ -1,12 +1,13 @@
 //! The network thread of docs/design.md 8.4 and 8.7. One thread owns every UDP socket, polls
 //! them with a timeout, and runs the tasks that use them: a `Receiver` parses RTP into a slot's
-//! packet ring, and a `send::Sender` sends the return branch of 8.7 on the same loop. Sockets
-//! live here so the engine keeps none; `mio` does the readiness poll, so this crate has no
-//! `unsafe`.
+//! packet ring, and a `send::Sender` sends the return branch of 8.7 on the same loop. A receiver
+//! can also record what it reads, through `record`. Sockets live here so the engine keeps none;
+//! `mio` does the readiness poll, so this crate has no `unsafe`.
 #![forbid(unsafe_code)]
 
 pub mod packetizer;
 pub mod receive;
+pub mod record;
 pub mod rtp;
 pub mod send;
 

@@ -89,6 +89,13 @@ impl Mixer {
         Ok(feed.push(&stereo) as u32)
     }
 
+    /// Records what reaches an `rtp` or `l16` slot's port to a new pcap file at `path`, or stops
+    /// recording it for null.
+    #[napi]
+    pub fn record_slot(&self, index: u32, path: Option<String>) -> Result<()> {
+        self.slot(index)?.record(path.as_deref())
+    }
+
     /// Every slot's ingest counters, as the audio thread last published them.
     #[napi]
     pub fn stats(&self) -> Vec<SlotStatsInfo> {

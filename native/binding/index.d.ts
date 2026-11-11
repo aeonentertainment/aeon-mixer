@@ -80,6 +80,11 @@ export declare class Mixer {
    * (docs/design.md 8.4), and returns how many frames it took.
    */
   push(index: number, stereo: Float32Array): number
+  /**
+   * Records what reaches an `rtp` or `l16` slot's port to a new pcap file at `path`, or stops
+   * recording it for null.
+   */
+  recordSlot(index: number, path?: string | undefined | null): void
   /** Every slot's ingest counters, as the audio thread last published them. */
   stats(): Array<SlotStatsInfo>
   /** The return stream's counters, or null for a mixer without one. */

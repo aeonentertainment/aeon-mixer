@@ -1,7 +1,9 @@
 //! The control thread's end of one slot's ingest (docs/design.md 8.4): the feed of a `push`
 //! slot, or the socket an `rtp` or `l16` slot listens on, running on the network thread and
-//! filling the slot's packet ring. Dropping it closes the port.
+//! filling the slot's packet ring, which the host may record. Dropping it closes the port and
+//! ends any recording.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use engine::ingest::packet::RING_CAPACITY;
@@ -11,6 +13,7 @@ use engine::slot::source::Source;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use transport::receive::Receiver;
+use transport::record::{RecordSwitch, Recording};
 use transport::{Network, TaskHandle};
 
 /// 30 ms: the most a push slot plays behind the newest frame it holds (docs/design.md 8.4). Three
@@ -20,7 +23,7 @@ pub const PUSH_SLOT_DEPTH: usize = 30 * engine::block::RATE as usize / 1000;
 
 pub enum Ingest {
     Push(PushProducer),
-    Packets { _receiver: TaskHandle, port: u16, stats: Arc<SharedStats> },
+    Packets { _receiver: TaskHandle, port: u16, stats: Arc<SharedStats>, switch: RecordSwitch },
 }
 
 impl Ingest {
@@ -56,9 +59,28 @@ impl Ingest {
         let port = receiver.port()?;
         let jitter = JitterBuffer::new(playout_delay_frames, codec);
         let stats = jitter.shared_stats();
+        let switch = receiver.switch();
         let handle = network.add(receiver)?;
         let source = PacketSource::new(consumer, jitter);
-        Ok((Self::Packets { _receiver: handle, port, stats }, Box::new(source)))
+        Ok((Self::Packets { _receiver: handle, port, stats, switch }, Box::new(source)))
+    }
+
+    /// Records every datagram the slot's port reads into a new pcap file at `path`, or stops for
+    /// `None` (docs/design.md 8.4). The file and its header are written here, so a bad path is
+    /// this call's error; the writer thread finishes the file on its own once the recording ends.
+    pub fn record(&self, path: Option<&str>) -> Result<()> {
+        let Self::Packets { port, switch, .. } = self else {
+            return Err(Error::from_reason("a push slot cannot be recorded"));
+        };
+        let tap = path
+            .map(|path| {
+                Recording::create(Path::new(path), *port).map(|(_finishes_alone, tap)| tap).map_err(
+                    |error| Error::from_reason(format!("cannot record to {path}: {error}")),
+                )
+            })
+            .transpose()?;
+        switch.set(tap);
+        Ok(())
     }
 
     /// The UDP port the slot listens on; none for a push slot.
