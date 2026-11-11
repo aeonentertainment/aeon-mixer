@@ -6,7 +6,17 @@ streams and a backing track, and plays one mix to the room.
 
 A native engine owns the audio device's output callback. TypeScript drives it through a Node
 addon, and no audio crosses into JavaScript. Mouth to speaker, the target is 20 to 30 ms. The
-package is private and not yet published; Aeon Karaoke's device service is its one consumer.
+package ships the addon prebuilt for macOS, Windows and Linux, so installing it needs no Rust
+toolchain. Aeon Karaoke's device service is its one consumer.
+
+## Install
+
+Each [release](https://github.com/aeonentertainment/aeon-mixer/releases) carries one tarball.
+Depend on its URL, and the lockfile pins its hash:
+
+```bash
+npm install https://github.com/aeonentertainment/aeon-mixer/releases/download/v0.1.0/aeonentertainment-mixer-0.1.0.tgz
+```
 
 ## Use
 

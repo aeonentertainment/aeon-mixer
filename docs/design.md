@@ -472,8 +472,10 @@ module plugs into. It also writes the first `src/engine.ts` and `tests/engine.te
 8.8 inherits.
 
 Done when: `vp check`, `vp test` and `cargo test` pass on macOS, Windows and Linux in CI; a
-TypeScript test pumps one silent block through the offline engine; prebuilt addons publish per
-platform as optional dependencies.
+TypeScript test pumps one silent block through the offline engine; a release carries the
+prebuilt addon for every platform in one tarball, which installs with no toolchain and no
+install script. The tarball is 2 MB a platform, so splitting it into optional packages per
+platform waits until its size costs someone something.
 
 ### 8.1 Graph: `engine/src/{graph,params,command,master,audio_thread}.rs`, `engine/src/slot/`
 

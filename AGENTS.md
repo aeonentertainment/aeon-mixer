@@ -6,9 +6,8 @@ streams and a backing track and plays one mix to the room. Aeon Karaoke's device
 depend on this package in place of its GStreamer engine, so the public API here is a contract,
 not an experiment.
 
-This repository will be public and the package published; it is private only while CI settles on
-our own runner box. Write every doc, comment, issue and commit as public text, with nothing
-about Aeon Karaoke's cloud, customers or keys in it.
+This repository is public and the package is released from it. Write every doc, comment, issue
+and commit as public text, with nothing about Aeon Karaoke's cloud, customers or keys in it.
 
 The engine is a native core that owns the audio device's output callback, behind a TypeScript
 API. [docs/design.md](docs/design.md) is the design: read its shared sections once, then the
