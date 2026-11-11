@@ -17,7 +17,7 @@ const ONE_CLICK: usize = 96;
 
 /// Where the clicks in `signal` are, as sample indices.
 pub fn find(signal: &[f32]) -> Vec<usize> {
-    let mut clicks: Vec<usize> = Vec::new();
+    let mut clicks = Vec::new();
     for start in (ORDER..signal.len().saturating_sub(BLOCK)).step_by(BLOCK) {
         let block = &signal[start..start + BLOCK];
         let Some(coefficients) = predictor(block) else { continue };

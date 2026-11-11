@@ -181,7 +181,7 @@ fn restored_row(
         .into_iter()
         .filter(|m| inside(notes, m.ms))
         .collect();
-    let part = |wanted: Part| -> Vec<f64> {
+    let part = |wanted| -> Vec<f64> {
         errors
             .iter()
             .filter(|moment| degradation.part_at(moment.ms) == Some(wanted))
