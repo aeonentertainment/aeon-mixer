@@ -323,7 +323,7 @@ pub struct Network;        // spawn(); add(impl Task) -> TaskHandle, whose drop 
 pub struct Receiver;       // a Task: bind(port: Option<u16>, PacketProducer); port(); switch() -> RecordSwitch, taken before the task is added
 pub struct RecordSwitch;   // the control thread's hold on a receiver's recording: set(Some(Tap)) starts one, set(None) ends it; 8.4
 pub struct Recording;      // create(path, port) -> (Recording, Tap): a new pcap file and the writer thread that appends to it; finish() waits for it to close
-pub struct Tap;            // the network thread's end: record(datagram, from, at) copies into a bounded channel and never blocks; dropping it ends the recording
+pub struct Tap;            // the network thread's end: record(datagram, from, at) copies into a fixed ring and never blocks or wakes anyone; dropping it ends the recording
 pub struct Header { pub marker: bool, pub payload_type: u8, pub seq: u16, pub timestamp: u32, pub ssrc: u32 }   // rtp.rs: parse(&[u8]) -> Option<(Header, &[u8])>; write(&mut [u8; 12])
 
 // engine/src/backing/
@@ -616,18 +616,19 @@ ring into the jitter buffer at the top of each block.
   until `measure-latency` (8.9) gives the push path a number.
 - A slot can be recorded, so a problem heard in a real room can be replayed offline (8.9). With
   `recordSlot` on, the slot's receiver hands every datagram it reads, RTCP and all, to a `Tap`
-  with the moment it read it, after the packet is in the ring. The tap copies it into a bounded
-  channel and returns; a writer thread per recording appends it to the file. So the audio thread
-  never knows, the jitter buffer sees the same packets in the same blocks, and the network
-  thread never waits on a disk. A full channel drops the record, never the packet, and the
-  recording shows a loss the slot did not have; it holds 256 datagrams, five seconds of 20 ms
-  frames. The file is classic pcap with microsecond times, each datagram behind made-up Ethernet,
+  with the moment it read it, after the packet is in the ring. The tap copies it into a ring of
+  its own and returns; a writer thread per recording drains that ring every 20 ms into the file.
+  So the audio thread never knows, the jitter buffer sees the same packets in the same blocks, and
+  the network thread makes no system call for it and never waits on a disk. A full ring drops the
+  record, never the packet, and the recording shows a loss the slot did not have; it holds 256
+  datagrams, five seconds of 20 ms frames. The file is classic pcap with microsecond times, each datagram behind made-up Ethernet,
   IPv4 and UDP headers that carry the sender's address and the slot's port, so Wireshark,
   tcpdump and libwebrtc's `neteq_rtpplay` open it. Decision
   [0017](decisions/0017-recording-a-slot.md) has the reasons.
 - The control thread creates the file, never over an existing one, and writes its header, so a
   bad path fails the call. Each record is written whole, so a process that dies leaves a file
-  that reads up to its last packet. A `push` slot records nothing yet.
+  that reads up to its last packet. A host turns recording on after `start`, so a replay begins
+  where the live slot did. A `push` slot records nothing yet.
 - A recording holds a singer's voice and their phone's LAN address. One is made only when a
   person turns it on, it stays on the device, and nothing in this package sends it anywhere
   (never-compromise 3). The host decides where it goes and when it is deleted.

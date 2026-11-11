@@ -17,15 +17,33 @@ exist before the audio thread, and the moment the receiver reads one is the mome
 buffer could first have it, so it is the clock a replay needs. The audio thread is never involved.
 
 The receiver pushes the packet into the slot's ring first, then hands a copy to a `Tap`. The tap
-copies it into a bounded channel and returns. A writer thread for that recording takes it from
-there and writes it to the file. A file write can stall for as long as the disk likes, and a
-stalled network thread delivers every slot's next packet late, so the network thread never
-writes. A full channel drops the record and counts it, never the packet. At 256 records, the
-writer can be stalled five seconds on 20 ms frames, or 0.6 s on 2.5 ms ones, before a record is
-lost.
+copies it into a ring of 256 records, allocated and touched on the control thread when the
+recording begins, and returns. A writer thread for that recording drains the ring every 20 ms and
+writes each record to the file. A file write can stall for as long as the disk likes, and a stalled
+network thread delivers every slot's next packet late, so the network thread never writes. A full
+ring drops the record and counts it, never the packet. The writer can be stalled five seconds on
+20 ms frames, or 0.64 s on 2.5 ms ones, before a record is lost.
 
-The record is written as soon as the writer has it, one write per record. A process that dies, or
-a laptop that loses power mid-song, leaves a file that reads up to its last packet.
+The first build woke the writer on every record, through a channel it blocked on. Measured with
+`cargo run --release -p transport --example tap_cost` on an Apple M-series laptop, 4000 records
+paced 2.5 ms apart, the network thread's added cost per datagram was:
+
+| Recording                    | Median       | p99        | p99.9      | Worst      |
+| ---------------------------- | ------------ | ---------- | ---------- | ---------- |
+| off                          | 0.04-0.08 µs | 0.1-0.3 µs | 0.2-2.3 µs | 0.3-192 µs |
+| on, a wake per record        | 5.1-5.8 µs   | 19-22 µs   | not taken  | 77-616 µs  |
+| on, ring drained every 20 ms | 0.4-0.8 µs   | 2-4 µs     | 12-36 µs   | 48-291 µs  |
+
+"Off" is the same paced loop with no tap in it, so it is what the machine adds by itself; ranges
+are over five runs. The wake was a system call per datagram. The ring costs a 2 kB copy, and most
+of what is left is that copy landing on a thread that has just slept: in a burst the same copy
+costs 0.08 to 0.17 µs. Before the control thread touched the ring's pages, one run's worst was
+16 ms, the network thread taking the page faults. The tap's time delays only what the thread reads
+next: under a microsecond at the median, against a 2.67 ms block, so the slot plays the same
+packets in the same blocks.
+
+Each record is one write. A process that dies, or a laptop that loses power mid-song, leaves a file
+that reads up to the last packet the writer drained, at most 20 ms before it.
 
 ## The format: classic pcap
 
@@ -85,14 +103,16 @@ It maps each recorded arrival to an output frame, counted from the first datagra
 the packet into the real ring before the first block that starts after it. The phase of the
 blocks against the live callback is not in the file, so a replay can anchor up to a block away
 from where the live slot did. Live, the slot also discarded what reached its ring before its
-first pull. The host turns recording on after `start`, so there is nothing of that in the file to
+first pull. A host turns recording on after `start`, so there is nothing of that in the file to
 discard.
 
 The reference is libopus with nothing in front of it. Each packet is decoded at its RTP timestamp
-offset from the first packet's, by a fresh decoder in sequence order, and time no packet covers is
-libopus's own concealment. That is a receiver with all the time in the world. The slot's level next
-to it, and next to its own meter's `Level` events, separates three causes: a quiet meter, a quiet
-jitter buffer, and a quiet phone.
+offset from the first packet's, by one decoder in timestamp order, and time no packet covers is
+libopus's own concealment. That is a receiver with all the time in the world. The slot's output is
+read on the reference's clock, from the anchor the jitter buffer gave the first packet, so a
+100 ms window holds the same stretch of voice in both. The slot's level next to the reference, and
+next to its own meter's `level` readings, separates three causes: a quiet meter, a quiet jitter
+buffer, and a quiet phone.
 
 ## Privacy
 
@@ -103,5 +123,8 @@ The host chooses the path and deletes the file. Nothing here cleans up after it.
 ## Not yet
 
 - A `push` slot records nothing. The issue asks for its PCM, and nothing has needed it yet.
+- A `measure-latency` row with recording on and off waits for that tool (#61). Its mic path is
+  the offline driver with no socket, which recording never touches, so the row would read the
+  same twice. What recording could cost the mic path is the network thread's time, above.
 - Stage isolation, turning effects off one at a time on the same recording, and a before-and-after
   diff, are the rest of #96.
