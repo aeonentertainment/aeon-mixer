@@ -88,7 +88,8 @@ notification says.
 A follower thread owns the running stream. The OS listeners do one thing: wake it. A stream that
 sees its device go marks the loss in its stats, which wakes it too. On each wake the follower
 lists the outputs, works out where the engine should play by the rule above, and moves only if
-that differs from where it plays. Three wakes for one change cost two lists and no moves.
+that differs from where it plays. A stream that is lost plays nowhere, so the follower reopens
+even the same output. Three wakes for one change cost two lists and no moves.
 
 Moving stops the old stream, which hands the engine's audio thread back, and starts the new
 stream with it. Nothing crosses to the audio thread to do this: the follower holds it only while

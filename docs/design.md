@@ -176,7 +176,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 
 - **Open.** `openEngine` picks the device, or the timer clock where nothing plays locally,
   starts the driver with the silent graph, and returns once the first block has rendered. The
-  stream stays open until `close`.
+  engine and its audio thread last until `close`; the stream under them moves with the output.
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
   stem buffers, everything pre-allocated. If the backing has an armed key or speed, a render
   job starts on the worker thread and `renderProgress` events report it. The mixer object
@@ -597,7 +597,8 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
 
 - On every wake the follower lists the outputs and works out where to play: the pinned output if
   it is listed, else the default. It moves only when that is not where it plays, so a burst of
-  notifications costs one move. A list that fails to read leaves a stream that still plays alone.
+  notifications costs one move. A stream that is lost plays nowhere, so the follower reopens even
+  the same output. A list that fails to read leaves a stream that still plays alone.
 - A stream that sees its device go calls `Stats::lose`, which raises the follower's wake; `fail` is
   kept for a render that panicked. CoreAudio's loss is the device leaving the list, which its watch
   hears.
