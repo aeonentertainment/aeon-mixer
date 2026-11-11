@@ -20,8 +20,8 @@ A slot's delay belongs to its stream, and the engine chooses it while the stream
   decoder stays whole. Rising fills with silence.
 - A host that sets `playoutDelayMs` pins the delay, exactly as today. Leaving it out used to mean a
   fixed 15 ms and now means each slot chooses: a change to published behaviour, decided with the
-  developer on #56. The package is at 0.0.0 with no release to bump, so this note is the record; the
-  first release carries it.
+  developer on #56. The package is before 1.0, where a minor release may change behaviour, so this
+  note is the record, and the release that carries #72 says so in its notes.
 - `stats()` adds `playoutDelayMs` and `lateAtOpening`, the late packets that would also have been
   late had the delay stayed where it opened.
 
