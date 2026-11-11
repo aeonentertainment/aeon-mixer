@@ -49,9 +49,10 @@ pub struct DelayLine {
     fade_length: usize,
     fade_in: Vec<f32>,
     longest_period: f64,
-    /// The last jump's length. A jump of two periods must not read as a period's worth of drift,
+    /// The drift the next jump waits for, when longer than a period's: the last jump's length, or
+    /// one period of a catch-up. A jump of two periods must not read as a period's worth of drift,
     /// or the next jump would undo it.
-    last_lag: f64,
+    stay: f64,
 }
 
 impl DelayLine {
@@ -76,7 +77,7 @@ impl DelayLine {
             fade_length: crossfade,
             fade_in,
             longest_period,
-            last_lag: 0.0,
+            stay: 0.0,
         }
     }
 
@@ -89,7 +90,7 @@ impl DelayLine {
     pub fn start(&mut self, ratio: f64, period: f64) {
         self.read = self.written as f64 - floor_samples(ratio, period, self.longest_fade());
         self.fade_left = 0;
-        self.last_lag = 0.0;
+        self.stay = 0.0;
     }
 
     /// The next output sample, with the newest input already written.
@@ -128,7 +129,7 @@ impl DelayLine {
         self.written = 0;
         self.read = 0.0;
         self.fade_left = 0;
-        self.last_lag = 0.0;
+        self.stay = 0.0;
     }
 
     fn at(&self, index: i64) -> f32 {
@@ -154,31 +155,47 @@ impl DelayLine {
     fn keep_in_range(&mut self, ratio: f64, period: f64) {
         let floor = floor_samples(ratio, period, self.longest_fade());
         let delay = self.delay();
-        let longest_stay = (period + jump_reach(period)).max(self.last_lag);
         let direction = if delay < floor {
             -1
-        } else if delay > floor + longest_stay + 1.0 {
+        } else if delay > self.next_jump_due(period, floor) {
             1
         } else {
             return;
         };
-        let Some(lag) = self.best_jump(direction, period, floor) else {
+        let Some((lag, stay)) = self.best_jump(direction, period, floor) else {
             // Two periods would pass the newest sample; stay until they would not
-            self.last_lag = 2.0 * period + jump_reach(period);
+            self.stay = 2.0 * period + jump_reach(period);
             return;
         };
-        self.last_lag = lag;
+        self.stay = stay;
         self.fade_from = self.read;
         self.read += direction as f64 * lag;
-        self.fade_length = crossfade_samples(ratio, period, self.longest_fade()) as usize;
+        let fade = crossfade_samples(ratio, period, self.longest_fade());
+        // Reading slower than time, the delay grows by up to a period through the fade, as much as
+        // a jump takes back. A fade that ended past where the next jump is due would keep the delay
+        // there, each jump taking back only what the next fade adds, so a jump that lands high
+        // gets a shorter fade
+        let fade = if ratio < 1.0 {
+            let room = self.next_jump_due(period, floor) - self.delay();
+            fade.min((room / (1.0 - ratio)).floor()).max(1.0)
+        } else {
+            fade
+        };
+        self.fade_length = fade as usize;
         self.fade_left = self.fade_length;
+    }
+
+    /// The delay past which the read point jumps ahead.
+    fn next_jump_due(&self, period: f64, floor: f64) -> f64 {
+        floor + (period + jump_reach(period)).max(self.stay) + 1.0
     }
 
     /// The lag near one period that best continues the waveform, or near two when one period
     /// loses it: a reading an octave high lands on a half-period otherwise, and that is the one
     /// reading that would be heard. None when two periods are wanted and the read point is not yet
-    /// far enough behind to take them.
-    fn best_jump(&self, direction: i64, period: f64, floor: f64) -> Option<f64> {
+    /// far enough behind to take them. Beside the lag, how far the read point may drift before the
+    /// next jump: one period after catching up several, so it does not fall behind again.
+    fn best_jump(&self, direction: i64, period: f64, floor: f64) -> Option<(f64, f64)> {
         // A voice that has just gone up leaves the read point several of its new periods behind
         let periods = if direction > 0 {
             ((self.delay() - floor - jump_reach(period)) / period).floor().max(1.0)
@@ -187,7 +204,7 @@ impl DelayLine {
         };
         let (lag, score) = self.search_near(direction, periods * period, period, floor);
         if score >= LOST_THE_WAVEFORM || 2.0 * period > self.longest_period {
-            return Some(lag);
+            return Some((lag, lag / periods));
         }
         let furthest = 2.0 * period + jump_reach(period);
         if direction > 0 && self.delay() - furthest < floor {
@@ -195,9 +212,9 @@ impl DelayLine {
         }
         let (double_lag, double_score) = self.search_near(direction, 2.0 * period, period, floor);
         Some(if double_score >= LOST_THE_WAVEFORM && double_score > score {
-            double_lag
+            (double_lag, double_lag)
         } else {
-            lag
+            (lag, lag / periods)
         })
     }
 

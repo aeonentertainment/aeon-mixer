@@ -333,9 +333,9 @@ fn formants_move_twenty_percent_with_the_pitch_left_alone() {
 }
 
 // The range harmony needs. Formants are not tested here: past six semitones they go on sampling
-// further from where the voice was, and the listen decides how far that holds. At this range a
-// crossfade can drift most of a high voice's period, so the delay may overshoot its bound by up to
-// half a millisecond.
+// further from where the voice was, and the listen decides how far that holds. Shifted down this
+// far, a high voice's crossfade drifts most of its period, as much as a jump takes back, and the
+// delay still holds its bound.
 #[test]
 fn an_octave_either_way_lands_in_tune() {
     for hz in [110.0, 440.0, 880.0] {
@@ -348,13 +348,40 @@ fn an_octave_either_way_lands_in_tune() {
                 cents.abs() < PITCH_TOLERANCE_CENTS,
                 "{hz} Hz {semitones:+} semitones came out {cents:+.2} cents off"
             );
-            let bound = VoiceShifter::latency_bound_samples(RATE, semitones, hz) + 24;
+            let bound = VoiceShifter::latency_bound_samples(RATE, semitones, hz);
             assert!(
                 run.most_latency <= bound,
                 "{hz} Hz {semitones:+}: {} over {bound}",
                 run.most_latency
             );
         }
+    }
+}
+
+// A voice that leaps up leaves the read point several of its new periods behind. One jump of
+// several periods catches it up, and from there the delay holds the new note's bound: the next
+// jump is due after one period's drift, not after as many as the catch-up took. 100 ms after the
+// leap leaves 50 for the detector to hear it and as long again to catch up.
+#[test]
+fn a_leap_up_is_inside_the_new_notes_bound_within_100_ms() {
+    let leap = 24_000;
+    let mut contour = vec![300.0; leap];
+    contour.resize(2 * leap, 880.0);
+    let input = sung(&contour, 1.0);
+    for semitones in [-12.0_f32, -3.0] {
+        let mut shifter = VoiceShifter::new(RATE);
+        shifter.set(semitones, 1.0);
+        let mut output = vec![0.0; BLOCK];
+        let mut most_latency = 0;
+        let from = leap + (0.1 * SR) as usize;
+        for (index, block) in input.chunks(BLOCK).enumerate() {
+            assert_no_alloc(|| shifter.process(block, &mut output));
+            if index * BLOCK >= from {
+                most_latency = most_latency.max(shifter.latency_samples());
+            }
+        }
+        let bound = VoiceShifter::latency_bound_samples(RATE, semitones, 880.0);
+        assert!(most_latency <= bound, "{semitones:+}: {most_latency} over {bound}");
     }
 }
 
