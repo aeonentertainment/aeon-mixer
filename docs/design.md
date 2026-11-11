@@ -441,7 +441,8 @@ export interface Mixer {
   /**
    * Writes every datagram that reaches an `rtp` or `l16` slot's port to a new pcap file at `path`,
    * with the moment the network thread read it, until `null`, another path or `destroy`. Throws
-   * for a `push` or `capture` slot, or a path that exists. A recording holds a singer's voice: section 8.4.
+   * for a `push` or `capture` slot, or a path that exists. A recording holds a singer's voice:
+   * section 8.4.
    */
   recordSlot(index: number, path: string | null): void;
   /**
