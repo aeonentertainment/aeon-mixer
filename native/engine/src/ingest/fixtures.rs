@@ -14,7 +14,7 @@ use super::source::PacketSource;
 use super::stats::{SharedStats, SlotStats};
 use crate::audio_thread::{AudioThread, Controls};
 use crate::block::{BLOCK, RATE};
-use crate::command::Command;
+use crate::command::{Command, Event};
 use crate::driver::OfflineDriver;
 use crate::graph::Graph;
 use crate::slot::Slot;
@@ -50,6 +50,21 @@ pub fn voice(frames: usize) -> Vec<f32> {
         .collect()
 }
 
+/// Singing as a phone hears it: `voice` in 1.5 s phrases with 0.8 s breaths, long enough for
+/// DTX to start, over a faint noise floor at about -65 dBFS.
+pub fn phrases(frames: usize) -> Vec<f32> {
+    let mut rng = Lcg(11);
+    voice(frames)
+        .into_iter()
+        .enumerate()
+        .map(|(i, sample)| {
+            let in_phrase = (i as f32 / RATE as f32) % 2.3 < 1.5;
+            let noise = (rng.below(2001) as f32 - 1000.0) * 1e-6;
+            if in_phrase { sample + noise } else { noise }
+        })
+        .collect()
+}
+
 /// A packet and the output frame it reaches the socket at.
 #[derive(Clone, Copy)]
 pub struct Arrival {
@@ -65,6 +80,8 @@ pub struct OpusSender {
     seq: u16,
     ts: u32,
     ssrc: u32,
+    /// With DTX on, whether the last frame was already a DTX frame.
+    in_dtx: Option<bool>,
 }
 
 impl OpusSender {
@@ -80,18 +97,35 @@ impl OpusSender {
         encoder.set_inband_fec(true).unwrap();
         encoder.set_packet_loss_perc(10).unwrap();
         let lookahead = encoder.get_lookahead().unwrap() as usize;
-        Self { encoder, frame, lookahead, seq: 65_500, ts: 4_000_000_000, ssrc }
+        Self { encoder, frame, lookahead, seq: 65_500, ts: 4_000_000_000, ssrc, in_dtx: None }
     }
 
-    /// Encodes one frame of signal into the next packet.
-    pub fn packet(&mut self, pcm: &[f32]) -> Packet {
+    /// DTX on, sent the way libwebrtc sends it, as a phone does: a packet of two bytes or less
+    /// is a DTX frame, and only the first of a run goes out (`WebRtcOpus_Encode`). libopus still
+    /// codes a comfort-noise update every 400 ms, which goes out.
+    pub fn with_dtx(mut self) -> Self {
+        self.encoder.set_dtx(true).unwrap();
+        self.in_dtx = Some(false);
+        self
+    }
+
+    /// Encodes one frame of signal into the next packet, or `None` for a DTX frame the sender
+    /// keeps back: its clock runs on and its sequence does not.
+    pub fn packet(&mut self, pcm: &[f32]) -> Option<Packet> {
         assert_eq!(pcm.len(), self.frame);
         let mut payload = [0u8; 1500];
         let len = self.encoder.encode_float(pcm, &mut payload).unwrap();
+        if let Some(in_dtx) = &mut self.in_dtx {
+            let was = std::mem::replace(in_dtx, len <= 2);
+            if was && len <= 2 {
+                self.pause(self.frame as u32);
+                return None;
+            }
+        }
         let packet = Packet::new(self.seq, self.ts, self.ssrc, false, &payload[..len]).unwrap();
         self.seq = self.seq.wrapping_add(1);
         self.ts = self.ts.wrapping_add(self.frame as u32);
-        packet
+        Some(packet)
     }
 
     /// The sender paused: its clock ran on, its sequence did not.
@@ -99,14 +133,16 @@ impl OpusSender {
         self.ts = self.ts.wrapping_add(frames);
     }
 
-    /// Every frame of `signal` as a packet sent on the frame it ends, from `from`.
+    /// Every frame of `signal` the sender sends, as a packet sent on the frame it ends, from
+    /// `from`.
     pub fn send_all(&mut self, signal: &[f32], from: i64) -> Vec<Arrival> {
+        let frame = self.frame;
         signal
-            .chunks_exact(self.frame)
+            .chunks_exact(frame)
             .enumerate()
-            .map(|(k, pcm)| Arrival {
-                at: from + ((k + 1) * self.frame) as i64,
-                packet: self.packet(pcm),
+            .filter_map(|(k, pcm)| {
+                let packet = self.packet(pcm)?;
+                Some(Arrival { at: from + ((k + 1) * frame) as i64, packet })
             })
             .collect()
     }
@@ -235,6 +271,8 @@ pub struct Rig {
     stats: Arc<SharedStats>,
     block: Vec<f32>,
     pub out: Vec<f32>,
+    /// The slot's meter, one RMS reading in dBFS per 100 ms: the host's `inputDb`.
+    pub levels: Vec<f32>,
     pumped: i64,
 }
 
@@ -255,6 +293,7 @@ impl Rig {
             stats,
             block: vec![0.0; 2 * BLOCK],
             out: Vec::new(),
+            levels: Vec::new(),
             pumped: 0,
         }
     }
@@ -276,6 +315,11 @@ impl Rig {
             let Self { driver, block, .. } = self;
             assert_no_alloc(|| driver.pump_into(block));
             self.out.extend(block.iter().step_by(2));
+            while let Some(event) = self.controls.events.pop() {
+                if let Event::Level { rms_db, .. } = event {
+                    self.levels.push(rms_db);
+                }
+            }
             self.pumped += BLOCK as i64;
         }
     }
