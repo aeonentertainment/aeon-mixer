@@ -19,6 +19,8 @@ mod report;
 mod request;
 mod sample;
 mod stats;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod stream_holding;
 
 pub use capture::{Capture, CaptureInfo, Captured, Capturing, Sink};
 pub use capture_feed::CaptureFeed;

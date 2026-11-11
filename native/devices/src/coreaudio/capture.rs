@@ -19,6 +19,7 @@ use crate::capture::{Capture, CaptureInfo, Capturing, Sink};
 use crate::capture_feed::CaptureFeed;
 use crate::capture_request::CaptureRequest;
 use crate::stats::Stats;
+use crate::stream_holding::stream_holding;
 
 /// An IOProc on the input device, with no AudioUnit and none of the voice processing an app's
 /// session would get. macOS asks the person for the microphone on first use and, refused, delivers
@@ -46,7 +47,7 @@ impl Capture for CoreAudioCapture {
         let period = set_period(device, request.period_frames)?;
 
         let streams = super::input_streams(device)?;
-        let mut channels = 0;
+        let mut counts = Vec::with_capacity(streams.len());
         for stream in &streams {
             // SAFETY: a stream's virtual format is an AudioStreamBasicDescription.
             let format: AudioStreamBasicDescription = unsafe {
@@ -58,20 +59,20 @@ impl Capture for CoreAudioCapture {
             {
                 return Err(DriverError::Backend("the device's input is not f32 PCM".into()));
             }
-            channels += format.mChannelsPerFrame;
+            counts.push(format.mChannelsPerFrame);
         }
-        if u32::from(request.channel) >= channels {
-            return Err(DriverError::Backend(format!(
+        let channels: u32 = counts.iter().sum();
+        let stream = stream_holding(&counts, u32::from(request.channel)).ok_or_else(|| {
+            DriverError::Backend(format!(
                 "the input has {channels} channels, so no channel {}",
                 request.channel
-            )));
-        }
-        let stream = *streams.first().ok_or(DriverError::NoDevice)?;
+            ))
+        })?;
         let info = CaptureInfo {
             sample_rate: RATE,
             period_frames: period,
             channels: channels as u16,
-            input_latency_frames: Some(input_latency(device, stream)?),
+            input_latency_frames: Some(input_latency(device, streams[stream])?),
         };
         stats.set_opened(format!(
             "CoreAudio {}, f32 x{channels}, channel {}, IO buffer {period}",
