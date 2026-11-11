@@ -838,3 +838,4 @@ module.exports = nativeBinding
 module.exports.BackingRender = nativeBinding.BackingRender
 module.exports.Engine = nativeBinding.Engine
 module.exports.Mixer = nativeBinding.Mixer
+module.exports.ClockKind = nativeBinding.ClockKind

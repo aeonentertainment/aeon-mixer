@@ -21,6 +21,8 @@ mod sample;
 mod stats;
 #[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
 mod stream_holding;
+mod summary;
+mod timer;
 
 pub use capture::{Capture, CaptureInfo, Captured, Capturing, Sink};
 pub use capture_feed::CaptureFeed;
@@ -31,6 +33,8 @@ pub use report::Report;
 pub use request::Request;
 pub use sample::Sample;
 pub use stats::{BUCKET, BUCKETS, Stats};
+pub use summary::{Summary, ms};
+pub use timer::{Clock, MAX_CATCH_UP, MonotonicClock, Pacer, TimerDriver};
 
 #[cfg(all(feature = "hardware", target_os = "linux"))]
 mod alsa;

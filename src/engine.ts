@@ -24,8 +24,8 @@ type State = "running" | "faulted" | "closed";
 export type OfflineEngine = Engine & Required<Pick<Engine, "pump">>;
 
 /**
- * Opens the engine for the life of the process: the device, or the offline driver, running the
- * silent graph until a mixer starts.
+ * Opens the engine for the life of the process: the device, the timer clock on a box with no
+ * sound card, or the offline driver, running the silent graph until a mixer starts.
  */
 export function openEngine(
   options: OpenEngineOptions & { output: { offline: true } },
@@ -74,10 +74,15 @@ export class Engine {
     };
     if ("offline" in options.output) {
       this.#native = new NativeEngine(
-        { offline: true, periodFrames: 128, playoutDelayFrames },
+        { clock: "offline", periodFrames: 128, playoutDelayFrames },
         deliver,
       );
       this.pump = (blocks) => this.#native.pump(integerIn("blocks", blocks, 1, 1 << 20));
+    } else if ("timer" in options.output) {
+      this.#native = new NativeEngine(
+        { clock: "timer", periodFrames: 128, playoutDelayFrames },
+        deliver,
+      );
     } else {
       const { device, periodFrames = 128 } = options.output;
       if (periodFrames !== 64 && periodFrames !== 128) {
@@ -85,7 +90,7 @@ export class Engine {
       }
       this.#native = new NativeEngine(
         {
-          offline: false,
+          clock: "device",
           periodFrames,
           playoutDelayFrames,
           ...(device === undefined ? {} : { device }),

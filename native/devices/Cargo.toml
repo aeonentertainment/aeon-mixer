@@ -10,7 +10,6 @@ publish.workspace = true
 # The OS backends. Off by default so the workspace builds and tests with no audio stack; CI turns
 # it on to compile and lint them on every OS.
 hardware = [
-  "dep:libc",
   "dep:objc2-core-audio",
   "dep:objc2-core-audio-types",
   "dep:objc2-core-foundation",
@@ -20,8 +19,9 @@ hardware = [
 [dependencies]
 engine = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = { version = "0.2", optional = true }
+# The timer clock's wait and priority, on every build; the ALSA backend's calls too
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-audio = { version = "0.3", optional = true, default-features = false, features = [

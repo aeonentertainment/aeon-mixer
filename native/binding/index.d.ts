@@ -31,7 +31,7 @@ export declare class Engine {
    */
   createMixer(kinds: Array<string>, rtpReturn?: RtpReturnInput | undefined | null): Mixer
   get output(): OutputInfo
-  /** The outputs this OS offers, the default marked. Empty on the offline clock. */
+  /** The outputs this OS offers, the default marked. Empty on the offline and timer clocks. */
   outputs(): Array<OutputEntry>
   /** Offline clock only: renders `blocks` blocks and returns them as interleaved stereo. */
   pump(blocks: number): Float32Array
@@ -105,6 +105,16 @@ export interface BackingInput {
   speed: number
 }
 
+/** What drives the audio thread. */
+export declare const enum ClockKind {
+  /** The offline driver, pumped from JavaScript. */
+  Offline = 'offline',
+  /** The timer clock, for a box with no sound card: no device, and nothing to pump. */
+  Timer = 'timer',
+  /** An OS output. */
+  Device = 'device',
+}
+
 export interface CorrectorInput {
   enabled: boolean
   strength: number
@@ -137,9 +147,8 @@ export interface NoteInput {
 }
 
 export interface OpenOptions {
-  /** The offline driver, pumped from JavaScript, instead of a device. */
-  offline: boolean
-  /** An id from `outputs`, or the default output. */
+  clock: 'offline' | 'timer' | 'device'
+  /** A device clock's output: an id from `outputs`, or the default output. */
   device?: string
   periodFrames: number
   /** The jitter buffer's playout delay for every `rtp` and `l16` slot. */

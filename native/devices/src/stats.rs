@@ -56,7 +56,13 @@ impl Stats {
     /// Its clock read stays in userspace: the vDSO on Linux, mach_absolute_time on macOS and
     /// QueryPerformanceCounter on Windows.
     pub fn callback(&self) -> Option<Duration> {
-        let now = self.epoch.elapsed().as_nanos() as u64;
+        self.callback_at(self.epoch.elapsed())
+    }
+
+    /// `callback` for a backend that has already read its own clock: the timer reads it to
+    /// decide what to render. `now` is from any fixed epoch, the same on every call.
+    pub fn callback_at(&self, now: Duration) -> Option<Duration> {
+        let now = now.as_nanos() as u64;
         self.callbacks.fetch_add(1, Relaxed);
         let last = self.last_ns.swap(now, Relaxed);
         (last != NEVER).then(|| {
