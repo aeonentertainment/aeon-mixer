@@ -322,7 +322,7 @@ pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; c
 pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
 pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
 pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, upstream_frames) before it goes live
-pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push slot
+pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push or capture slot
 
 // transport/src/
 /// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
@@ -436,7 +436,10 @@ export interface Mixer {
   setSlot(index: number, settings: Partial<SlotSettings>): void;
   setSlotEffects(index: number, effects: ReadonlyArray<SlotEffect>): void;
   setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number): void;
-  /** Forget the stream a slot was hearing; the next packets are a new singer. */
+  /**
+   * Forget the stream a slot was hearing; the next packets are a new singer. On a `capture` slot it
+   * resets the corrector only: the input is the same device, and its ring keeps its fill.
+   */
   resetSlot(index: number): void;
   /**
    * Writes every datagram that reaches an `rtp` or `l16` slot's port to a new pcap file at `path`,
