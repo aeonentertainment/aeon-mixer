@@ -138,6 +138,3 @@ whose rate change is given a second of its own.
   The follower registers its listeners once, for the engine's life.
 - **Report a muted output.** The OS shows mute already, and a mute flag would need one more
   listener per device. Left for when a host asks.
-</content>
-
-</invoke>

@@ -210,8 +210,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   with the same message); an ack that times out, because the audio thread drains commands every
   block and a second without one means the room has gone silent; and an engine fault, on every
   mixer the engine holds, so a host can treat one signal as the end of a song. A timeout is not
-  itself a fault: a stall can pass, so the song ends and the engine stays open until a device
-  loss or a panic says it is gone. Trouble a mixer plays through is not an error: a slot's bad,
+  itself a fault: a stall can pass, so the song ends and the engine stays open until it faults,
+  on a panic or on a second with no output to play on. A lost device moves the engine; it does not
+  fault it. Trouble a mixer plays through is not an error: a slot's bad,
   late or missing packets are concealed and counted in `stats()`, so one phone never ends a song
   for the room, and a return stream that cannot send costs only its remote listener, since the
   room still hears the mix.
