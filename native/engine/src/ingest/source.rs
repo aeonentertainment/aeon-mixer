@@ -48,9 +48,11 @@ mod tests {
     use super::super::codec::Codec;
     use super::super::fixtures::*;
     use super::super::jitter::JitterBuffer;
+    use super::super::opus::{MAX_FRAME, OpusDecoder};
     use super::super::packet::{Packet, RING_CAPACITY, packet_ring};
     use super::PacketSource;
     use crate::block::{BLOCK, RATE};
+    use crate::slot::meter::{FLOOR_DB, WINDOW_FRAMES};
     use crate::slot::source::Source;
 
     const SECOND: i64 = RATE as i64;
@@ -273,6 +275,53 @@ mod tests {
             assert_eq!((stats.late, stats.lost, stats.resyncs), (0, 0, 0), "{frame}: {stats:?}");
             assert!(stats.concealed > 0, "{frame}: the pauses are concealed");
         }
+    }
+
+    /// #100: a phone singing with DTX on, sent as libwebrtc sends it, reads on the slot's meter
+    /// at the level libopus decodes the same packets to. The reference puts each packet's decode
+    /// at its timestamp on the slot's clock and leaves the DTX gaps silent, as GStreamer's
+    /// `opusdec` does. Where the voice sounds the two agree within 0.1 dB; in a gap the slot
+    /// plays libopus's concealment, comfort noise near the floor, so it never reads quieter.
+    #[test]
+    fn a_phones_dtx_stream_meters_at_the_level_libopus_decodes_it_to() {
+        const TOLERANCE_DB: f32 = 0.1;
+        const VOICED_DB: f32 = -30.0;
+        let signal = phrases(12 * RATE as usize);
+        let mut sender = OpusSender::at_bitrate(960, 0x1F, 32_000).with_dtx();
+        let sent = sender.send_all(&signal, 0);
+        assert!(sent.len() < signal.len() / 960 * 9 / 10, "the breaths go out as DTX");
+        let arrivals = impair(&sent, Impairment::NONE, 3);
+        let anchor = anchor_of(&arrivals) as usize;
+
+        let mut reference = vec![0.0f32; anchor + signal.len() + MAX_FRAME];
+        let mut decoder = OpusDecoder::new().unwrap();
+        let mut scratch = [0.0f32; MAX_FRAME];
+        let first = sent[0].packet.timestamp;
+        for arrival in &sent {
+            let frames = decoder.decode(arrival.packet.payload(), &mut scratch);
+            let at = anchor + arrival.packet.timestamp.wrapping_sub(first) as usize;
+            reference[at..at + frames].copy_from_slice(&scratch[..frames]);
+        }
+
+        let mut rig = Rig::new(Codec::opus().unwrap());
+        rig.run(&arrivals, (anchor + signal.len()) as i64);
+        let stats = rig.stats();
+        assert_eq!((stats.lost, stats.late), (0, 0), "{stats:?}");
+
+        const WINDOW: usize = WINDOW_FRAMES as usize;
+        let windows = reference.as_chunks::<WINDOW>().0.iter().take(signal.len() / WINDOW);
+        let mut voiced = 0;
+        for (k, (window, &slot)) in windows.zip(&rig.levels).enumerate() {
+            let power =
+                window.iter().map(|s| f64::from(s * s)).sum::<f64>() / f64::from(WINDOW_FRAMES);
+            let libopus = ((10.0 * power.log10()) as f32).max(FLOOR_DB);
+            if libopus > VOICED_DB {
+                voiced += 1;
+                assert!((slot - libopus).abs() <= TOLERANCE_DB, "{k}: {slot} for {libopus}");
+            }
+            assert!(slot >= libopus - TOLERANCE_DB, "{k}: {slot} under libopus's {libopus}");
+        }
+        assert!(voiced > 60, "{voiced} voiced windows");
     }
 
     /// A pause and a loss together: the first packet after a pause never comes. The one after
