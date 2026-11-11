@@ -15,8 +15,11 @@ use crate::request::Request;
 use crate::sample::Sample;
 use crate::stats::Stats;
 
-/// A device that has not woken the thread in this long has stopped: unplugged or wedged.
-const STALL_MS: c_int = 1000;
+/// A device that has not woken the thread in this long has stopped: unplugged or wedged. It is
+/// twenty of WASAPI's 10 ms shared periods, the longest any backend runs at, and short enough
+/// that the stop which waits for it and the move after both fit in the second a command may wait
+/// (decision 0016).
+const STALL_MS: c_int = 200;
 
 /// SCHED_FIFO priority for the audio thread: above every desktop thread, below the kernel's own.
 const PRIORITY: c_int = 70;

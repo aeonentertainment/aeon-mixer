@@ -21,8 +21,11 @@ use crate::feed::Feed;
 use crate::sample::Sample;
 use crate::stats::Stats;
 
-/// A device that has not signalled in this long has stopped: unplugged or wedged.
-const STALL_MS: u32 = 1000;
+/// A device that has not signalled in this long has stopped: unplugged or wedged. It is
+/// twenty of WASAPI's 10 ms shared periods, the longest any backend runs at, and short enough
+/// that the stop which waits for it and the move after both fit in the second a command may wait
+/// (decision 0016).
+const STALL_MS: u32 = 200;
 
 /// An initialised event-driven render stream, shared or exclusive. Built and played on the
 /// audio thread, which owns COM for it.
