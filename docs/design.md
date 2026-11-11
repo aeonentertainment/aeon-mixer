@@ -601,8 +601,11 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   notifications costs one move. A stream that is lost plays nowhere, so the follower reopens even
   the same output. A list that fails to read leaves a stream that still plays alone.
 - A stream that sees its device go calls `Stats::lose`, which raises the follower's wake; `fail` is
-  kept for a render that panicked. CoreAudio's loss is the device leaving the list, which its watch
-  hears.
+  kept for a render that panicked. A device can also stay listed and raise nothing while it stops
+  asking for audio, as a CoreAudio IOProc does on a Mac asleep, and by one Mac's logs in DarkWake.
+  So on every backend a playing stream with no callback for 200 ms is lost too, and the follower
+  reopens it. A reopen that stays silent doubles the wait for the next, up to 6.4 s, until a
+  callback comes. A stall never faults the engine.
 - A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
   stream with it on the same `Stats`. The gap is from the wake to the new stream running.
 - With nothing to play on, or an output that refuses to open, it waits for the next wake and
