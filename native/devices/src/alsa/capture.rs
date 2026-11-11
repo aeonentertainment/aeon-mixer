@@ -8,9 +8,10 @@ use engine::block::RATE;
 use engine::driver::DriverError;
 
 use super::asound::asound;
+use super::direction::Direction;
 use super::driver::ask_for_realtime;
 use super::format::Format;
-use super::pcm::{Direction, Pcm};
+use super::pcm::Pcm;
 use crate::capture::{Capture, CaptureInfo, Capturing, Sink};
 use crate::capture_feed::CaptureFeed;
 use crate::capture_request::CaptureRequest;

@@ -7,6 +7,7 @@ use engine::driver::DriverError;
 use super::asound::{
     ACCESS_RW_INTERLEAVED, Asound, HwParams, RawPcm, STREAM_CAPTURE, STREAM_PLAYBACK, SwParams,
 };
+use super::direction::Direction;
 use super::format::Format;
 use crate::sample::Sample;
 
@@ -16,13 +17,6 @@ const PERIODS: c_uint = 2;
 /// The periods in a capture ring. Filled frames are read as they land, so a longer ring adds no
 /// delay and rides out a late thread.
 const CAPTURE_PERIODS: c_uint = 4;
-
-/// Which way a handle's audio runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Direction {
-    Playback,
-    Capture,
-}
 
 /// An ALSA handle on a hardware device, at 48 kHz with an explicit period. It is opened and
 /// configured on the control thread and then used by the audio thread alone. Closed on drop.

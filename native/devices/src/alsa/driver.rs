@@ -7,8 +7,9 @@ use engine::block::RATE;
 use engine::driver::{Driver, DriverError, Render, Running, StreamInfo};
 
 use super::asound::asound;
+use super::direction::Direction;
 use super::format::Format;
-use super::pcm::{Direction, Pcm};
+use super::pcm::Pcm;
 use crate::feed::Feed;
 use crate::request::Request;
 use crate::sample::Sample;

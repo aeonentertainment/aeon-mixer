@@ -1,5 +1,6 @@
 mod asound;
 mod capture;
+mod direction;
 mod driver;
 mod format;
 mod pcm;
