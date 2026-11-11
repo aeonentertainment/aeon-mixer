@@ -86,8 +86,9 @@ Rules that follow:
 ## 3. The two clocks
 
 Mic slots run on the output clock. A block of output is a block of input from every slot's
-jitter buffer, decoded now. Nothing on a slot's path may delay a sample beyond the jitter
-buffer's playout delay and the decoder's frame.
+jitter buffer, decoded now, or from a capture slot's ring. Nothing on a slot's path may delay a
+sample beyond the jitter buffer's playout delay and the decoder's frame, or a capture slot's ring
+and the input's period.
 
 The backing path runs on its own playhead, a frame counter the audio thread advances by one
 block per render while playing. Key shift, time stretch, guide vocal mixing, seek and fades
@@ -126,8 +127,9 @@ changes them. The corrector runs bypassed for now: engaged, its shifter delays t
 to 15 ms for a low voice, which breaks the latency budget on slower devices. It reads pitch
 with no delay until `measure-latency` shows engaged correction fits the budget;
 `Slot::engaged` lets `measure-corrector` measure it on the real chain until then. The source is a
-jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots. Slots are
-mono and pan with a constant-power law into the stereo bus.
+jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots, and a PCM ring
+a device's capture thread fills for `capture` slots. Slots are mono and pan with a constant-power
+law into the stereo bus.
 
 **The backing path**: planar stereo stems in memory, decoded and pre-rendered at the armed key
 and speed before start, read by one playhead. Each stem has a gain with a 50 ms ramp. A live
@@ -319,6 +321,7 @@ pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder
 pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; chosen(codec) lets each stream choose; push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
 pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
 pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
+pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, upstream_frames) before it goes live
 pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push slot
 
 // transport/src/
@@ -356,7 +359,7 @@ export type Capability =
   | "shortVersion"
   | "pause"
   | "level";
-export type IngestKind = "rtp" | "l16" | "push";
+export type IngestKind = "rtp" | "l16" | "push" | "capture";
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
@@ -370,6 +373,8 @@ export interface Engine {
   readonly capabilities: ReadonlySet<Capability>;
   readonly output: { sampleRate: 48000; periodFrames: number; latencyMs: number };
   outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
+  /** The inputs a `capture` slot may name. None on an offline engine. */
+  inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
   createMixer(config: MixerConfig): Promise<Mixer>;
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
   reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
@@ -381,8 +386,13 @@ export interface Engine {
   close(): Promise<void>;
 }
 
+/** A `capture` slot's `device` is an id from `inputDevices()`, or the default input; `channel` is the device's, default 0. */
+export type SlotConfig =
+  | { kind: Exclude<IngestKind, "capture"> }
+  | { kind: "capture"; device?: string; channel?: number };
+
 export interface MixerConfig {
-  slots: ReadonlyArray<{ kind: IngestKind }>;
+  slots: ReadonlyArray<SlotConfig>;
   backing?: {
     stems: ReadonlyArray<{ kind: StemKind; path: string }>;
     key: number; // semitones, rendered before start
@@ -421,6 +431,7 @@ export interface SlotStats {
 }
 
 export interface Mixer {
+  /** `port` is null for `push` and `capture` slots. */
   readonly slots: ReadonlyArray<{ index: number; kind: IngestKind; port: number | null }>;
   setSlot(index: number, settings: Partial<SlotSettings>): void;
   setSlotEffects(index: number, effects: ReadonlyArray<SlotEffect>): void;
@@ -561,7 +572,11 @@ pub fn inputs() -> Result<Vec<Input>, DriverError>;   // Input has Output's fiel
   period, and none when it says nothing. No software can check it.
 - `stats` records the stream as an output's does. Its underruns are frames the device lost because
   nobody took them in time, after which the count of frames delivered no longer says the time.
-- It holds no ring, drift correction or slot. Those are #52's, and a sink is where they attach.
+- It holds no ring, drift correction or slot. Those are the `capture` slot's (8.4), and a sink is
+  where they attach.
+- `measure-capture` opens an input and an output and pulls the input through a capture slot's ring
+  and drift correction on every output block, printing once a minute how long the ring held the
+  mic. It plays silence. An hour of it with the mic on another clock is decision 0018's evidence.
 
 Done when: decision 0003 holds the measured period, latency and glitch count on a Mac, a
 Windows laptop and a Linux box, and the backends pass `cargo test` with the device code behind
@@ -628,6 +643,27 @@ ring into the jitter buffer at the top of each block.
   clock, or one catching up after a stall, is pulled back inside the budget instead of drifting
   out of it. 30 ms is three 10 ms chunks, room for a host two chunks late, and is a default
   until `measure-latency` (8.9) gives the push path a number.
+- A `capture` slot is a mic on this machine, with no socket and no jitter buffer. `createMixer`
+  starts its input through `devices::capture` (8.3) at the output's period, or as near as the
+  device allows, and rejects if it cannot; `destroy` stops it. The capture thread's sink pushes
+  each delivery into an SPSC ring of 4096 frames, and the slot pulls a block from it. Its first
+  pull drops what arrived while armed, then it plays silence until the ring holds its target and
+  an input period. An offline engine opens no input, so it refuses a capture slot. ALSA opens a
+  `hw:` device once, so on Linux an input feeds one mixer at a time, armed or live.
+- The ring's fill drifts when the input runs on another clock than the output. The slot holds the
+  lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
+  16 frames for the wakes of two threads. A trough off target moves the delay one sample a block,
+  each move spliced across the block by linear interpolation, so nothing steps. A pull the ring
+  cannot fill plays what it holds and silence after; when the ring held something, the phase of
+  two clocks or a late wake caught it out, and the target rises by what was missing and 16 frames,
+  at most one input period over where it opened. An empty ring is an input that stopped, and moves
+  no target. A fill more than a period and a block over the target is a stall's backlog, dropped
+  at once down to a period over it. On the output's clock the trough never moves and holds the
+  target exactly, 3 ms for a 128-frame input. Decision
+  [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
+- A capture slot's `latency_frames` is the input's period, what the OS reports for its hardware,
+  and how long the block's first sample waited in the ring. Its `concealed` counts pulls the ring
+  could not fill, `resyncs` each move of the delay and each dropped backlog, and the rest stay 0.
 - A slot can be recorded, so a problem heard in a real room can be replayed offline (8.9). With
   `recordSlot` on, the slot's receiver hands every datagram it reads, RTCP and all, to a `Tap`
   with the moment it read it, after the packet is in the ring. The tap copies it into a ring of
@@ -833,7 +869,6 @@ Each is deliberate and here so no one reverts it by accident.
   three tracks before paying for a licence.
 - Stem storage on a LAN box: planar f32 is about 23 MB per stem minute; int16 storage or
   streaming decode if a box cannot hold two stems.
-- House mics as a native capture input with drift correction, instead of the loopback sender.
 - Device hotplug and the default-device change.
 - Choosing a slot's delay before `start`, from the packets a phone already sends to an armed mixer,
   so the first ten seconds of a song have the chosen delay too. Nothing here measures how long a
