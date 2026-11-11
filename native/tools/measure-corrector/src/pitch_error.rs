@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn a_moment_reads_between_the_references_readings() {
-        let point = |ms: f64, hz: f32| Point { ms, hz, confidence: 1.0 };
+        let point = |ms, hz| Point { ms, hz, confidence: 1.0 };
         let reference = [point(0.0, 220.0), point(10.0, 440.0), point(20.0, 0.0)];
         let found = moments(&reference, &[point(5.0, 311.127), point(15.0, 440.0)]);
         // Halfway between 220 and 440 Hz on a log scale is 311.127; past the last voiced is nothing

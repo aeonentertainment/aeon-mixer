@@ -208,7 +208,7 @@ fn spectra(
     heard: &Heard,
     notes: &[MeantNote],
 ) -> SpectralDistance {
-    let voiced = |ms: f64| inside(notes, ms) && voiced_at(&key.points, ms);
+    let voiced = |ms| inside(notes, ms) && voiced_at(&key.points, ms);
     ruler.distance(&key.samples, &heard.samples, &heard.delay, voiced)
 }
 

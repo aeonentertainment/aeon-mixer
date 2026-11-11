@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn a_note_move_is_whole_inside_each_note_and_glides_across_the_gap() {
-        let note = |start_ms: f64, end_ms: f64| MeantNote { midi: 60, start_ms, end_ms };
+        let note = |start_ms, end_ms| MeantNote { midi: 60, start_ms, end_ms };
         let curve =
             Curve::by_note(1000.0, &[note(100.0, 300.0), note(400.0, 600.0)], &[10.0, -10.0]);
         assert_eq!(
