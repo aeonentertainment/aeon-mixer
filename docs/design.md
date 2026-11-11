@@ -583,8 +583,9 @@ own, so no OS listener and no Node call ever starts or stops a device.
 
 ```rust
 // devices/src/
-pub struct Follower;       // start(request, impl Movable, impl System) -> Result<Self, DriverError>; drop stops it
-pub struct Playing { pub info: StreamInfo, pub output: Output }   // read with Follower::now(), beside the moves so far
+pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, DriverError>; current(); drop stops it
+pub struct Current;        // the follower's Playing, shared: get() on any thread but the audio thread
+pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration }
 pub trait System: Send + 'static {   // the OS behind the follower; a test passes a fake one
     fn outputs(&self) -> Result<Vec<Output>, DriverError>;
     fn driver(&self, request: Request, stats: Arc<Stats>) -> Box<dyn Driver + Send>;
@@ -595,14 +596,16 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
 
 - On every wake the follower lists the outputs and works out where to play: the pinned output if
   it is listed, else the default. It moves only when that is not where it plays, so a burst of
-  notifications costs one move.
+  notifications costs one move. A list that fails to read leaves a stream that still plays alone.
 - A stream that sees its device go calls `Stats::lose`, which raises the follower's wake; `fail` is
   kept for a render that panicked. CoreAudio's loss is the device leaving the list, which its watch
   hears.
 - A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
   stream with it on the same `Stats`. The gap is from the wake to the new stream running.
-- With nothing to play on, it waits for the next wake for up to a second, then fails the stats,
-  which faults the engine.
+- With nothing to play on, or an output that refuses to open, it waits for the next wake and
+  tries again every 100 ms for up to a second, then fails the stats, which faults the engine.
+- The binding reads `Current` for `engine.output`, and its events thread sends `outputChanged`
+  whenever `moves` goes up.
 - The watches: CoreAudio listens on the system object for the default output and the device list,
   with `kAudioHardwarePropertyRunLoop` set to null so the HAL calls it on its own thread. WASAPI
   registers an `IMMNotificationClient` from a COM thread of its own. ALSA has nothing to listen
