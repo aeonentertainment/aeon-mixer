@@ -1,7 +1,7 @@
 # 0019: Pitch correction ships at GStreamer parity, over the latency budget
 
-**Status:** proposed, 2026-11-11. It takes effect with the developer's agreement, as the
-never-compromise list requires.
+**Status:** accepted, 2026-11-11. Cloud agreed: "Yes, but we need to further enhance auto tune
+with an innovative way to reduce latency." That follow-up is #112.
 
 ## Decision
 
@@ -43,6 +43,9 @@ reach, each with its own number:
   the corrector at every pitch.
 - Faster pitch reading and a steadier note centre (#45 and #46), which change the control signal,
   not the delay. They hold for the blind listen.
+
+#112 looks for an innovative way to cut the corrector's own delay below GStreamer parity, which is
+the follow-up Cloud asked for when agreeing to this record.
 
 Each change to the corrector quotes its delay against this record. When the exception ends, this
 record is rewritten to say so.
