@@ -225,6 +225,7 @@ native/
   transport/            the network thread: UDP receive into packet rings, RTP return sender
   devices/              Driver implementations: coreaudio, wasapi, alsa; the measure-sink binary
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
+  tools/replay/         a slot's recording through the real chain on the offline driver
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
 ```
@@ -319,7 +320,10 @@ pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_a
 /// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
 pub trait Task: Send + 'static { fn register(&mut self, registry: &Registry, token: Token) -> io::Result<()>; fn deregister(&mut self, registry: &Registry) -> io::Result<()>; fn ready(&mut self); fn tick(&mut self) {} }
 pub struct Network;        // spawn(); add(impl Task) -> TaskHandle, whose drop removes the task; drop stops the thread
-pub struct Receiver;       // a Task: bind(port: Option<u16>, PacketProducer); port()
+pub struct Receiver;       // a Task: bind(port: Option<u16>, PacketProducer); port(); switch() -> RecordSwitch, taken before the task is added
+pub struct RecordSwitch;   // the control thread's hold on a receiver's recording: set(Some(Tap)) starts one, set(None) ends it; 8.4
+pub struct Recording;      // create(path, port) -> (Recording, Tap): a new pcap file and the writer thread that appends to it; finish() waits for it to close
+pub struct Tap;            // the network thread's end: record(datagram, from, at) copies into a bounded channel and never blocks; dropping it ends the recording
 pub struct Header { pub marker: bool, pub payload_type: u8, pub seq: u16, pub timestamp: u32, pub ssrc: u32 }   // rtp.rs: parse(&[u8]) -> Option<(Header, &[u8])>; write(&mut [u8; 12])
 
 // engine/src/backing/
@@ -417,6 +421,12 @@ export interface Mixer {
   setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number): void;
   /** Forget the stream a slot was hearing; the next packets are a new singer. */
   resetSlot(index: number): void;
+  /**
+   * Writes every datagram that reaches an `rtp` or `l16` slot's port to a new pcap file at `path`,
+   * with the moment the network thread read it, until `null`, another path or `destroy`. Throws
+   * for a `push` slot or a path that exists. A recording holds a singer's voice: section 8.4.
+   */
+  recordSlot(index: number, path: string | null): void;
   /**
    * Interleaved stereo for a `push` slot, folded to mono. Returns the frames taken; the rest did
    * not fit. Throws on a slot of another kind or a buffer that is not whole frames.
@@ -604,6 +614,23 @@ ring into the jitter buffer at the top of each block.
   clock, or one catching up after a stall, is pulled back inside the budget instead of drifting
   out of it. 30 ms is three 10 ms chunks, room for a host two chunks late, and is a default
   until `measure-latency` (8.9) gives the push path a number.
+- A slot can be recorded, so a problem heard in a real room can be replayed offline (8.9). With
+  `recordSlot` on, the slot's receiver hands every datagram it reads, RTCP and all, to a `Tap`
+  with the moment it read it, after the packet is in the ring. The tap copies it into a bounded
+  channel and returns; a writer thread per recording appends it to the file. So the audio thread
+  never knows, the jitter buffer sees the same packets in the same blocks, and the network
+  thread never waits on a disk. A full channel drops the record, never the packet, and the
+  recording shows a loss the slot did not have; it holds 256 datagrams, five seconds of 20 ms
+  frames. The file is classic pcap with microsecond times, each datagram behind made-up Ethernet,
+  IPv4 and UDP headers that carry the sender's address and the slot's port, so Wireshark,
+  tcpdump and libwebrtc's `neteq_rtpplay` open it. Decision
+  [0017](decisions/0017-recording-a-slot.md) has the reasons.
+- The control thread creates the file, never over an existing one, and writes its header, so a
+  bad path fails the call. Each record is written whole, so a process that dies leaves a file
+  that reads up to its last packet. A `push` slot records nothing yet.
+- A recording holds a singer's voice and their phone's LAN address. One is made only when a
+  person turns it on, it stays on the device, and nothing in this package sends it anywhere
+  (never-compromise 3). The host decides where it goes and when it is deleted.
 
 Done when: a test feeds synthetic RTP with reordering, 30 ms jitter spikes and 5 percent loss
 through the offline driver and the output matches the source within the concealment's expected
@@ -708,6 +735,13 @@ output is the evidence a PR quotes.
 `native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
 chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
 blind-listen set. Decision [0005](decisions/0005-corrector-measurement.md) has the reasons.
+
+`native/tools/replay` opens no device or socket. It reads a slot's recording, or any classic pcap
+of one RTP stream, parses each datagram as the receiver does, and feeds it through the real
+packet ring, jitter buffer and slot on the offline driver, each packet in the block after its
+recorded arrival. The same file replays to the same samples every time. It prints the slot's
+level beside libopus's own decode of the same packets, placed on their RTP timestamps, and the
+slot's counters as `stats()` gives them.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
