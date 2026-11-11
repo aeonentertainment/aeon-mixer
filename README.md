@@ -11,7 +11,7 @@ package is private and not yet published; Aeon Karaoke's device service is its o
 ## Use
 
 ```ts
-import { openEngine } from "@aeon/mixer";
+import { openEngine } from "@aeonentertainment/mixer";
 
 // Opened once for the life of the process; it never reopens the device between songs
 const engine = await openEngine({ output: {} });
