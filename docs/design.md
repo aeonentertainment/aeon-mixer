@@ -79,6 +79,9 @@ Rules that follow:
   ring: the job writes an atomic fraction the events thread reads on each drain.
 - A `Box<Graph>` or `Box<Guide>` moves through a ring as a pointer. The audio thread never drops
   one.
+- Moving to another output is not a crossing. The device follower (8.3) holds the audio thread
+  only while no stream runs: it stops the old stream, which hands the audio thread back, calls
+  `Movable::moved` on it, and starts the new stream with it.
 - A panic inside render is caught at the callback boundary. Every block from there is silence,
   the audio thread pushes `Fault` again each block until the event ring has room for it, and the
   engine refuses further commands until the host closes it.
@@ -100,6 +103,10 @@ What the engine reports so the rest of the device can follow:
 - `start()` resolves with `startedAt`, the wall-clock moment the listener hears backing frame
   zero; `backingOffsetMs`, the engine's own output latency, from a backing frame rendered to
   that frame leaving the speaker; and `speedFactor`.
+- A move to another output (section 5) holds the playhead for the gap and changes the output
+  latency. `outputChanged` carries the new `latencyMs` and the gap, so a host that keeps a lyric
+  clock from `startedAt` moves it by both, or re-anchors it on the next `position` event. The live
+  graph keeps the output latency it was swapped in with for its guide clock until the next song.
 - Every ack carries the backing position at the block the command landed. `seek`, `resume` and
   `start` return it. A `position` event also fires once a second.
 - When a live key shifter is engaged, its latency is subtracted from the reported position, so
@@ -188,8 +195,15 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   that, since that thread owns the sockets and `destroy` only queues their removal. Nothing
   waits for it: the ports are ephemeral and no caller binds one again.
 - **Close.** `close` destroys any live mixer, stops the driver, joins the threads.
-- **Faults.** A device loss or a caught panic emits `fault` on the engine. The host closes and
-  reopens; nothing inside tries to recover.
+- **Move.** The engine plays on the output the host pinned with `output.device` while the OS
+  lists it, and otherwise on the OS default. When that changes, because the default moved or the
+  open output went away, the engine stops the old stream and starts the new one with the same
+  audio thread, so the live mixer and its song carry on after a gap. The playhead holds through
+  the gap, every slot starts its stream again on the new clock, the first 5 ms fade in, and
+  `outputChanged` fires with the new `output`. Decision
+  [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
+- **Faults.** A caught panic, or a lost output with nothing to move to within a second, emits
+  `fault` on the engine. The host closes and reopens; nothing inside tries to recover.
 - **Mixer errors.** `error` on a mixer fires once, when that mixer can no longer play its song,
   and the host ends the song and destroys it. Three things raise it: a render job that fails,
   at the moment it fails, so a bad next song is known before its turn (`start` still rejects
@@ -265,6 +279,10 @@ pub struct Running { pub info: StreamInfo, /* stop() on drop */ }
 /// devices/src/timer/: the clock for a box with no sound card. `new(Arc<Stats>)`; its own thread
 /// renders a block at each deadline on the OS's monotonic clock. Built without the `hardware` feature.
 pub struct TimerDriver;
+/// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
+/// test's render. `moved` is called between streams, never on the audio thread: the next block
+/// starts every slot's stream again and fades in over 5 ms.
+pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); }
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
 pub struct OfflineDriver;
@@ -363,15 +381,25 @@ export type IngestKind = "rtp" | "l16" | "push" | "capture";
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
+  // `device` pins an output; left out, the engine follows the OS default (section 5).
   // `timer`: no device; the engine's own thread renders on the OS's clock (decision 0011)
   output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   slots?: number; // fixed for the engine's life, default 8, at most 16
   playoutDelayMs?: number; // pins the ingest jitter buffer; left out, each slot chooses its own (8.4)
 }
 
+export interface OutputInfo {
+  sampleRate: 48000;
+  periodFrames: number;
+  latencyMs: number;
+  /** The output playing now, as `outputDevices()` lists it; null on the offline clock. */
+  device: { id: string; name: string } | null;
+}
+
 export interface Engine {
   readonly capabilities: ReadonlySet<Capability>;
-  readonly output: { sampleRate: 48000; periodFrames: number; latencyMs: number };
+  /** The output playing now: what it was opened on, and after a move, what it moved to. */
+  readonly output: OutputInfo;
   outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
   /** The inputs a `capture` slot may name. None on an offline engine. */
   inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
@@ -379,6 +407,8 @@ export interface Engine {
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
   reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
   on(event: "fault", listener: (error: Error) => void): () => void;
+  /** After every move to another output; `gapMs` is how long the room heard nothing. */
+  on(event: "outputChanged", listener: (output: OutputInfo, gapMs: number) => void): () => void;
   /** The mix after the clipper, reactions included, between songs too. */
   on(event: "masterLevel", listener: (rmsDb: number, peakDb: number) => void): () => void;
   /** Offline engines only: render blocks and return them as interleaved stereo. */
@@ -540,13 +570,43 @@ and a realtime audio thread where the host grants one. Each reports what it got 
 - `measure-sink` opens the device, runs for a minute, and prints the period, the reported
   latency, the callback timing distribution and the underrun count. Those numbers go into
   decision 0003 per OS before any crate is final.
-- Device enumeration lists outputs and inputs and marks the default. Hotplug is decided later.
+- Device enumeration lists outputs and inputs and marks the default.
 - The timer clock is the `Driver` for a box with no sound card. A thread of ours sleeps to each
   block's absolute deadline on the monotonic clock and renders every block that has fallen due,
   at most a second's worth, so the output clock keeps to wall time. Its period is one block and
   its latency zero. The wait is the clock, between renders, as a backend's thread waits on its
   device; render itself keeps section 2's rules. `measure-clock` prints its wakes in
   `measure-sink`'s form. Decision 0011 has the numbers and what was rejected.
+
+The follower keeps the engine on the room's output. It owns the running stream on a thread of its
+own, so no OS listener and no Node call ever starts or stops a device.
+
+```rust
+// devices/src/
+pub struct Follower;       // start(request, impl Movable, impl System) -> Result<Self, DriverError>; drop stops it
+pub struct Playing { pub info: StreamInfo, pub output: Output }   // read with Follower::now(), beside the moves so far
+pub trait System: Send + 'static {   // the OS behind the follower; a test passes a fake one
+    fn outputs(&self) -> Result<Vec<Output>, DriverError>;
+    fn driver(&self, request: Request, stats: Arc<Stats>) -> Box<dyn Driver + Send>;
+    fn watch(&self, wake: Wake) -> Result<Box<dyn Send>, DriverError>;   // wakes on a default or device-list change until dropped
+}
+pub struct Wake;           // raise(): never blocks; wakes already pending fold into one
+```
+
+- On every wake the follower lists the outputs and works out where to play: the pinned output if
+  it is listed, else the default. It moves only when that is not where it plays, so a burst of
+  notifications costs one move.
+- A stream that sees its device go calls `Stats::lose`, which raises the follower's wake; `fail` is
+  kept for a render that panicked. CoreAudio's loss is the device leaving the list, which its watch
+  hears.
+- A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
+  stream with it on the same `Stats`. The gap is from the wake to the new stream running.
+- With nothing to play on, it waits for the next wake for up to a second, then fails the stats,
+  which faults the engine.
+- The watches: CoreAudio listens on the system object for the default output and the device list,
+  with `kAudioHardwarePropertyRunLoop` set to null so the HAL calls it on its own thread. WASAPI
+  registers an `IMMNotificationClient` from a COM thread of its own. ALSA has nothing to listen
+  to, and moves only on a loss.
 
 `Capture` is `Driver`'s other half, and it is here before any backend has one. #40 has to record at
 a real input to measure a real output, and #52 will build its house-mic input on the same thing, so
@@ -873,7 +933,6 @@ Each is deliberate and here so no one reverts it by accident.
   three tracks before paying for a licence.
 - Stem storage on a LAN box: planar f32 is about 23 MB per stem minute; int16 storage or
   streaming decode if a box cannot hold two stems.
-- Device hotplug and the default-device change.
 - Choosing a slot's delay before `start`, from the packets a phone already sends to an armed mixer,
   so the first ten seconds of a song have the chosen delay too. Nothing here measures how long a
   mixer sits armed yet.
