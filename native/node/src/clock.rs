@@ -1,28 +1,29 @@
-//! What drives the audio thread: an OS output through the devices crate, the timer clock on a box
-//! with no sound card, or the offline driver pumped from JavaScript.
+//! What drives the audio thread: an OS output through the devices crate's follower, the timer
+//! clock on a box with no sound card, or the offline driver pumped from JavaScript.
 
 use std::sync::Arc;
 
-use devices::{Request, Stats, TimerDriver};
-use engine::driver::Driver;
-use engine::driver::{OfflineDriver, Render, Running, StreamInfo};
+use devices::{Current, Follower, Os, Playing, Request, Stats, TimerDriver};
+use engine::audio_thread::AudioThread;
+use engine::driver::{Driver, OfflineDriver, Render, Running, StreamInfo};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 pub enum Clock {
     Offline(Box<OfflineDriver>),
     Timer { running: Running, stats: Arc<Stats> },
-    Device { running: Running, stats: Arc<Stats> },
+    Device { follower: Follower, stats: Arc<Stats> },
 }
 
 impl Clock {
-    /// Starts this OS's backend on `device`, or the default output, at `period_frames`.
-    pub fn open(device: Option<String>, period_frames: u32, render: Render) -> Result<Self> {
+    /// Starts this OS's backend at `period_frames` on `device`, the pinned output, or on the
+    /// default, and follows the room's output from there (docs/design.md section 5).
+    pub fn open(device: Option<String>, period_frames: u32, audio: AudioThread) -> Result<Self> {
         let stats = Arc::new(Stats::new());
-        let running = devices::driver(Request { device, period_frames }, Arc::clone(&stats))
-            .start(render)
-            .map_err(|error| Error::from_reason(error.to_string()))?;
-        Ok(Self::Device { running, stats })
+        let follower =
+            Follower::start(Request { device, period_frames }, audio, Os, Arc::clone(&stats))
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(Self::Device { follower, stats })
     }
 
     /// Starts the timer clock's thread, which renders a block at each deadline on its own.
@@ -37,7 +38,16 @@ impl Clock {
     pub fn info(&self) -> StreamInfo {
         match self {
             Self::Offline(driver) => driver.info(),
-            Self::Timer { running, .. } | Self::Device { running, .. } => running.info,
+            Self::Timer { running, .. } => running.info,
+            Self::Device { follower, .. } => follower.current().get().info,
+        }
+    }
+
+    /// Where a device clock plays now; the offline and timer clocks play nowhere.
+    pub fn playing(&self) -> Option<Playing> {
+        match self {
+            Self::Offline(_) | Self::Timer { .. } => None,
+            Self::Device { follower, .. } => Some(follower.current().get()),
         }
     }
 
@@ -45,6 +55,14 @@ impl Clock {
         match self {
             Self::Offline(_) => None,
             Self::Timer { stats, .. } | Self::Device { stats, .. } => Some(Arc::clone(stats)),
+        }
+    }
+
+    /// What the events thread watches for moves.
+    pub fn current(&self) -> Option<Current> {
+        match self {
+            Self::Offline(_) | Self::Timer { .. } => None,
+            Self::Device { follower, .. } => Some(follower.current()),
         }
     }
 

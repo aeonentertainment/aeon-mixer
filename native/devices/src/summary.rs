@@ -43,6 +43,7 @@ impl fmt::Display for Summary<'_> {
         )?;
         writeln!(f, "late       {} over 1.5 periods ({} ms)", report.at_least(late), ms(late))?;
         writeln!(f, "underruns  {}", report.underruns)?;
+        writeln!(f, "lost       {}", yes(report.lost))?;
         write!(f, "failed     {}", yes(report.failed))
     }
 }

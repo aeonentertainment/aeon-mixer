@@ -45,7 +45,7 @@ export class Engine {
     "pause",
     "level",
   ]);
-  readonly output: OutputInfo;
+  #output: OutputInfo;
   /** How many slots a mixer may have, fixed at open. */
   readonly #slots: number;
   /** Offline engines only: render blocks and return them as interleaved stereo. */
@@ -98,10 +98,10 @@ export class Engine {
         deliver,
       );
     }
-    this.output = outputInfo(this.#native.output);
+    this.#output = outputInfo(this.#native.output);
     this.#host = {
       native: this.#native,
-      output: this.output,
+      output: () => this.#output,
       command: (send, onTimeout) => this.#command(send, onTimeout),
       watchRender: (id, onProgress) =>
         new Promise<void>((resolve, reject) => {
@@ -114,6 +114,14 @@ export class Engine {
       anyLive: () => this.#live !== null,
       underruns: () => this.#underruns,
     };
+  }
+
+  /**
+   * The output playing now. An engine opened with no `output.device` follows the OS default, and
+   * one with a `device` plays there while it exists; `outputChanged` fires after every move.
+   */
+  get output() {
+    return this.#output;
   }
 
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
@@ -249,6 +257,10 @@ export class Engine {
         case "renderProgress":
           this.#renders.get(event.job)?.onProgress(event.fraction);
           break;
+        case "outputChanged":
+          this.#output = outputInfo(event.output);
+          this.#events.emit("outputChanged", this.#output, event.gapMs);
+          break;
         case "renderFinished": {
           const render = this.#renders.get(event.job);
           this.#renders.delete(event.job);
@@ -289,7 +301,13 @@ function outputInfo(info: NativeOutputInfo): OutputInfo {
   if (info.sampleRate !== 48000) {
     throw new Error(`the engine runs at 48 kHz; the addon reports ${info.sampleRate}`);
   }
-  return { sampleRate: 48000, periodFrames: info.periodFrames, latencyMs: info.latencyMs };
+  const { periodFrames, latencyMs, device } = info;
+  return {
+    sampleRate: 48000,
+    periodFrames,
+    latencyMs,
+    device: device === undefined ? null : { id: device.id, name: device.name },
+  };
 }
 
 function monoToStereo(mono: Float32Array) {

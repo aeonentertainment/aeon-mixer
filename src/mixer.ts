@@ -16,7 +16,8 @@ import { finiteIn, integerIn, pcm } from "./validate.ts";
 
 /** What a mixer needs from its engine. Internal to the package. */
 export interface MixerHost extends RenderHost {
-  readonly output: OutputInfo;
+  /** The output playing now; it changes when the engine moves. */
+  output(): OutputInfo;
   /**
    * Sends a command carrying an id and resolves on its ack with the backing position. `onTimeout`
    * hears the rejection when no ack comes in time.
@@ -250,7 +251,7 @@ export class Mixer {
         ? undefined
         : this.#command(() => this.#host.native.stopAt(stopAtFrames, msToFrames(STOP_FADE_MS)));
     await Promise.all([swapped, started, stopping]);
-    const { latencyMs } = this.#host.output;
+    const { latencyMs } = this.#host.output();
     return {
       startedAt: Date.now() + latencyMs,
       backingOffsetMs: latencyMs,

@@ -16,7 +16,12 @@ function sine(amplitude: number, frames: number) {
 
 test("an offline engine pumps silent blocks of 128 stereo frames at 48 kHz", async () => {
   const engine = await openEngine({ output: { offline: true } });
-  expect(engine.output).toEqual({ sampleRate: 48000, periodFrames: 128, latencyMs: 0 });
+  expect(engine.output).toEqual({
+    sampleRate: 48000,
+    periodFrames: 128,
+    latencyMs: 0,
+    device: null,
+  });
   expect(engine.capabilities).toEqual(
     new Set(["guideVocal", "key", "speed", "seek", "shortVersion", "pause", "level"]),
   );

@@ -93,7 +93,7 @@ fn run(
     let mmcss = unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut task) };
     stats.set_realtime(mmcss.is_ok());
     if stream.play(&mut feed, stats, stop).is_err() {
-        stats.fail();
+        stats.lose();
     }
     if let Ok(handle) = mmcss {
         // SAFETY: the handle came from AvSetMmThreadCharacteristicsW on this thread.

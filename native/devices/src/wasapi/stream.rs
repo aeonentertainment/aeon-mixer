@@ -196,7 +196,7 @@ impl Stream {
         while !stop.load(Ordering::Acquire) {
             // SAFETY: the event is open for the life of `self`.
             if unsafe { WaitForSingleObject(self.event.0, STALL_MS) } != WAIT_OBJECT_0 {
-                stats.fail();
+                stats.lose();
                 break;
             }
             let interval = stats.callback();

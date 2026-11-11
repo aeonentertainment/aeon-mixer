@@ -109,7 +109,7 @@ fn play<S: Sample>(pcm: &Pcm, feed: &mut Feed, stats: &Stats, stop: &AtomicBool)
     while !stop.load(Ordering::Acquire) {
         let ready = pcm.wait(STALL_MS);
         if ready == 0 {
-            stats.fail();
+            stats.lose();
             return;
         }
         if ready < 0 {
@@ -147,7 +147,7 @@ fn recover(pcm: &Pcm, error: c_int, stats: &Stats) -> bool {
     }
     let recovered = pcm.recover(error) >= 0;
     if !recovered {
-        stats.fail();
+        stats.lose();
     }
     recovered
 }

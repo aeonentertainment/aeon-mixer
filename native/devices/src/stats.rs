@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::time::{Duration, Instant};
 
 use crate::report::Report;
+use crate::wake::Wake;
 
 /// The width of one bucket of the callback interval histogram.
 pub const BUCKET: Duration = Duration::from_micros(50);
@@ -14,7 +15,7 @@ pub const BUCKETS: usize = 400;
 const NEVER: u64 = u64::MAX;
 
 /// What a running stream records about itself: its callbacks and their spacing, its underruns,
-/// whether it failed. A backend writes it from the audio thread with relaxed atomics and no
+/// whether it lost its device or failed. A backend writes it from the audio thread with relaxed atomics and no
 /// allocation. Whoever holds the other `Arc` reads a `Report` whenever it likes: measure-sink
 /// prints one, and the binding can turn underruns and failure into engine events.
 pub struct Stats {
@@ -27,6 +28,8 @@ pub struct Stats {
     longest_ns: AtomicU64,
     realtime: AtomicBool,
     failed: AtomicBool,
+    lost: AtomicBool,
+    on_loss: OnceLock<Wake>,
     opened: OnceLock<String>,
 }
 
@@ -48,6 +51,8 @@ impl Stats {
             longest_ns: AtomicU64::new(0),
             realtime: AtomicBool::new(false),
             failed: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
+            on_loss: OnceLock::new(),
             opened: OnceLock::new(),
         }
     }
@@ -75,9 +80,30 @@ impl Stats {
         self.underruns.fetch_add(1, Relaxed);
     }
 
-    /// The device is gone or render panicked. The stream plays silence or nothing from here.
+    /// Render panicked, or a follower had nothing to move to. The stream plays silence or nothing
+    /// from here, and the engine faults.
     pub fn fail(&self) {
         self.failed.store(true, Relaxed);
+    }
+
+    /// The device went away under the stream: unplugged, disabled or wedged. Unlike `fail` the
+    /// render is whole, so the follower moves it to another output. Called from a stream's own
+    /// thread once its loop has ended, never from inside a render.
+    pub fn lose(&self) {
+        self.lost.store(true, Relaxed);
+        if let Some(wake) = self.on_loss.get() {
+            wake.raise();
+        }
+    }
+
+    /// Raises `wake` on every `lose` from here on. The follower sets it once, before any stream.
+    pub fn wake_on_loss(&self, wake: Wake) {
+        let _ = self.on_loss.set(wake);
+    }
+
+    /// Whether a loss is marked, clearing it: the follower reads it on every wake.
+    pub fn take_lost(&self) -> bool {
+        self.lost.swap(false, Relaxed)
     }
 
     /// Whether the audio thread got the OS's realtime scheduling, set once at start.
@@ -85,7 +111,9 @@ impl Stats {
         self.realtime.store(realtime, Relaxed);
     }
 
-    /// What the backend opened, in words, set once at start on the control thread.
+    /// What the backend opened, in words, set once at start on the control thread. A follower
+    /// keeps one `Stats` across its moves, so this names the first output; `Playing` names the
+    /// one playing now.
     pub fn set_opened(&self, description: String) {
         let _ = self.opened.set(description);
     }
@@ -101,6 +129,7 @@ impl Stats {
             underruns: self.underruns.load(Relaxed),
             realtime: self.realtime.load(Relaxed),
             failed: self.failed.load(Relaxed),
+            lost: self.lost.load(Relaxed),
             shortest: nanos(self.shortest_ns.load(Relaxed)),
             longest: nanos(self.longest_ns.load(Relaxed)),
             intervals: self.intervals.each_ref().map(|count| count.load(Relaxed)),

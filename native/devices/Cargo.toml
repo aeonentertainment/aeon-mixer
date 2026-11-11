@@ -14,6 +14,7 @@ hardware = [
   "dep:objc2-core-audio-types",
   "dep:objc2-core-foundation",
   "dep:windows",
+  "dep:windows-core",
 ]
 
 [dependencies]
@@ -52,6 +53,8 @@ windows = { version = "0.62", optional = true, features = [
   "Win32_Media_Multimedia",
   "Win32_Security",
 ] }
+# The `implement` macro behind the endpoint notifications names this crate directly
+windows-core = { version = "0.62", optional = true }
 
 [dev-dependencies]
 assert_no_alloc = "1.1"

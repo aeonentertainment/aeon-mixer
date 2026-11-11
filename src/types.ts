@@ -14,8 +14,9 @@ export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
   /**
-   * A device; `timer` for a box with no sound card, whose own thread renders on the OS's clock
-   * and whose mix leaves only on a mixer's `rtpReturn`; `offline` for tests, which pump it.
+   * A device, pinned by `device` or, left out, following the OS default; `timer` for a box with
+   * no sound card, whose own thread renders on the OS's clock and whose mix leaves only on a
+   * mixer's `rtpReturn`; `offline` for tests, which pump it.
    */
   output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   /** Fixed for the engine's life, default 8, at most 16. */
@@ -28,6 +29,8 @@ export interface OutputInfo {
   readonly sampleRate: 48000;
   readonly periodFrames: number;
   readonly latencyMs: number;
+  /** The output playing now, as `outputDevices()` lists it; null on the offline clock. */
+  readonly device: { readonly id: string; readonly name: string } | null;
 }
 
 export interface MixerConfig {
@@ -81,6 +84,8 @@ export interface SlotStats {
 
 export type EngineEvents = {
   fault: (error: Error) => void;
+  /** After every move to another output; `gapMs` is how long the room heard nothing. */
+  outputChanged: (output: OutputInfo, gapMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */
   masterLevel: (rmsDb: number, peakDb: number) => void;
 };

@@ -5,6 +5,8 @@
 use engine::command::Event;
 use napi_derive::napi;
 
+use crate::engine::OutputInfo;
+
 #[napi(discriminant = "kind", discriminant_case = "camelCase")]
 pub enum NativeEvent {
     Ack {
@@ -42,6 +44,12 @@ pub enum NativeEvent {
     /// The render job is done: `installBacking` has its stems, or its error.
     RenderFinished {
         job: u32,
+    },
+    /// The engine moved to another output: where it plays now, and how long the room heard
+    /// nothing.
+    OutputChanged {
+        output: OutputInfo,
+        gap_ms: f64,
     },
 }
 
