@@ -29,8 +29,17 @@ time. T is held to 82 Hz's at the longest, so no input can exceed the 82 Hz colu
 | +12 semitones                     | 16.5 ms | 13.0 ms | 7.9 ms | 2.6 ms |
 | Today's `PitchShifter`, any shift | 14.9 ms | 11.4 ms | 6.3 ms | 2.5 ms |
 
-A shift of +12 at a high voice can overshoot this by up to half a millisecond. The average is
-about half the bound: on vocadito clips 2, 10 and 19, mean 2.3 to 4.9 ms and worst 14.6 ms.
+The delay holds this bound once the read point has caught up with the voice the detector hears,
+within 100 ms of a leap up. Two things keep it there. A jump that catches up several periods
+leaves the next jump due after one period's drift, not after as many as it took. And a voice
+shifted down far enough that a crossfade is cut to fit its period, from 750 Hz at -12 to 1015 Hz
+at -8, drifts nearly a period during that crossfade, as much as a jump takes back. A jump that
+lands high there gets a shorter crossfade; otherwise the delay would stay above the bound for as
+long as the note. That happens at an onset or a leap, not on a held note: on tones from 82 to
+1100 Hz, no crossfade after the first 250 ms of a note is cut.
+
+The average is about half the bound: on vocadito clips 2, 10 and 19, mean 2.3 to 4.9 ms and worst
+14.6 ms.
 
 ## What each candidate costs
 
