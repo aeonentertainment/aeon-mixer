@@ -28,8 +28,9 @@ latency e2e compare it with a budget. Adding `correctorDelayMs` would make that 
 when it was read. Adding `correctorMaxDelayMs` keeps it steady and overstates a high voice, which
 stays on the safe side.
 
-`pitch-correction` used to change nothing, and now corrects. The package is at 0.0.0 and this is
-what the API always promised, so it takes no major bump.
+`pitch-correction` used to change nothing, and now corrects. This is what the API always promised,
+so it takes no major bump: the package is before 1.0, and the change shipped in the minor release
+0.3.0.
 
 ## How others report a delay
 
