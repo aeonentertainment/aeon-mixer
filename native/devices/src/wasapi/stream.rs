@@ -1,4 +1,3 @@
-use std::ptr::null_mut;
 use std::slice;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -10,13 +9,14 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, IAudioClient, IAudioClient3, IAudioRenderClient, IMMDevice,
 };
-use windows::Win32::System::Com::{CLSCTX_ALL, CoTaskMemFree};
+use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Threading::WaitForSingleObject;
 
 use super::event::Event;
 use super::failed;
-use super::format::{Format, is_float_48k};
+use super::format::Format;
 use super::mode::WasapiMode;
+use super::shared::initialize_shared;
 use crate::feed::Feed;
 use crate::sample::Sample;
 use crate::stats::Stats;
@@ -84,50 +84,12 @@ impl Stream {
     }
 
     // IAudioClient3 at the smallest period the shared engine allows at or above the asked one.
-    // The engine never resamples, so a mix format other than f32 at 48 kHz is an error.
     fn shared(device: &IMMDevice, asked: u32) -> Result<Self, DriverError> {
-        // SAFETY: COM is initialised on this thread; every out-pointer below is a local.
-        unsafe {
-            let client: IAudioClient3 =
-                device.Activate(CLSCTX_ALL, None).map_err(failed("activate IAudioClient3"))?;
-            let mix = client.GetMixFormat().map_err(failed("read the mix format"))?;
-            let started = (|| {
-                if !is_float_48k(mix) {
-                    return Err(DriverError::Backend("the shared mix is not f32 at 48 kHz".into()));
-                }
-                let (mut default, mut fundamental, mut min, mut max) = (0, 0, 0, 0);
-                client
-                    .GetSharedModeEnginePeriod(
-                        mix,
-                        &mut default,
-                        &mut fundamental,
-                        &mut min,
-                        &mut max,
-                    )
-                    .map_err(failed("read the shared engine's periods"))?;
-                let step = fundamental.max(1);
-                let period = (asked.div_ceil(step) * step).clamp(min, max);
-                client
-                    .InitializeSharedAudioStream(
-                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                        period,
-                        mix,
-                        None,
-                    )
-                    .map_err(failed("start a shared low-latency stream"))?;
-                Ok(usize::from(mix.read_unaligned().nChannels))
-            })();
-            CoTaskMemFree(Some(mix.cast_const().cast()));
-            let channels = started?;
-
-            // Another app may already hold the engine at a period of its own
-            let (mut format, mut period) = (null_mut(), 0);
-            client
-                .GetCurrentSharedModeEnginePeriod(&mut format, &mut period)
-                .map_err(failed("read the shared engine's period"))?;
-            CoTaskMemFree(Some(format.cast_const().cast()));
-            Self::finish(client.into(), true, Format::F32, channels, period)
-        }
+        // SAFETY: COM is initialised on this thread.
+        let client: IAudioClient3 = unsafe { device.Activate(CLSCTX_ALL, None) }
+            .map_err(failed("activate IAudioClient3"))?;
+        let (channels, period) = initialize_shared(&client, asked)?;
+        Self::finish(client.into(), true, Format::F32, channels, period)
     }
 
     // Exclusive and event-driven: the device double-buffers one period each side of the flip.

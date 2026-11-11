@@ -86,7 +86,7 @@ impl Driver for CoreAudioDriver {
 }
 
 // The engine never resamples, so the device itself moves to 48 kHz if it is elsewhere.
-fn set_rate(device: AudioObjectID) -> Result<(), DriverError> {
+pub(super) fn set_rate(device: AudioObjectID) -> Result<(), DriverError> {
     let read = || -> Result<f64, DriverError> {
         // SAFETY: the nominal sample rate is a Float64.
         unsafe {
@@ -112,7 +112,7 @@ fn set_rate(device: AudioObjectID) -> Result<(), DriverError> {
 }
 
 // The IO buffer is the period: the frames each IOProc call renders.
-fn set_period(device: AudioObjectID, asked: u32) -> Result<u32, DriverError> {
+pub(super) fn set_period(device: AudioObjectID, asked: u32) -> Result<u32, DriverError> {
     // SAFETY: the buffer size range is an AudioValueRange and the buffer size a UInt32.
     unsafe {
         let range: AudioValueRange =

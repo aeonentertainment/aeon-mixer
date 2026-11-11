@@ -1,4 +1,4 @@
-/// One audio output the OS offers, as `outputs()` lists it.
+/// One audio output the OS offers, as `outputs()` lists it, or one input as `inputs()` does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Output {
     /// Stable across restarts: ALSA's `hw:CARD=...,DEV=...`, CoreAudio's device UID, the
@@ -7,3 +7,6 @@ pub struct Output {
     pub name: String,
     pub is_default: bool,
 }
+
+/// An input is listed with the same fields as an output.
+pub type Input = Output;

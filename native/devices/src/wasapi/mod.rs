@@ -1,8 +1,11 @@
+mod capture;
+mod capture_stream;
 mod com;
 mod driver;
 mod event;
 mod format;
 mod mode;
+mod shared;
 mod stream;
 
 use std::thread;
@@ -10,11 +13,13 @@ use std::thread;
 use engine::driver::DriverError;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
-    DEVICE_STATE_ACTIVE, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender,
+    DEVICE_STATE_ACTIVE, EDataFlow, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+    eConsole, eRender,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
 use windows::core::PCWSTR;
 
+pub use capture::WasapiCapture;
 pub use driver::WasapiDriver;
 pub use mode::WasapiMode;
 
@@ -24,22 +29,31 @@ use com::Com;
 /// The active render endpoints, by MMDevice id, with the default console output marked. Runs on
 /// a thread of its own so the caller's COM apartment never matters.
 pub fn outputs() -> Result<Vec<Output>, DriverError> {
-    thread::spawn(|| {
+    endpoints(eRender)
+}
+
+/// The active capture endpoints, listed the way `outputs` lists render ones.
+pub fn inputs() -> Result<Vec<crate::Input>, DriverError> {
+    endpoints(eCapture)
+}
+
+fn endpoints(flow: EDataFlow) -> Result<Vec<Output>, DriverError> {
+    thread::spawn(move || {
         let _com = Com::init()?;
         let enumerator = enumerator()?;
         // SAFETY: COM is initialised on this thread.
         unsafe {
             let default = enumerator
-                .GetDefaultAudioEndpoint(eRender, eConsole)
+                .GetDefaultAudioEndpoint(flow, eConsole)
                 .ok()
                 .and_then(|device| id(&device).ok());
             let devices = enumerator
-                .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
-                .map_err(failed("list the outputs"))?;
-            let count = devices.GetCount().map_err(failed("count the outputs"))?;
+                .EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)
+                .map_err(failed("list the devices"))?;
+            let count = devices.GetCount().map_err(failed("count the devices"))?;
             (0..count)
                 .map(|index| {
-                    let device = devices.Item(index).map_err(failed("read an output"))?;
+                    let device = devices.Item(index).map_err(failed("read a device"))?;
                     let id = id(&device)?;
                     Ok(Output {
                         is_default: default.as_ref() == Some(&id),
@@ -51,11 +65,20 @@ pub fn outputs() -> Result<Vec<Output>, DriverError> {
         }
     })
     .join()
-    .map_err(|_| DriverError::Backend("listing the outputs panicked".into()))?
+    .map_err(|_| DriverError::Backend("listing the devices panicked".into()))?
 }
 
 /// The output with this id, or the default console output.
 fn device(id: Option<&str>) -> Result<IMMDevice, DriverError> {
+    endpoint(id, eRender)
+}
+
+/// The input with this id, or the default console input.
+fn input_device(id: Option<&str>) -> Result<IMMDevice, DriverError> {
+    endpoint(id, eCapture)
+}
+
+fn endpoint(id: Option<&str>, flow: EDataFlow) -> Result<IMMDevice, DriverError> {
     let enumerator = enumerator()?;
     // SAFETY: COM is initialised on this thread; `wide` is nul-terminated and outlives the call.
     unsafe {
@@ -65,7 +88,7 @@ fn device(id: Option<&str>) -> Result<IMMDevice, DriverError> {
                 enumerator.GetDevice(PCWSTR(wide.as_ptr())).map_err(|_| DriverError::NoDevice)
             }
             None => enumerator
-                .GetDefaultAudioEndpoint(eRender, eConsole)
+                .GetDefaultAudioEndpoint(flow, eConsole)
                 .map_err(|_| DriverError::NoDevice),
         }
     }

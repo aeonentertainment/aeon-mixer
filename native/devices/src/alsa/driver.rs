@@ -7,6 +7,7 @@ use engine::block::RATE;
 use engine::driver::{Driver, DriverError, Render, Running, StreamInfo};
 
 use super::asound::asound;
+use super::direction::Direction;
 use super::format::Format;
 use super::pcm::Pcm;
 use crate::feed::Feed;
@@ -45,7 +46,7 @@ impl Driver for AlsaDriver {
             Some(device) => device,
             None => super::default_output()?,
         };
-        let pcm = Pcm::open(lib, &device, request.period_frames)?;
+        let pcm = Pcm::open(lib, &device, request.period_frames, 1, Direction::Playback)?;
         let info = StreamInfo {
             sample_rate: RATE,
             period_frames: pcm.period,
@@ -78,12 +79,17 @@ impl Driver for AlsaDriver {
     }
 }
 
-fn run(pcm: Pcm, mut feed: Feed, stats: &Stats, stop: &AtomicBool) -> Feed {
+/// Asks for realtime scheduling for this thread, and notes in `stats` whether it was granted.
+pub(super) fn ask_for_realtime(stats: &Stats) {
     let param = libc::sched_param { sched_priority: PRIORITY };
     // SAFETY: sets this thread's own policy; fails without effect when the user may not.
     let realtime =
         unsafe { libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param) };
     stats.set_realtime(realtime == 0);
+}
+
+fn run(pcm: Pcm, mut feed: Feed, stats: &Stats, stop: &AtomicBool) -> Feed {
+    ask_for_realtime(stats);
     match pcm.format {
         Format::F32 => play::<f32>(&pcm, &mut feed, stats, stop),
         Format::I32 => play::<i32>(&pcm, &mut feed, stats, stop),
