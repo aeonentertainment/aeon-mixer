@@ -105,10 +105,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-22.04-arm, macos-15, windows-2025]
-        node: [24]
+        # Listed one by one: an include entry that only adds a key to an existing os and node
+        # pair would change that job, not add one
         include:
+          - { os: ubuntu-24.04, node: 24 }
           - { os: ubuntu-24.04, node: 20 }
+          - { os: ubuntu-22.04-arm, node: 24 }
+          - { os: windows-2025, node: 24 }
+          - { os: macos-15, node: 24 }
           # An Intel Node under Rosetta, which loads the darwin-x64 addon
           - { os: macos-15, node: 24, arch: x64 }
     runs-on: ${{ matrix.os }}
