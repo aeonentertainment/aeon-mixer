@@ -176,6 +176,27 @@ export class Mixer {
   }
 
   /**
+   * Writes every datagram that reaches an `rtp` or `l16` slot's port to a new pcap file at `path`,
+   * with the moment the network thread read it, until `null`, another path or `destroy`. The file
+   * is created here and never over an existing one, so a bad path throws. A recording holds a
+   * singer's voice and their phone's LAN address: it is made only when a person asks for one, and
+   * nothing in this package sends it anywhere. Start it after `start`, so a replay begins where
+   * the live slot did. docs/design.md 8.4.
+   */
+  recordSlot(index: number, path: string | null) {
+    const slot = this.#slot(index);
+    const kind = this.slots[slot]?.kind;
+    if (kind === "push") {
+      throw new Error(`slot ${slot} is a push slot; only rtp and l16 slots record`);
+    }
+    if (this.#phase === "destroyed") {
+      throw new Error("the mixer is destroyed");
+    }
+    if (path === "") throw new RangeError("path must name a file");
+    this.#native.recordSlot(slot, path);
+  }
+
+  /**
    * Hands interleaved stereo PCM to a push slot, folded to mono as every slot is. Returns the
    * frames taken; the rest did not fit and is dropped, since late audio is worse than lost audio.
    * Throws on a slot of another kind.

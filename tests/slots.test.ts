@@ -1,5 +1,8 @@
 import { createSocket } from "node:dgram";
 import { once } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vite-plus/test";
 import { type Mixer, type OfflineEngine, openEngine } from "../src/index.ts";
 
@@ -98,4 +101,37 @@ test("the slot count and the playout delay are checked before anything crosses",
     engine.createMixer({ slots: [{ kind: "rtp" }, { kind: "l16" }, { kind: "rtp" }] }),
   ).rejects.toThrow(RangeError);
   await engine.close();
+});
+
+test("an rtp slot records to a new pcap file, and a push slot or an existing file refuses", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aeon-mixer-record-"));
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "rtp" }, { kind: "push" }] });
+  await startLive(engine, mixer);
+
+  const path = join(dir, "slot0.pcap");
+  mixer.recordSlot(0, path);
+  // Classic pcap: the microsecond magic little endian, version 2.4, Ethernet
+  const header = await readFile(path);
+  expect([...header.subarray(0, 4)]).toEqual([0xd4, 0xc3, 0xb2, 0xa1]);
+  expect(header.readUInt16LE(4)).toBe(2);
+  expect(header.readUInt32LE(20)).toBe(1);
+  mixer.recordSlot(0, null);
+
+  expect(() => {
+    mixer.recordSlot(1, join(dir, "push.pcap"));
+  }).toThrow(/only rtp and l16 slots record/);
+  const kept = join(dir, "kept.pcap");
+  await writeFile(kept, "someone's file");
+  expect(() => {
+    mixer.recordSlot(0, kept);
+  }).toThrow(/cannot record to/);
+  expect(await readFile(kept, "utf8")).toBe("someone's file");
+
+  await destroyLive(engine, mixer);
+  expect(() => {
+    mixer.recordSlot(0, join(dir, "late.pcap"));
+  }).toThrow(/destroyed/);
+  await engine.close();
+  await rm(dir, { recursive: true });
 });

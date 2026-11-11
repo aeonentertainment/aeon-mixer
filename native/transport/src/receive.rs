@@ -1,24 +1,32 @@
 //! One slot's socket: bound on the control thread, read on the network thread into the slot's
 //! packet ring. Both ingest kinds arrive as RTP, Opus from a phone or mediasoup and L16 from
-//! the house-mic sender, so a receiver does not care which; the slot's decoder does.
+//! the house-mic sender, so a receiver does not care which; the slot's decoder does. When the
+//! host records the slot, each datagram also goes to the recording's tap, after its packet is in
+//! the ring.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::mpsc;
+use std::time::Instant;
 
 use engine::ingest::{Packet, PacketProducer};
 use mio::net::UdpSocket;
 use mio::{Interest, Registry, Token};
 
 use crate::Task;
+use crate::record::{RecordSwitch, Tap};
 use crate::rtp::Header;
 
 /// Room for a datagram over the MTU, so an oversized one is read and dropped rather than cut.
-const DATAGRAM: usize = 2048;
+pub const DATAGRAM: usize = 2048;
 
 pub struct Receiver {
     socket: UdpSocket,
     packets: PacketProducer,
     datagram: Box<[u8; DATAGRAM]>,
+    switch: mpsc::Sender<Option<Tap>>,
+    switched: mpsc::Receiver<Option<Tap>>,
+    tap: Option<Tap>,
 }
 
 impl Receiver {
@@ -27,11 +35,24 @@ impl Receiver {
     pub fn bind(port: Option<u16>, packets: PacketProducer) -> io::Result<Self> {
         let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port.unwrap_or(0)));
         let socket = UdpSocket::bind(address)?;
-        Ok(Self { socket, packets, datagram: Box::new([0; DATAGRAM]) })
+        let (switch, switched) = mpsc::channel();
+        Ok(Self { socket, packets, datagram: Box::new([0; DATAGRAM]), switch, switched, tap: None })
     }
 
     pub fn port(&self) -> io::Result<u16> {
         self.socket.local_addr().map(|address| address.port())
+    }
+
+    /// Turns this receiver's recording on and off from the control thread, once the receiver is
+    /// on the network thread.
+    pub fn switch(&self) -> RecordSwitch {
+        RecordSwitch(self.switch.clone())
+    }
+
+    fn follow_switch(&mut self) {
+        while let Ok(tap) = self.switched.try_recv() {
+            self.tap = tap;
+        }
     }
 }
 
@@ -59,17 +80,28 @@ impl Task for Receiver {
     }
 
     fn ready(&mut self) {
+        self.follow_switch();
         loop {
             match self.socket.recv_from(&mut self.datagram[..]) {
-                Ok((len, _)) => {
-                    if let Some(packet) = packet_from(&self.datagram[..len]) {
+                Ok((len, from)) => {
+                    let at = self.tap.as_ref().map(|_| Instant::now());
+                    let datagram = &self.datagram[..len];
+                    if let Some(packet) = packet_from(datagram) {
                         self.packets.push(&packet);
+                    }
+                    if let (Some(tap), Some(at)) = (&mut self.tap, at) {
+                        tap.record(datagram, from, at);
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => return,
             }
         }
+    }
+
+    /// A recording stops within a tick even on a port that has gone quiet, so its file closes.
+    fn tick(&mut self) {
+        self.follow_switch();
     }
 }
 
