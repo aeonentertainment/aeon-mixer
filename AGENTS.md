@@ -49,7 +49,9 @@ a decision record and the developer's agreement.
 ## Things we never compromise
 
 1. **The latency budget.** Every buffer, queue, resample and effect on the mic path is a cost
-   against 20 to 30 ms. Add one only with a measurement that shows the budget still holds.
+   against 20 to 30 ms. Add one only with a measurement that shows the budget still holds. The one
+   exception is pitch correction a singer turns on, which ships at GStreamer parity under
+   decision 0019 until the measurements there bring it back inside.
 2. **The audio thread allocates nothing, locks nothing, calls nothing in the OS and never
    panics.** Audio never crosses to JavaScript. How parameters, commands and events cross is
    docs/design.md section 2.
