@@ -40,9 +40,15 @@ pub struct Recording {
 }
 
 impl Recording {
-    /// A new pcap file at `path`, never over an existing one, for datagrams sent to `port`.
+    /// A new pcap file at `path`, never over an existing one, for datagrams sent to `port`. A
+    /// recording holds a singer's voice and their phone's address, so on Unix only its owner can
+    /// read it, whatever the process's umask. On Windows it takes the folder's access list.
     pub fn create(path: &Path, port: u16) -> io::Result<(Self, Tap)> {
-        let mut file = File::options().write(true).create_new(true).open(path)?;
+        let mut options = File::options();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(path)?;
         file.write_all(&pcap::global_header())?;
         let started = Instant::now();
         let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
@@ -170,6 +176,19 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert_eq!(written.records + u64::from(written.dropped), 20 * CAPACITY as u64);
         assert!(written.dropped > 0, "{written:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_its_owner_can_read_a_recording() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("private");
+        let (recording, tap) = Recording::create(&path, 40_000).unwrap();
+        drop(tap);
+        recording.finish().unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(mode & 0o077, 0, "group or others can reach it: {mode:o}");
     }
 
     #[test]
