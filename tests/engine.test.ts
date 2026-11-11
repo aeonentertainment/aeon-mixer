@@ -94,7 +94,12 @@ test("the engine reads the master level of what it plays, with no mixer live", a
 test("a timer engine keeps its own clock: it plays and meters with nobody pumping", async () => {
   const engine = await openEngine({ output: { timer: true } });
   expect(engine.pump).toBeUndefined();
-  expect(engine.output).toEqual({ sampleRate: 48000, periodFrames: 128, latencyMs: 0 });
+  expect(engine.output).toEqual({
+    sampleRate: 48000,
+    periodFrames: 128,
+    latencyMs: 0,
+    device: null,
+  });
   expect(await engine.outputDevices()).toEqual([]);
 
   const reading = new Promise<[rmsDb: number, peakDb: number]>((resolve) => {
