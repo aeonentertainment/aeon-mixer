@@ -5,8 +5,10 @@
 ## Decision
 
 Mouth to speaker, the mic path targets 20 to 30 ms. The budget covers every stage on a slot's
-path, including pitch correction and any voice effect the singer turns on. It replaces 40 to
-60 ms in AGENTS.md's never-compromise list.
+path, including pitch correction and any voice effect the singer turns on, with one exception:
+pitch correction a singer turns on ships at GStreamer parity under decision 0019 until that
+record's measurements bring it inside. It replaces 40 to 60 ms in AGENTS.md's never-compromise
+list.
 
 ## Why
 
@@ -20,7 +22,8 @@ path, including pitch correction and any voice effect the singer turns on. It re
 - Performers tolerate more delay from wedge monitors than from in-ear monitors (Lester and Boley,
   AES 2007). A room's speakers sit on the wedge side, which is why the ceiling is 30 ms and not 10. Lower is still better.
 - Pitch correction and voice transforms are part of the product. A budget that exempts them makes
-  the mode a singer chose the one that sounds late.
+  the mode a singer chose the one that sounds late. That is why decision 0019's exception for
+  correction is held to terms and an exit, rather than being an exemption.
 
 ## What it costs
 

@@ -8,12 +8,10 @@ are judged against, so what it can and cannot say spans them all.
 
 ## Reaching the engaged corrector
 
-`Slot::new` forces the corrector's strength to zero and #44 removes that, but #44 is blocked by these
-numbers. `Slot::engaged` is a second constructor that lifts the force at run time, and only this tool
-calls it. A cargo feature was the other choice and is worse: a workspace build unifies features, so
-`cargo test` would build the addon's engine with correction live and the tests would measure a slot
-that does not ship. The branch costs one comparison a block. #44 deletes the constructor, the field
-and a test, and the tool switches to `Slot::new`.
+The tool builds its slots with `Slot::new`, the slot singers get, so what it measures is what ships.
+Until #44 the slot forced the corrector's strength to zero and only a second constructor lifted that.
+A cargo feature was the other choice and is worse: a workspace build unifies features, so `cargo test`
+would have built the addon's engine with correction live before anyone had decided to ship it.
 
 The tool renders `Graph` on `OfflineDriver` directly rather than through `AudioThread`, because the
 delay row reads the slot between blocks. What it skips is the command drain and the swap fade, which

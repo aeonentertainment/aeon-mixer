@@ -91,7 +91,8 @@ Rules that follow:
 Mic slots run on the output clock. A block of output is a block of input from every slot's
 jitter buffer, decoded now, or from a capture slot's ring. Nothing on a slot's path may delay a
 sample beyond the jitter buffer's playout delay and the decoder's frame, or a capture slot's ring
-and the input's period.
+and the input's period, except the corrector's shifter on a slot whose singer has asked for
+correction.
 
 The backing path runs on its own playhead, a frame counter the audio thread advances by one
 block per render while playing. Key shift, time stretch, guide vocal mixing, seek and fades
@@ -130,10 +131,10 @@ path or an output to the master, never a general graph.
 **A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, reverb,
 gain and pan into the stereo bus. The meter sits after the corrector and before the reverb and
 gain, so the level words tell the singer about their singing, not the room, and mute never
-changes them. The corrector runs bypassed for now: engaged, its shifter delays the voice by up
-to 15 ms for a low voice, which breaks the latency budget on slower devices. It reads pitch
-with no delay until `measure-latency` shows engaged correction fits the budget;
-`Slot::engaged` lets `measure-corrector` measure it on the real chain until then. The source is a
+changes them. The corrector costs a singer who asks for it a delay that moves with the voice,
+from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
+stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
+the voice over bit for bit with no delay and still reads pitch. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots, and a PCM ring
 a device's capture thread fills for `capture` slots. Slots are mono and pan with a constant-power
 law into the stereo bus.

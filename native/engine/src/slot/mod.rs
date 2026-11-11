@@ -1,6 +1,7 @@
 //! One mic input: its source, the effect chain, the meter, then gain and pan into the stereo
 //! bus. The order is docs/design.md section 4; the ramps are one block.
 
+pub mod corrector_delay;
 pub mod cue;
 pub mod effects;
 pub mod guide;
@@ -8,10 +9,12 @@ pub mod meter;
 pub mod source;
 
 use std::f32::consts::FRAC_PI_4;
+use std::sync::Arc;
 
 use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{Event, EventProducer};
-use crate::params::{CorrectorParams, SlotParams};
+use crate::params::SlotParams;
+use corrector_delay::CorrectorDelay;
 use cue::Cue;
 use effects::{Corrector, Reverb};
 use guide::Guide;
@@ -22,8 +25,7 @@ pub struct Slot {
     source: Box<dyn Source>,
     guide: Option<Box<Guide>>,
     corrector: Corrector,
-    /// Whether the corrector does what its params ask. `new` leaves this off until #44.
-    engaged: bool,
+    corrector_delay: Arc<CorrectorDelay>,
     reverb: Reverb,
     meter: Meter,
     /// Left and right gains the last block ended on; `None` before the first block, which starts
@@ -38,7 +40,7 @@ impl Slot {
             source,
             guide: None,
             corrector: Corrector::new(),
-            engaged: false,
+            corrector_delay: Arc::default(),
             reverb: Reverb::new(),
             meter: Meter::new(),
             gains: None,
@@ -46,17 +48,15 @@ impl Slot {
         }
     }
 
-    /// A slot whose corrector shifts the voice as its params ask, where `new` holds it at strength
-    /// zero. Only measure-corrector builds one: it is how the engaged corrector gets measured on
-    /// the real slot chain before #44 turns it on for singers.
-    pub fn engaged(source: Box<dyn Source>) -> Self {
-        Self { engaged: true, ..Self::new(source) }
-    }
-
-    /// How far the corrector makes the voice trail what `source` handed over, now; 0 while
-    /// bypassed.
+    /// How far the corrector makes the voice trail what `source` handed over, now; 0 with
+    /// correction off.
     pub fn corrector_latency_frames(&self) -> usize {
         self.corrector.latency_frames()
+    }
+
+    /// The same delay for the control thread, once the graph has moved to the audio thread.
+    pub fn corrector_delay(&self) -> Arc<CorrectorDelay> {
+        Arc::clone(&self.corrector_delay)
     }
 
     /// Pulls one block, corrects it toward the guide at `cue`, meters it, adds reverb, and adds it
@@ -75,16 +75,8 @@ impl Slot {
         let guide_offset =
             (f64::from(params.guide_offset_ms) * f64::from(RATE) / 1000.0).round() as i64;
         let frame = cue.frame - i64::from(self.source.latency_frames()) + guide_offset;
-        // Correction stays bypassed on the mic path: engaged, the shifter delays the voice by up
-        // to 15 ms, which breaks the latency budget on slower devices until measure-latency shows
-        // otherwise. Bypassed it adds no delay and still reads pitch.
-        let corrector = if self.engaged {
-            params.effects.corrector
-        } else {
-            CorrectorParams { strength: 0.0, ..params.effects.corrector }
-        };
         self.corrector.process(
-            &corrector,
+            &params.effects.corrector,
             self.guide.as_deref(),
             frame,
             cue.semitones,
@@ -98,6 +90,7 @@ impl Slot {
                 });
             },
         );
+        self.corrector_delay.publish(self.corrector.latency_frames());
         // The meter reads the corrected voice before the reverb, so the level is the singing
         for sample in self.input {
             if let Some(reading) = self.meter.push_frame(sample * sample, sample.abs()) {
@@ -150,50 +143,65 @@ fn target_gains(params: &SlotParams, any_solo: bool) -> [f32; 2] {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::consts::PI;
+    use std::f64::consts::TAU;
 
     use assert_no_alloc::assert_no_alloc;
     use kernels::YinDetector;
 
     use super::*;
+    use crate::backing::{Backing, Planar, Stems, Transport};
     use crate::command::event_ring;
-    use crate::params::{CorrectorParams, EffectParams};
+    use crate::driver::OfflineDriver;
+    use crate::graph::Graph;
+    use crate::ingest::fixtures::L16Sender;
+    use crate::ingest::packet::RING_CAPACITY;
+    use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
+    use crate::params::{CorrectorParams, EffectParams, Params};
+    use crate::slot::guide::Note;
 
-    /// A voice held 40 cents above A3.
-    struct SharpVoice {
-        at: usize,
-    }
+    const CORRECTING: CorrectorParams =
+        CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
 
-    fn sharp_a3(frame: usize) -> f32 {
-        let hz = 220.0 * 2f64.powf(40.0 / 1200.0);
+    /// Twelve harmonics at `hz`, the buzz of a sung vowel.
+    fn voice(hz: f64, frame: usize) -> f32 {
         let t = frame as f64 / f64::from(RATE);
-        let sample: f64 = (1..=12).map(|h| (2.0 * PI * hz * h as f64 * t).sin() / h as f64).sum();
+        let sample: f64 = (1..=12).map(|h| (TAU * hz * h as f64 * t).sin() / h as f64).sum();
         (0.25 * sample) as f32
     }
 
-    impl Source for SharpVoice {
+    /// Hands over `samples`, then silence.
+    struct Clip {
+        samples: Vec<f32>,
+        at: usize,
+    }
+
+    impl Source for Clip {
         fn pull(&mut self, out: &mut [f32]) {
             for sample in out {
-                *sample = sharp_a3(self.at);
+                *sample = self.samples.get(self.at).copied().unwrap_or(0.0);
                 self.at += 1;
             }
         }
     }
 
-    /// One second of the voice through `slot` at full strength, hard left so the left channel is
-    /// the slot's mono output, under the allocation guard.
-    fn one_second(mut slot: Slot) -> (Vec<f32>, usize) {
+    /// `samples` through a new slot with `corrector`, hard left so the left channel is its mono
+    /// output, under the allocation guard. After each block `after_block` hears what stats reads.
+    fn through_slot(
+        samples: Vec<f32>,
+        corrector: CorrectorParams,
+        mut after_block: impl FnMut(u32),
+    ) -> Vec<f32> {
+        let frames = samples.len();
+        let mut slot = Slot::new(Box::new(Clip { samples, at: 0 }));
+        let delay = slot.corrector_delay();
         let params = SlotParams {
             pan: -1.0,
-            effects: EffectParams {
-                corrector: CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 },
-                ..EffectParams::default()
-            },
+            effects: EffectParams { corrector, ..EffectParams::default() },
             ..SlotParams::default()
         };
         let (mut events, _drain) = event_ring();
-        let mut output = Vec::with_capacity(RATE as usize);
-        for _ in 0..RATE as usize / BLOCK {
+        let mut output = Vec::with_capacity(frames);
+        for _ in 0..frames.div_ceil(BLOCK) {
             let mut left = [0.0; BLOCK];
             let mut right = [0.0; BLOCK];
             assert_no_alloc(|| {
@@ -201,33 +209,119 @@ mod tests {
                 slot.render(0, &params, false, Cue::default(), &mut out, &mut events);
             });
             output.extend_from_slice(&left);
+            after_block(delay.frames());
         }
-        (output, slot.corrector_latency_frames())
+        output
     }
 
-    // What ships: a slot from `new` asked for full strength hands the voice over untouched, with
-    // no delay. #44 deletes this test along with `Slot::engaged`.
+    // Off is bit for bit what the source handed over, with no delay, whichever way a host says
+    // off: a singer who did not ask for correction pays nothing for it.
     #[test]
-    fn a_new_slot_stays_bypassed_whatever_its_params_ask() {
-        let (output, latency) = one_second(Slot::new(Box::new(SharpVoice { at: 0 })));
-        for (frame, sample) in output.iter().enumerate() {
-            assert_eq!(*sample, sharp_a3(frame), "frame {frame} changed");
+    fn correction_off_hands_the_voice_over_bit_for_bit() {
+        let off = [
+            CorrectorParams::default(),
+            CorrectorParams { enabled: false, strength: 1.0, retune_ms: 0.0 },
+            CorrectorParams { enabled: true, strength: 0.0, retune_ms: 40.0 },
+        ];
+        let input: Vec<f32> = (0..RATE as usize).map(|frame| voice(226.0, frame)).collect();
+        for corrector in off {
+            let output = through_slot(input.clone(), corrector, |delay| assert_eq!(delay, 0));
+            for (frame, (out, sample)) in output.iter().zip(&input).enumerate() {
+                assert_eq!(out.to_bits(), sample.to_bits(), "{corrector:?} changed frame {frame}");
+            }
         }
-        assert_eq!(latency, 0);
     }
 
-    // What the tool measures: the same voice on an engaged slot lands on A3 within the 10 cents
-    // the corrector's own tests allow, and trails by the shifter's delay.
+    // Whatever a voice leaves the delay at, the audio is that late: a click in the rest after a
+    // phrase arrives where stats said it would, to within the one frame the shifter's fractional
+    // read point can round to. The phrase lengths leave the sawtooth at different heights.
     #[test]
-    fn an_engaged_slot_corrects_and_reports_its_delay() {
-        let (output, latency) = one_second(Slot::engaged(Box::new(SharpVoice { at: 0 })));
+    fn stats_reads_the_delay_the_audio_has() {
+        const REST: usize = RATE as usize / 5;
+        let mut heights = Vec::new();
+        for phrase in (RATE as usize / 5..RATE as usize / 2).step_by(RATE as usize / 40) {
+            // 40 cents above A2, so the shift keeps the read point moving
+            let mut input: Vec<f32> = (0..phrase).map(|frame| voice(112.6, frame)).collect();
+            input.resize(phrase + REST, 0.0);
+            let click = input.len();
+            input.push(0.5);
+            input.resize(click + BLOCK * 16, 0.0);
+
+            let mut reported = Vec::new();
+            let output = through_slot(input, CORRECTING, |delay| reported.push(delay));
+            let before_click = reported[click / BLOCK - 1] as i64;
+            let arrived = (click..output.len())
+                .max_by(|a, b| output[*a].abs().total_cmp(&output[*b].abs()))
+                .expect("frames after the click") as i64;
+            let late = arrived - click as i64;
+            assert!(
+                (late - before_click).abs() <= 1,
+                "a {phrase} frame phrase: click {late} frames late, stats read {before_click}"
+            );
+            heights.push(late);
+        }
+        heights.sort_unstable();
+        assert!(heights[heights.len() - 1] - heights[0] > 48, "one height: {heights:?}");
+    }
+
+    // On the offline driver and through a real source: L16 packets into a jitter buffer, then the
+    // slot. The voice sits 30 cents above A3, nearer A than B flat, so landing on the guide's
+    // B flat shows the guide led it. 10 cents is the tolerance the corrector's own tests allow for
+    // the detector's error.
+    #[test]
+    fn a_tone_from_its_source_lands_on_its_guide_note_and_stats_reads_its_delay() {
+        const B_FLAT_3: u8 = 58;
+        const PLAYOUT: u32 = RATE * 15 / 1000;
+        const PACKET: usize = 240;
+        let frames = 2 * RATE as usize;
+        let a3_sharp = 220.0 * 2f64.powf(30.0 / 1200.0);
+
+        let (mut producer, consumer) = packet_ring(RING_CAPACITY);
+        let jitter = JitterBuffer::new(PLAYOUT, Codec::L16);
+        let mut slot = Slot::new(Box::new(PacketSource::new(consumer, jitter)));
+        let delay = slot.corrector_delay();
+        slot.set_guide(Some(Box::new(Guide {
+            notes: vec![Note { midi: B_FLAT_3, start_frame: 0, end_frame: 2 * frames as u64 }],
+            key_mask: 0,
+        })));
+        let mut graph = Graph::new(vec![slot]);
+        let (mut events, _drain) = event_ring();
+        let mut backing = Planar::default();
+        backing.pad_to(2 * frames);
+        graph.set_backing(Backing::new(Stems::new(backing, None), 0));
+        graph.steer(1, Transport::Start, &mut events);
+        let mut params = Params::default();
+        params.slots[0].pan = -1.0;
+        params.slots[0].effects.corrector = CorrectorParams { retune_ms: 40.0, ..CORRECTING };
+        let mut driver = OfflineDriver::new(Box::new(move |out: Stereo<'_>| {
+            graph.render(&params, out, &mut events);
+        }));
+
+        let input: Vec<f32> = (0..frames).map(|frame| voice(a3_sharp, frame)).collect();
+        let mut sender = L16Sender::new(PACKET, 1);
+        let mut left = Vec::with_capacity(frames);
+        let (mut sent, mut most) = (0, 0);
+        let mut interleaved = [0.0; 2 * BLOCK];
+        while left.len() < frames {
+            // A packet reaches the ring once the output clock has passed its first frame
+            if sent <= left.len() && sent + PACKET <= frames {
+                let packet = sender.packet(&input[sent..sent + PACKET]);
+                assert!(producer.push(&packet), "the ring has room");
+                sent += PACKET;
+            }
+            assert_no_alloc(|| driver.pump_into(&mut interleaved));
+            left.extend(interleaved.iter().step_by(2));
+            most = most.max(delay.frames());
+        }
+
+        // The end of the take, long after the jitter buffer and the retune have settled
         let window = 2048;
-        let read = YinDetector::new(RATE, window).analyze(&output[output.len() - window..]);
-        let cents = 1200.0 * (f64::from(read.hz) / 220.0).log2();
-        assert!(cents.abs() < 10.0, "came out {cents:+.1} cents from A3");
+        let read = YinDetector::new(RATE, window).analyze(&left[left.len() - window..]);
+        let cents = 1200.0 * (f64::from(read.hz) / (220.0 * 2f64.powf(100.0 / 1200.0))).log2();
+        assert!(cents.abs() < 10.0, "came out {cents:+.1} cents from B flat 3");
         // The shifter's floor, and at most an eighth over one period of the voice
-        let bound = 64 + (1.125 * f64::from(RATE) / 220.0) as usize;
-        assert!(latency > 0 && latency <= bound, "latency {latency}, bound {bound}");
+        let bound = 64 + (1.125 * f64::from(RATE) / a3_sharp) as u32;
+        assert!(most > 0 && most <= bound, "delay reached {most} frames, bound {bound}");
     }
 
     #[test]

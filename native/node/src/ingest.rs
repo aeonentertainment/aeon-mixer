@@ -11,7 +11,6 @@ use engine::ingest::push::{DEFAULT_CAPACITY_FRAMES, PushProducer, push_voice_wit
 use engine::ingest::{Codec, JitterBuffer, PacketSource, SharedStats, SlotStats, packet_ring};
 use engine::slot::source::Source;
 use napi::bindgen_prelude::*;
-use napi_derive::napi;
 use transport::receive::Receiver;
 use transport::record::{RecordSwitch, Recording};
 use transport::{Network, TaskHandle};
@@ -102,30 +101,6 @@ impl Ingest {
         match self {
             Self::Push(feed) => Some(feed),
             Self::Packets { .. } => None,
-        }
-    }
-}
-
-/// `SlotStats` as JavaScript reads it.
-#[napi(object)]
-pub struct SlotStatsInfo {
-    pub pushed: u32,
-    pub lost: u32,
-    pub late: u32,
-    pub concealed: u32,
-    pub resyncs: u32,
-    pub jitter_ms: f64,
-}
-
-impl From<SlotStats> for SlotStatsInfo {
-    fn from(stats: SlotStats) -> Self {
-        Self {
-            pushed: stats.pushed,
-            lost: stats.lost,
-            late: stats.late,
-            concealed: stats.concealed,
-            resyncs: stats.resyncs,
-            jitter_ms: f64::from(stats.jitter_ms),
         }
     }
 }

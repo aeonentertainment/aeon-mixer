@@ -63,8 +63,26 @@ test("a push slot plays what the host pushes, through its gain and the pan law",
   expect(mixer.push(1, constant(1, 400))).toBe(4800);
   expect(mixer.stats()).toEqual({
     slots: [
-      { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 },
-      { pushed: 0, lost: 0, late: 0, concealed: 0, resyncs: 0, jitterMs: 0 },
+      {
+        pushed: 0,
+        lost: 0,
+        late: 0,
+        concealed: 0,
+        resyncs: 0,
+        jitterMs: 0,
+        correctorDelayMs: 0,
+        correctorMaxDelayMs: 0,
+      },
+      {
+        pushed: 0,
+        lost: 0,
+        late: 0,
+        concealed: 0,
+        resyncs: 0,
+        jitterMs: 0,
+        correctorDelayMs: 0,
+        correctorMaxDelayMs: 0,
+      },
     ],
     underruns: 0,
     rtpReturn: null,
