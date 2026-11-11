@@ -30,7 +30,7 @@ jobs:
       matrix:
         include:
           - { name: darwin-arm64, os: macos-15 }
-          # Built on Apple silicon for Intel, so it is the one addon no job loads
+          # Built on Apple silicon for Intel; the install job loads it under Rosetta
           - { name: darwin-x64, os: macos-15, target: x86_64-apple-darwin }
           - { name: win32-x64-msvc, os: windows-2025 }
           # Ubuntu 22.04 so the addon needs no newer glibc than 2.35
@@ -100,15 +100,21 @@ jobs:
   # A fresh project installs the tarball with scripts off and no checkout, then renders on the
   # offline engine: the proof that a consumer needs nothing but npm.
   install:
-    name: install (${{ matrix.os }}, node ${{ matrix.node }})
+    name: install (${{ matrix.os }}, node ${{ matrix.node }}${{ matrix.arch && format(', {0}', matrix.arch) || '' }})
     needs: pack
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-22.04-arm, macos-15, windows-2025]
-        node: [24]
+        # Listed one by one: an include entry that only adds a key to an existing os and node
+        # pair would change that job, not add one
         include:
+          - { os: ubuntu-24.04, node: 24 }
           - { os: ubuntu-24.04, node: 20 }
+          - { os: ubuntu-22.04-arm, node: 24 }
+          - { os: windows-2025, node: 24 }
+          - { os: macos-15, node: 24 }
+          # An Intel Node under Rosetta, which loads the darwin-x64 addon
+          - { os: macos-15, node: 24, arch: x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     defaults:
@@ -118,6 +124,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
+          architecture: ${{ matrix.arch }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-tarball
