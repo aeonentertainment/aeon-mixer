@@ -76,6 +76,7 @@ asound! {
     fn snd_pcm_hw_params_set_format(*mut RawPcm, *mut HwParams, c_int) -> c_int;
     fn snd_pcm_hw_params_test_channels(*mut RawPcm, *mut HwParams, c_uint) -> c_int;
     fn snd_pcm_hw_params_get_channels_min(*const HwParams, *mut c_uint) -> c_int;
+    fn snd_pcm_hw_params_get_channels_max(*const HwParams, *mut c_uint) -> c_int;
     fn snd_pcm_hw_params_set_channels(*mut RawPcm, *mut HwParams, c_uint) -> c_int;
     fn snd_pcm_hw_params_set_rate(*mut RawPcm, *mut HwParams, c_uint, c_int) -> c_int;
     fn snd_pcm_hw_params_set_period_size_near(*mut RawPcm, *mut HwParams, *mut c_ulong, *mut c_int) -> c_int;

@@ -9,6 +9,7 @@ use super::asound::{
 };
 use super::direction::Direction;
 use super::format::Format;
+use crate::channel_count::channel_count;
 use crate::sample::Sample;
 
 /// The periods in a playback ring: one playing while the next is written.
@@ -34,10 +35,13 @@ pub struct Pcm {
 unsafe impl Send for Pcm {}
 
 impl Pcm {
+    /// Opens `device` with at least `least_channels`, so that capture can reach the channel it
+    /// reads.
     pub fn open(
         lib: &'static Asound,
         device: &str,
         period: u32,
+        least_channels: u32,
         direction: Direction,
     ) -> Result<Self, DriverError> {
         let name = CString::new(device).map_err(|_| DriverError::NoDevice)?;
@@ -56,7 +60,7 @@ impl Pcm {
         lib.check(opened, &format!("open {device}"))?;
         let mut pcm =
             Self { lib, raw, direction, format: Format::F32, channels: 2, period, buffer: 0 };
-        pcm.configure()?;
+        pcm.configure(device, least_channels)?;
         Ok(pcm)
     }
 
@@ -94,12 +98,12 @@ impl Pcm {
         unsafe { (self.lib.snd_pcm_recover)(self.raw, error, 1) }
     }
 
-    fn configure(&mut self) -> Result<(), DriverError> {
+    fn configure(&mut self, device: &str, least_channels: u32) -> Result<(), DriverError> {
         let lib = self.lib;
         let mut hw = null_mut();
         // SAFETY: `hw` receives an allocation freed below.
         lib.check(unsafe { (lib.snd_pcm_hw_params_malloc)(&mut hw) }, "allocate hw params")?;
-        let applied = self.apply_hw(hw);
+        let applied = self.apply_hw(hw, device, least_channels);
         // SAFETY: allocated above and no longer used.
         unsafe { (lib.snd_pcm_hw_params_free)(hw) };
         applied?;
@@ -113,9 +117,14 @@ impl Pcm {
         applied
     }
 
-    // Interleaved, no resampling, the best format the hardware takes, two channels where it has
-    // them, 48 kHz, then the period nearest the one asked for.
-    fn apply_hw(&mut self, hw: *mut HwParams) -> Result<(), DriverError> {
+    // Interleaved, no resampling, the best format the hardware takes, the channels `channel_count`
+    // picks, 48 kHz, then the period nearest the one asked for.
+    fn apply_hw(
+        &mut self,
+        hw: *mut HwParams,
+        device: &str,
+        least_channels: u32,
+    ) -> Result<(), DriverError> {
         let (lib, raw) = (self.lib, self.raw);
         // SAFETY: `raw` is open and `hw` is allocated for every call below.
         unsafe {
@@ -140,13 +149,23 @@ impl Pcm {
                 "set the format",
             )?;
 
-            let mut channels: c_uint = 2;
-            if (lib.snd_pcm_hw_params_test_channels)(raw, hw, channels) != 0 {
-                lib.check(
-                    (lib.snd_pcm_hw_params_get_channels_min)(hw, &mut channels),
-                    "read channels",
-                )?;
-            }
+            let (mut min, mut max): (c_uint, c_uint) = (0, 0);
+            lib.check(
+                (lib.snd_pcm_hw_params_get_channels_min)(hw, &mut min),
+                "read the fewest channels",
+            )?;
+            lib.check(
+                (lib.snd_pcm_hw_params_get_channels_max)(hw, &mut max),
+                "read the most channels",
+            )?;
+            let channels = channel_count(least_channels, min..=max, |count| {
+                (lib.snd_pcm_hw_params_test_channels)(raw, hw, count) == 0
+            })
+            .ok_or_else(|| {
+                DriverError::Backend(format!(
+                    "{device} opens at {min} to {max} channels, none of them {least_channels} or more"
+                ))
+            })?;
             lib.check((lib.snd_pcm_hw_params_set_channels)(raw, hw, channels), "set channels")?;
             self.channels = channels;
 

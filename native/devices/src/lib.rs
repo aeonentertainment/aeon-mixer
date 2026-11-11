@@ -11,6 +11,8 @@
 mod capture;
 mod capture_feed;
 mod capture_request;
+#[cfg(any(test, all(feature = "hardware", target_os = "linux")))]
+mod channel_count;
 mod feed;
 mod output;
 mod report;

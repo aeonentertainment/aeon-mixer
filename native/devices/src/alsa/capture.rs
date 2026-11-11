@@ -44,13 +44,9 @@ impl Capture for AlsaCapture {
             Some(device) => device,
             None => super::default_input()?,
         };
-        let pcm = Pcm::open(lib, &device, request.period_frames, Direction::Capture)?;
-        if u32::from(request.channel) >= pcm.channels {
-            return Err(DriverError::Backend(format!(
-                "{device} has {} channels, so no channel {}",
-                pcm.channels, request.channel
-            )));
-        }
+        let least_channels = u32::from(request.channel) + 1;
+        let pcm =
+            Pcm::open(lib, &device, request.period_frames, least_channels, Direction::Capture)?;
         let info = CaptureInfo {
             sample_rate: RATE,
             period_frames: pcm.period,

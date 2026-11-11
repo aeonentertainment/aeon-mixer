@@ -46,7 +46,7 @@ impl Driver for AlsaDriver {
             Some(device) => device,
             None => super::default_output()?,
         };
-        let pcm = Pcm::open(lib, &device, request.period_frames, Direction::Playback)?;
+        let pcm = Pcm::open(lib, &device, request.period_frames, 1, Direction::Playback)?;
         let info = StreamInfo {
             sample_rate: RATE,
             period_frames: pcm.period,
