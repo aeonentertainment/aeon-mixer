@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use engine::block::RATE;
 use engine::driver::{DriverError, StreamInfo};
-use windows::Win32::Foundation::{S_OK, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{S_OK, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED, AUDCLNT_SHAREMODE_EXCLUSIVE,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, IAudioClient, IAudioClient3, IAudioRenderClient, IMMDevice,
@@ -21,11 +21,10 @@ use crate::feed::Feed;
 use crate::sample::Sample;
 use crate::stats::Stats;
 
-/// A device that has not signalled in this long has stopped: unplugged or wedged. It is
-/// twenty of WASAPI's 10 ms shared periods, the longest any backend runs at, and short enough
-/// that the stop which waits for it and the move after both fit in the second a command may wait
-/// (decision 0016).
-const STALL_MS: u32 = 200;
+/// How long the thread waits for the device to signal before it looks at `stop` again. A device
+/// that stays silent is the follower's to call lost, after its `STALL`; the stop that follows
+/// waits this out, and the move after it still fits in the second a command may wait.
+const WAIT_MS: u32 = 200;
 
 /// An initialised event-driven render stream, shared or exclusive. Built and played on the
 /// audio thread, which owns COM for it.
@@ -198,9 +197,13 @@ impl Stream {
         unsafe { self.client.Start()? };
         while !stop.load(Ordering::Acquire) {
             // SAFETY: the event is open for the life of `self`.
-            if unsafe { WaitForSingleObject(self.event.0, STALL_MS) } != WAIT_OBJECT_0 {
-                stats.lose();
-                break;
+            match unsafe { WaitForSingleObject(self.event.0, WAIT_MS) } {
+                WAIT_OBJECT_0 => {}
+                WAIT_TIMEOUT => continue,
+                _ => {
+                    stats.lose();
+                    break;
+                }
             }
             let interval = stats.callback();
             let frames = if self.shared {

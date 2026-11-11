@@ -1,11 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use engine::driver::{DriverError, Movable};
 
 use super::current::Current;
-use super::following::Following;
+use super::following::{Following, STALL};
 use super::system::System;
 use crate::request::Request;
 use crate::stats::Stats;
@@ -31,11 +32,23 @@ impl Follower {
         system: impl System,
         stats: Arc<Stats>,
     ) -> Result<Self, DriverError> {
+        Self::stalling_after(STALL, request, movable, system, stats)
+    }
+
+    /// `start`, with a stream lost after `stall` without a callback. Tests that never pump a
+    /// stream pass one longer than they run.
+    pub(super) fn stalling_after(
+        stall: Duration,
+        request: Request,
+        movable: impl Movable,
+        system: impl System,
+        stats: Arc<Stats>,
+    ) -> Result<Self, DriverError> {
         let (wake, woken) = Wake::new();
         stats.wake_on_loss(wake.clone());
         // Watching before the first open, so a change while it opens is not missed
         let watch = system.watch(wake.clone())?;
-        let following = Following::open(request, movable, system, stats, watch)?;
+        let following = Following::open(request, movable, system, stats, watch, stall)?;
         let current = following.current();
         let stopping = Arc::new(AtomicBool::new(false));
         let thread = thread::Builder::new()

@@ -21,6 +21,20 @@ pub const GIVE_UP: Duration = Duration::from_secs(1);
 /// How often an output that refused to open is tried again, inside `GIVE_UP`.
 const RETRY: Duration = Duration::from_millis(100);
 
+/// How long a playing stream may go without a callback before it is lost, on every backend: a
+/// device can stay listed and raise no error while it stops asking for audio, as a CoreAudio
+/// IOProc does on a Mac asleep or in DarkWake. Twenty of WASAPI's 10 ms shared periods, the
+/// longest any backend runs at, and short enough that the reopen fits in the second a command
+/// may wait.
+pub const STALL: Duration = Duration::from_millis(200);
+
+/// How many times the wait for a silent stream doubles. A stream reopened after a stall that
+/// still has not called back waits twice as long as the last before it is reopened again, up to
+/// 32 stalls, 6.4 s. A Mac that sleeps through the night is then reopened about ten times a
+/// minute while it is awake enough to run the follower, not five times a second, and is never
+/// faulted for it.
+const DOUBLINGS: u32 = 5;
+
 /// The follower thread's state: the stream it runs, or the `Movable` it holds between streams.
 pub struct Following<M, S> {
     request: Request,
@@ -28,6 +42,11 @@ pub struct Following<M, S> {
     stats: Arc<Stats>,
     current: Current,
     state: State<M>,
+    /// When the playing stream started: its silence counts from here until it calls back.
+    started: Instant,
+    stall: Duration,
+    /// Stalls in a row with no callback between, each of which doubles the next wait.
+    quiet: u32,
     _watch: Box<dyn Send>,
 }
 
@@ -46,13 +65,15 @@ enum State<M> {
 }
 
 impl<M: Movable, S: System> Following<M, S> {
-    /// Opens the first stream where `request` says to play, on the calling thread.
+    /// Opens the first stream where `request` says to play, on the calling thread. A stream
+    /// with no callback for `stall` is lost.
     pub fn open(
         request: Request,
         movable: M,
         system: S,
         stats: Arc<Stats>,
         watch: Box<dyn Send>,
+        stall: Duration,
     ) -> Result<Self, DriverError> {
         let outputs = system.outputs()?;
         let output =
@@ -67,6 +88,9 @@ impl<M: Movable, S: System> Following<M, S> {
             stats,
             current,
             state: State::Playing { running, dock },
+            started: Instant::now(),
+            stall,
+            quiet: 0,
             _watch: watch,
         })
     }
@@ -87,9 +111,11 @@ impl<M: Movable, S: System> Following<M, S> {
                     }
                     woken.recv_timeout(left.min(RETRY))
                 }
-                State::Playing { .. } | State::Gone => {
-                    woken.recv().map_err(|_| RecvTimeoutError::Disconnected)
+                State::Playing { .. } => {
+                    let silence = self.silence();
+                    woken.recv_timeout(self.patience().saturating_sub(silence))
                 }
+                State::Gone => woken.recv().map_err(|_| RecvTimeoutError::Disconnected),
             };
             if stopping.load(Ordering::Acquire) || woke == Err(RecvTimeoutError::Disconnected) {
                 return;
@@ -101,7 +127,8 @@ impl<M: Movable, S: System> Following<M, S> {
     // Plays where the rule says, or does nothing when it already does: a wake says only that
     // something changed, so three of them for one change cost one move.
     fn reconcile(&mut self, woke_at: Instant) {
-        let lost = self.stats.take_lost();
+        let stalled = self.stalled();
+        let lost = self.stats.take_lost() || stalled;
         // A list that fails to read leaves a stream that still plays alone; one that has lost its
         // device stops, and waiting retries the list
         let outputs = match self.system.outputs() {
@@ -118,6 +145,7 @@ impl<M: Movable, S: System> Following<M, S> {
             if listed && stays && !lost {
                 return;
             }
+            self.quiet = if stalled { (self.quiet + 1).min(DOUBLINGS) } else { 0 };
             let State::Playing { running, dock } = mem::replace(&mut self.state, State::Gone)
             else {
                 return;
@@ -144,10 +172,31 @@ impl<M: Movable, S: System> Following<M, S> {
                     gap: since.elapsed(),
                 });
                 self.state = State::Playing { running, dock };
+                self.started = Instant::now();
             }
             Err((_, Some(movable))) => self.state = State::Waiting { movable, since },
             Err((_, None)) => self.give_up(),
         }
+    }
+
+    // Whether the playing stream has asked for no audio for its whole patience. Its device may
+    // still be listed and still be the target: a stall is a loss all the same.
+    fn stalled(&mut self) -> bool {
+        matches!(self.state, State::Playing { .. }) && self.silence() >= self.patience()
+    }
+
+    // How long the playing stream has asked for no audio: since its last callback, or since it
+    // started if it has not called back yet. A callback ends a run of stalls.
+    fn silence(&mut self) -> Duration {
+        let heard = self.stats.last_callback().filter(|at| *at >= self.started);
+        if heard.is_some() {
+            self.quiet = 0;
+        }
+        heard.unwrap_or(self.started).elapsed()
+    }
+
+    fn patience(&self) -> Duration {
+        self.stall * (1 << self.quiet)
     }
 
     // The fault is marked before the render drops, so the engine hears of it first

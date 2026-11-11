@@ -76,6 +76,13 @@ impl Stats {
         })
     }
 
+    /// When the last callback came, from any stream on this `Stats`. The follower reads it to
+    /// tell a stream that stopped asking for audio.
+    pub fn last_callback(&self) -> Option<Instant> {
+        let last = self.last_ns.load(Relaxed);
+        (last != NEVER).then(|| self.epoch + Duration::from_nanos(last))
+    }
+
     pub fn underrun(&self) {
         self.underruns.fetch_add(1, Relaxed);
     }
@@ -86,9 +93,10 @@ impl Stats {
         self.failed.store(true, Relaxed);
     }
 
-    /// The device went away under the stream: unplugged, disabled or wedged. Unlike `fail` the
-    /// render is whole, so the follower moves it to another output. Called from a stream's own
-    /// thread once its loop has ended, never from inside a render.
+    /// The device went away under the stream: unplugged, disabled or invalidated. Unlike `fail`
+    /// the render is whole, so the follower moves it to another output. Called from a stream's
+    /// own thread once its loop has ended, never from inside a render. A device that only stops
+    /// asking for audio is the follower's to call lost, from `last_callback`.
     pub fn lose(&self) {
         self.lost.store(true, Relaxed);
         if let Some(wake) = self.on_loss.get() {

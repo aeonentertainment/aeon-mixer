@@ -6,12 +6,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use assert_no_alloc::assert_no_alloc;
 use engine::block::{BLOCK, RATE, Stereo};
 use engine::driver::{Driver, DriverError, Movable, Render, Running, StreamInfo};
 
+use super::following::{GIVE_UP, STALL};
 use super::{Follower, System};
 use crate::output::Output;
 use crate::request::Request;
@@ -19,6 +20,9 @@ use crate::stats::Stats;
 use crate::wake::Wake;
 
 const WAIT: Duration = Duration::from_secs(5);
+
+/// The stall for a test that never pumps: longer than any test runs, so no stream is lost to it.
+const NEVER_STALLS: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, PartialEq)]
 enum Seen {
@@ -29,13 +33,15 @@ enum Seen {
     Dropped,
 }
 
-/// The OS's side: what it lists, the one stream running, and the wake its watch was handed.
+/// The OS's side: what it lists, the one stream running with the stats it records callbacks
+/// on, when each stream started, and the wake its watch was handed.
 #[derive(Default)]
 struct Room {
     outputs: Vec<Output>,
     refuses: Vec<String>,
     unreadable: bool,
-    device: Option<(String, Render)>,
+    device: Option<(String, Render, Arc<Stats>)>,
+    starts: Vec<Instant>,
     wake: Option<Wake>,
 }
 
@@ -70,14 +76,18 @@ impl Fake {
         self.room().wake.clone().expect("the follower watches")
     }
 
-    /// Renders `blocks` on the running device, under the guard, and returns its left channel.
+    /// Calls the running device back `blocks` times, under the guard, and returns its left
+    /// channel.
     fn pump(&self, blocks: usize) -> Vec<f32> {
         let mut room = self.room();
-        let (_, render) = room.device.as_mut().expect("a stream is running");
+        let (_, render, stats) = room.device.as_mut().expect("a stream is running");
         let mut out = vec![0.0; blocks * BLOCK];
         let (mut left, mut right) = ([0.0; BLOCK], [0.0; BLOCK]);
         for chunk in out.chunks_mut(BLOCK) {
-            assert_no_alloc(|| render(Stereo { left: &mut left, right: &mut right }));
+            assert_no_alloc(|| {
+                stats.callback();
+                render(Stereo { left: &mut left, right: &mut right });
+            });
             chunk.copy_from_slice(&left);
         }
         out
@@ -86,7 +96,7 @@ impl Fake {
     /// One block, caught as a backend's feed catches it. Not under the guard: a panic allocates.
     fn pump_panicking(&self) -> bool {
         let mut room = self.room();
-        let (_, render) = room.device.as_mut().expect("a stream is running");
+        let (_, render, _) = room.device.as_mut().expect("a stream is running");
         let (mut left, mut right) = ([0.0; BLOCK], [0.0; BLOCK]);
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -107,8 +117,9 @@ impl System for Fake {
         outputs.ok_or(DriverError::Backend("unreadable".into()))
     }
 
-    fn driver(&self, request: Request, _stats: Arc<Stats>) -> Box<dyn Driver + Send> {
-        Box::new(FakeDriver { fake: self.clone(), id: request.device.expect("opened by id") })
+    fn driver(&self, request: Request, stats: Arc<Stats>) -> Box<dyn Driver + Send> {
+        let id = request.device.expect("opened by id");
+        Box::new(FakeDriver { fake: self.clone(), id, stats })
     }
 
     fn watch(&self, wake: Wake) -> Result<Box<dyn Send>, DriverError> {
@@ -120,11 +131,12 @@ impl System for Fake {
 struct FakeDriver {
     fake: Fake,
     id: String,
+    stats: Arc<Stats>,
 }
 
 impl Driver for FakeDriver {
     fn start(self: Box<Self>, render: Render) -> Result<Running, DriverError> {
-        let Self { fake, id } = *self;
+        let Self { fake, id, stats } = *self;
         if fake.room().refuses.contains(&id) {
             let _ = fake.seen.send(Seen::Refused(id));
             return Err(DriverError::Backend("refused".into()));
@@ -136,11 +148,14 @@ impl Driver for FakeDriver {
             period_frames: BLOCK as u32,
             output_latency_frames: latency,
         };
-        fake.room().device = Some((id.clone(), render));
+        let mut room = fake.room();
+        room.device = Some((id.clone(), render, stats));
+        room.starts.push(Instant::now());
+        drop(room);
         let _ = fake.seen.send(Seen::Started(id));
         Ok(Running::new(info, move || {
             let device = fake.room().device.take();
-            if let Some((id, render)) = device {
+            if let Some((id, render, _)) = device {
                 drop(render);
                 let _ = fake.seen.send(Seen::Stopped(id));
             }
@@ -189,10 +204,10 @@ struct Rig {
 impl Rig {
     /// A follower opened on `outputs`, pinned to `pinned`, its first stream started.
     fn new(outputs: &[(&str, bool)], pinned: Option<&str>) -> Self {
-        Self::with(outputs, pinned, false)
+        Self::with(outputs, pinned, false, NEVER_STALLS)
     }
 
-    fn with(outputs: &[(&str, bool)], pinned: Option<&str>, panics: bool) -> Self {
+    fn with(outputs: &[(&str, bool)], pinned: Option<&str>, panics: bool, stall: Duration) -> Self {
         let (sender, seen) = channel();
         let fake = Fake { room: Arc::default(), seen: sender.clone() };
         fake.offer(outputs);
@@ -200,8 +215,9 @@ impl Rig {
         let counter = Counter { frame: 0.0, moves: Arc::clone(&moves), panics, dropped: sender };
         let stats = Arc::new(Stats::new());
         let request = Request { device: pinned.map(Into::into), ..Request::default() };
-        let follower = Follower::start(request, counter, fake.clone(), Arc::clone(&stats))
-            .expect("the first output opens");
+        let follower =
+            Follower::stalling_after(stall, request, counter, fake.clone(), Arc::clone(&stats))
+                .expect("the first output opens");
         Self { fake, seen, moves, stats, follower: Some(follower) }
     }
 
@@ -232,7 +248,7 @@ impl Rig {
     }
 
     fn opened(&self) -> Option<String> {
-        self.fake.room().device.as_ref().map(|(id, _)| id.clone())
+        self.fake.room().device.as_ref().map(|(id, ..)| id.clone())
     }
 }
 
@@ -316,6 +332,39 @@ fn a_lost_stream_reopens_and_one_with_nowhere_to_go_waits_for_an_output() {
 }
 
 #[test]
+fn a_stream_that_stops_calling_back_reopens_and_waits_longer_each_time_it_stays_silent() {
+    let rig = Rig::with(&[("built-in", true)], None, false, STALL);
+    rig.expect(&[started("built-in")]);
+    rig.settle();
+    rig.fake.pump(3);
+    let last = rig.stats.last_callback().expect("it called back");
+
+    // The device stays listed and nothing errors: its callbacks just stop, as on a Mac in DarkWake
+    for _ in 0..3 {
+        rig.expect(&[stopped("built-in"), started("built-in")]);
+    }
+    let starts = rig.fake.room().starts.clone();
+    let reopened = starts[1] - last;
+    assert!(
+        (STALL..GIVE_UP).contains(&reopened),
+        "reopened {reopened:?} after the last callback, inside the second a command waits"
+    );
+    assert!(starts[2] - starts[1] >= 2 * STALL, "the next reopen waits twice as long");
+    assert!(starts[3] - starts[2] >= 4 * STALL, "and the one after twice again");
+    assert_eq!(rig.playing().1, 3, "the host hears outputChanged for every reopen");
+    assert!(!rig.stats.report().failed, "silence never faults the engine");
+
+    // Calling back again, as on waking, ends the run: the next stall is caught after one STALL
+    rig.settle();
+    rig.fake.pump(1);
+    let last = rig.stats.last_callback().expect("it called back");
+    rig.settle();
+    rig.expect(&[stopped("built-in"), started("built-in")]);
+    let reopened = rig.fake.room().starts[4] - last;
+    assert!(reopened < 4 * STALL, "reopened {reopened:?} after the callback, not 8 stalls on");
+}
+
+#[test]
 fn a_list_that_fails_to_read_moves_only_a_stream_that_lost_its_device() {
     let rig = Rig::new(&[("usb", true)], None);
     rig.expect(&[started("usb")]);
@@ -346,7 +395,7 @@ fn nothing_to_play_on_within_a_second_faults_the_engine() {
 
 #[test]
 fn a_render_that_panicked_is_never_moved() {
-    let rig = Rig::with(&[("usb", true), ("built-in", false)], None, true);
+    let rig = Rig::with(&[("usb", true), ("built-in", false)], None, true, NEVER_STALLS);
     rig.expect(&[started("usb")]);
     assert!(rig.fake.pump_panicking());
 
