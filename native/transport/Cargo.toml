@@ -10,6 +10,7 @@ publish.workspace = true
 engine = { workspace = true }
 mio = { version = "1.2.4", features = ["os-poll", "net"] }
 opus = "0.4.0"
+rtrb = "0.4.1"
 
 [dev-dependencies]
 assert_no_alloc = "1.1"
