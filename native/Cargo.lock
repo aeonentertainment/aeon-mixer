@@ -304,6 +304,7 @@ dependencies = [
  "engine",
  "kernels",
  "opus",
+ "rustfft",
  "serde_json",
 ]
 

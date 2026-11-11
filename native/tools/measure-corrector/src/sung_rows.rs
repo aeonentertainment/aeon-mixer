@@ -6,12 +6,14 @@ use engine::block::RATE;
 use engine::slot::guide::Guide;
 use serde_json::{Map, Value, json};
 
+use crate::artefacts;
 use crate::chain::{Input, Setup, Take, run};
 use crate::condition::{Condition, Prepared};
 use crate::contour::{self, LOWEST_CORRECTED_HZ, Point, VOICED_CONFIDENCE};
 use crate::expression::{self, Envelope};
 use crate::music::{cents, cents_off_class, median, percentile};
 use crate::sung_clip::{MeantNote, SungClip};
+use crate::take_delay::TakeDelay;
 use crate::truth::Truth;
 use crate::variant::Variant;
 
@@ -257,6 +259,13 @@ pub fn clip_rows(
                     "vibrato_notes": expression.vibrato_notes,
                     "vibrato_kept": expression.vibrato_kept,
                     "envelope_added_p95_db": expression.envelope_added_p95_db,
+                    "artefacts": artefacts::compare(
+                        &clip.samples,
+                        &output,
+                        rendered.prepared_lag_frames,
+                        &TakeDelay::new(&rendered.take.delays),
+                        &clip.notes,
+                    ),
                     "jitter_buffer": rendered.take.stats.map(|stats| json!({
                         "lost": stats.lost,
                         "late": stats.late,

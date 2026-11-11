@@ -12,4 +12,5 @@ cpu-time = "1.0"
 engine = { workspace = true }
 kernels = { workspace = true }
 opus = "0.4.0"
+rustfft = "6"
 serde_json = "1"

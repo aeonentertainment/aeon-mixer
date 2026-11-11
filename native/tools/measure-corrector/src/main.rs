@@ -4,28 +4,39 @@
 //! docs/decisions/0005-corrector-measurement.md says why it is built this way.
 
 mod added_latency;
+mod answer_key;
+mod artefacts;
 mod audio;
+mod bend;
 mod chain;
+mod clicks;
 mod clip_source;
 mod condition;
 mod contour;
 mod cpu;
+mod curve;
+mod degrader;
 mod diff;
 mod expression;
 mod ingest;
+mod key_report;
 mod listen;
 mod listen_take;
 mod melody_sync;
 mod music;
+mod pitch_error;
 mod report;
 mod rtp;
 mod setup;
+mod spectral;
 mod sung_clip;
 mod sung_rows;
 mod synthetic;
 mod take;
+mod take_delay;
 mod truth;
 mod variant;
+mod vibrato;
 mod vocadito;
 
 use std::path::{Path, PathBuf};
@@ -44,18 +55,22 @@ use crate::variant::Variant;
 const USAGE: &str = "\
 usage:
   measure-corrector run --vocadito DIR [--golden DIR] [--clips 2,6,10,19] [--variant L:MODE:S:R]...
-                        [--phone WAV --phone-guide JSON] [--no-cpu] [--out RESULT.json]
+                        [--phone WAV --phone-guide JSON]... [--song WAV --song-guide JSON]...
+                        [--no-cpu] [--out RESULT.json]
   measure-corrector table RESULT.json
   measure-corrector diff BEFORE.json AFTER.json [--tolerance N]
   measure-corrector listen --vocadito DIR --golden DIR --out CLIPS --key-out KEYDIR [--seed N]
-                           [--phone WAV --phone-guide JSON]
+                           [--phone WAV --phone-guide JSON]...
   measure-corrector score --sheet FILLED.csv --key answer-key.json
 
   --vocadito DIR   vocadito unzipped, from zenodo.org/records/5578807, outside this repo
   --golden DIR     Aeon Karaoke's app/cloud/pipeline/fixtures/golden: vocals.mp3, backing.mp3,
                    pitch-guide.json
   --variant        one more corrector to compare: label:off|key|melody:strength:retune_ms
-  --phone WAV      a person's recorded take; its guide file comes from the same song
+  --phone WAV      a person's recorded take; its guide file comes from the same song. Repeats,
+                   each with its own --phone-guide, in the same order
+  --song WAV       a dry studio vocal, the answer key's song, with the guide made from it in
+                   --song-guide. Repeats; the golden vocal is one when --golden is given
   --tolerance N    leave out numbers that moved by N or less (default 0)";
 
 /// The clips `auto-tune.md`'s rows read.
@@ -123,13 +138,53 @@ fn golden_guide(dir: &Path) -> Result<Guide, String> {
     Ok(Guide { notes: notes.collect(), key_mask: key_mask(&key)? })
 }
 
-/// A take by a person, if the run was given one.
-fn phone_take(flags: &Flags) -> Result<Option<(SungClip, f64)>, String> {
-    match (flags.get("--phone"), flags.get("--phone-guide")) {
-        (Some(wav), Some(guide)) => load_take("phone", Path::new(wav), Path::new(guide)).map(Some),
-        (None, None) => Ok(None),
-        _ => Err("--phone and --phone-guide come together".to_owned()),
+/// `flag` and `guide_flag` paired in the order given, each pair once.
+fn paired<'a>(
+    flags: &'a Flags,
+    flag: &str,
+    guide_flag: &str,
+) -> Result<Vec<(&'a str, &'a str)>, String> {
+    let (takes, guides): (Vec<&str>, Vec<&str>) =
+        (flags.all(flag).collect(), flags.all(guide_flag).collect());
+    if takes.len() != guides.len() {
+        return Err(format!("each {flag} needs its own {guide_flag}"));
     }
+    Ok(takes.into_iter().zip(guides).collect())
+}
+
+/// The takes people recorded, in the order given: `phone`, then `phone-2` and on.
+fn phone_takes(flags: &Flags) -> Result<Vec<(SungClip, f64)>, String> {
+    paired(flags, "--phone", "--phone-guide")?
+        .into_iter()
+        .enumerate()
+        .map(|(index, (wav, guide))| {
+            let name = if index == 0 { "phone".to_owned() } else { format!("phone-{}", index + 1) };
+            load_take(&name, Path::new(wav), Path::new(guide))
+        })
+        .collect()
+}
+
+/// Studio vocals with the guide made from them, the answer key's songs: the golden vocal, and
+/// each `--song` named by its file.
+fn songs(flags: &Flags, golden: Option<&Path>) -> Result<Vec<SungClip>, String> {
+    let mut pairs: Vec<(String, PathBuf, PathBuf)> = golden
+        .map(|dir| ("golden".to_owned(), dir.join("vocals.mp3"), dir.join(GOLDEN_KEY_FILE)))
+        .into_iter()
+        .collect();
+    for (vocal, guide) in paired(flags, "--song", "--song-guide")? {
+        let stem = Path::new(vocal).file_stem().map_or("song".into(), |s| s.to_string_lossy());
+        pairs.push((format!("song-{stem}"), PathBuf::from(vocal), PathBuf::from(guide)));
+    }
+    pairs
+        .into_iter()
+        .map(|(name, vocal, guide)| {
+            let text =
+                std::fs::read_to_string(&guide).map_err(|e| format!("{}: {e}", guide.display()))?;
+            let (key, notes) = parse_guide_json(&text)?;
+            let samples = audio::decode_mono(&vocal)?;
+            Ok(SungClip { name, samples, notes, second_notes: None, truth: None, key })
+        })
+        .collect()
 }
 
 fn run_rows(flags: &Flags) -> Result<Value, String> {
@@ -160,6 +215,7 @@ fn run_rows(flags: &Flags) -> Result<Value, String> {
 
     let mut clips = Map::new();
     let mut windows = Map::new();
+    let mut answer_keys = Map::new();
     let mut first_clip_samples = None;
     for number in clip_numbers {
         let clip = vocadito::load(&vocadito_dir, number)?;
@@ -168,18 +224,23 @@ fn run_rows(flags: &Flags) -> Result<Value, String> {
         if let Some(truth) = &clip.truth {
             windows.insert(clip.name.clone(), sung_rows::window_rows(&clip, truth));
         }
+        answer_keys.insert(clip.name.clone(), answer_key::rows(&clip, &variants)?);
         first_clip_samples.get_or_insert(clip.samples);
     }
-    let mut phone_alignment = None;
-    if let Some((clip, offset)) = phone_take(flags)? {
-        eprintln!("phone take ({:.0} s), guide found {offset:+.0} ms in", clip.seconds());
+    for song in songs(flags, golden.as_deref())? {
+        eprintln!("{} as an answer key ({:.0} s)", song.name, song.seconds());
+        answer_keys.insert(song.name.clone(), answer_key::rows(&song, &variants)?);
+    }
+    let mut phone_alignment = Map::new();
+    for (clip, offset) in phone_takes(flags)? {
+        eprintln!("{} ({:.0} s), guide found {offset:+.0} ms in", clip.name, clip.seconds());
         let through_a_phone: Vec<Condition> = conditions
             .iter()
             .copied()
             .filter(|condition| matches!(condition, Condition::Opus { .. }))
             .collect();
-        clips.insert("phone".to_owned(), sung_rows::clip_rows(&clip, &through_a_phone, &variants)?);
-        phone_alignment = Some(offset);
+        clips.insert(clip.name.clone(), sung_rows::clip_rows(&clip, &through_a_phone, &variants)?);
+        phone_alignment.insert(clip.name.clone(), json!(offset));
     }
 
     let cpu = if flags.has("--no-cpu") {
@@ -197,6 +258,7 @@ fn run_rows(flags: &Flags) -> Result<Value, String> {
         "clips": clips,
         "detector_windows": windows,
         "known_voices": voices,
+        "answer_key": answer_keys,
         "phone_guide_offset_ms": phone_alignment,
     }))
 }
@@ -230,9 +292,9 @@ fn listen_sources(
         backing: Some(audio::decode_stereo(&golden.join("backing.mp3"))?),
         attribution: None,
     });
-    if let Some((clip, _)) = phone_take(flags)? {
+    for (clip, _) in phone_takes(flags)? {
         sources.push(ListenSource {
-            name: "phone".to_owned(),
+            name: clip.name.clone(),
             clip,
             backing: None,
             attribution: None,
@@ -258,6 +320,8 @@ fn run() -> Result<(), String> {
             println!("{}", report::table(&result));
             println!("{}", report::known_voices_table(&result));
             println!("{}", report::expression_table(&result));
+            println!("{}", key_report::table(&result));
+            println!("{}", key_report::artefacts_table(&result));
             if let Some(out) = flags.get("--out") {
                 let text = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
                 std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
@@ -270,6 +334,8 @@ fn run() -> Result<(), String> {
             println!("{}", report::table(&result));
             println!("{}", report::known_voices_table(&result));
             println!("{}", report::expression_table(&result));
+            println!("{}", key_report::table(&result));
+            println!("{}", key_report::artefacts_table(&result));
         }
         "diff" => {
             let [before, after] = &flags.positional[..] else { return Err(USAGE.to_owned()) };
