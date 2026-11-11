@@ -42,7 +42,7 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
 | ----------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | macOS             | `kAudioHardwarePropertyDefaultOutputDevice` listener on the system object   | `kAudioHardwarePropertyDevices` changes and the device leaves the list; `kAudioDevicePropertyDeviceIsAlive` goes to 0; the IOProc stops being called and nothing errors | the HAL's notification thread, once `kAudioHardwarePropertyRunLoop` is set to null; left alone, the HAL posts to the main run loop, which a Node process never runs |
 | Windows           | `IMMNotificationClient::OnDefaultDeviceChanged`, three times, once per role | `OnDeviceStateChanged` and `OnDeviceRemoved`; the stream's calls return `AUDCLNT_E_DEVICE_INVALIDATED`                                                                  | a system thread; the callback must not register or unregister callbacks, or release the last reference to an MMDevice object                                        |
-| Linux, ALSA `hw:` | no signal: there is no default above the hardware device                    | `snd_pcm_writei` and `snd_pcm_wait` return `-ENODEV`, which `snd_pcm_recover` cannot undo; a hung wait is caught by the 1 s stall timeout                               | the engine's own audio thread                                                                                                                                       |
+| Linux, ALSA `hw:` | no signal: there is no default above the hardware device                    | `snd_pcm_writei` and `snd_pcm_wait` return `-ENODEV`, which `snd_pcm_recover` cannot undo; a hung wait is caught by the 200 ms stall timeout                            | the engine's own audio thread                                                                                                                                       |
 
 Sources: Apple's `AudioHardware.h` and the coreaudio-api list on
 [the run loop](https://lists.apple.com/archives/coreaudio-api/2010/Mar/msg00121.html) and
@@ -99,17 +99,21 @@ no stream runs, so section 2's five crossings are unchanged.
 These are the parts of a gap, not a measurement; each move reports the gap it left, and #53's
 manual run per OS records them.
 
-| Part                                  | Expected                                                                    | Bound                                    |
-| ------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------- |
-| A default change reaches the follower | under 1 ms after the OS posts it                                            |                                          |
-| A loss reaches it                     | macOS and Windows: when the OS posts it; ALSA: the next period, 2.7 ms      | the 1 s stall timeout on WASAPI and ALSA |
-| Stop the old stream                   | a few ms                                                                    |                                          |
-| Open the new stream at 48 kHz         | tens of ms, measured by #53                                                 | a rate change is given 1 s on CoreAudio  |
-| The new output's own latency          | 11.2 ms on the monitor, 20.0 ms on the MacBook Pro speakers (decision 0003) |                                          |
+| Part                                  | Expected                                                                    | Bound                                               |
+| ------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------- |
+| A default change reaches the follower | under 1 ms after the OS posts it                                            |                                                     |
+| A loss reaches it                     | macOS and Windows: when the OS posts it; ALSA: the next period, 2.7 ms      | a 200 ms stall on WASAPI and ALSA                   |
+| Stop the old stream                   | a few ms                                                                    | a stalled stream's 200 ms, which the stop waits out |
+| Open the new stream at 48 kHz         | tens of ms, measured by #53                                                 | a rate change is given 1 s on CoreAudio             |
+| The new output's own latency          | 11.2 ms on the monitor, 20.0 ms on the MacBook Pro speakers (decision 0003) |                                                     |
 
 The bound that matters is 1 s. A command sent during the gap is acknowledged after it, and the
 binding rejects a command unanswered for a second, which ends the song. A move that takes longer
-than that ends the song as a fault would have; a move that takes 100 ms does not.
+than that ends the song as a fault would have; a move that takes 100 ms does not. That is why the
+WASAPI and ALSA backends call a stream lost after 200 ms without a wake, down from the 1 s they
+used to wait: twenty of WASAPI's 10 ms shared periods, and the worst of it leaves most of the
+second for the open. The case that can still overrun is a CoreAudio device away from 48 kHz,
+whose rate change is given a second of its own.
 
 ## Rejected
 
