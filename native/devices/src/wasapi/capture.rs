@@ -29,7 +29,8 @@ impl WasapiCapture {
 }
 
 impl Capture for WasapiCapture {
-    /// Starts the capture thread and blocks until it has opened the device or failed to.
+    /// Starts the capture thread and blocks until it has opened and started the device or failed
+    /// to.
     fn start(self: Box<Self>, sink: Sink) -> Result<Capturing, DriverError> {
         let Self { request, stats } = *self;
         let (opened, open) = mpsc::sync_channel(1);
@@ -54,7 +55,7 @@ impl Capture for WasapiCapture {
                 Err(error)
             }
             Err(_) => Err(DriverError::Backend(
-                "the capture thread ended before the device opened".into(),
+                "the capture thread ended before the device started".into(),
             )),
         }
     }
@@ -87,14 +88,22 @@ fn run(
             return feed;
         }
     };
-    let _ = opened.send(Ok(stream.info()));
 
     let mut task = 0;
     // SAFETY: registers this thread with MMCSS; reverted below on the same thread.
     let mmcss = unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut task) };
     stats.set_realtime(mmcss.is_ok());
-    if stream.record(&mut feed, channel, stats, stop).is_err() {
-        stats.fail();
+    // `start` waits for this answer, so a stream that will not start fails there
+    match stream.start() {
+        Ok(()) => {
+            let _ = opened.send(Ok(stream.info()));
+            if stream.record(&mut feed, channel, stats, stop).is_err() {
+                stats.fail();
+            }
+        }
+        Err(error) => {
+            let _ = opened.send(Err(error));
+        }
     }
     if let Ok(handle) = mmcss {
         // SAFETY: the handle came from AvSetMmThreadCharacteristicsW on this thread.

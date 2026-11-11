@@ -1,13 +1,13 @@
 use std::ffi::c_int;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use engine::block::RATE;
 use engine::driver::DriverError;
 
-use super::asound::asound;
+use super::asound::{Asound, asound};
 use super::direction::Direction;
 use super::driver::ask_for_realtime;
 use super::format::Format;
@@ -35,8 +35,8 @@ impl AlsaCapture {
 }
 
 impl Capture for AlsaCapture {
-    /// Opens and configures the device on the calling thread, which blocks while ALSA does, then
-    /// starts the capture thread.
+    /// Opens, configures and starts the device on the calling thread, which blocks while ALSA
+    /// does, then hands it to the capture thread.
     fn start(self: Box<Self>, sink: Sink) -> Result<Capturing, DriverError> {
         let Self { request, stats } = *self;
         let lib = asound()?;
@@ -65,13 +65,11 @@ impl Capture for AlsaCapture {
         let stop = Arc::new(AtomicBool::new(false));
         let feed = CaptureFeed::new(sink, Arc::clone(&stats));
         let channel = usize::from(request.channel);
-        let audio = thread::Builder::new()
-            .name("aeon-capture".into())
-            .spawn({
-                let stop = Arc::clone(&stop);
-                move || run(pcm, feed, channel, &stats, &stop)
-            })
-            .map_err(|error| DriverError::Backend(format!("capture thread: {error}")))?;
+        let audio = match pcm.format {
+            Format::F32 => spawn::<f32>(lib, pcm, feed, channel, stats, Arc::clone(&stop)),
+            Format::I32 => spawn::<i32>(lib, pcm, feed, channel, stats, Arc::clone(&stop)),
+            Format::I16 => spawn::<i16>(lib, pcm, feed, channel, stats, Arc::clone(&stop)),
+        }?;
 
         Ok(Capturing::new(info, move || {
             stop.store(true, Ordering::Release);
@@ -81,35 +79,37 @@ impl Capture for AlsaCapture {
     }
 }
 
-fn run(
+// The period buffer is built before the device starts, so the thread allocates nothing once
+// frames are arriving. The device starts here so that `start` returns its failure.
+fn spawn<S: Sample + Send + 'static>(
+    lib: &Asound,
     pcm: Pcm,
     mut feed: CaptureFeed,
     channel: usize,
-    stats: &Stats,
-    stop: &AtomicBool,
-) -> CaptureFeed {
-    ask_for_realtime(stats);
-    if pcm.start() < 0 {
-        stats.fail();
-        return feed;
-    }
-    match pcm.format {
-        Format::F32 => record::<f32>(&pcm, &mut feed, channel, stats, stop),
-        Format::I32 => record::<i32>(&pcm, &mut feed, channel, stats, stop),
-        Format::I16 => record::<i16>(&pcm, &mut feed, channel, stats, stop),
-    }
-    feed
+    stats: Arc<Stats>,
+    stop: Arc<AtomicBool>,
+) -> Result<JoinHandle<CaptureFeed>, DriverError> {
+    let mut period = vec![S::default(); pcm.period as usize * pcm.channels as usize];
+    lib.check(pcm.start(), "start capture")?;
+    thread::Builder::new()
+        .name("aeon-capture".into())
+        .spawn(move || {
+            ask_for_realtime(&stats);
+            record(&pcm, &mut period, &mut feed, channel, &stats, &stop);
+            feed
+        })
+        .map_err(|error| DriverError::Backend(format!("capture thread: {error}")))
 }
 
 fn record<S: Sample>(
     pcm: &Pcm,
+    period: &mut [S],
     feed: &mut CaptureFeed,
     channel: usize,
     stats: &Stats,
     stop: &AtomicBool,
 ) {
     let channels = pcm.channels as usize;
-    let mut period = vec![S::default(); pcm.period as usize * channels];
     while !stop.load(Ordering::Acquire) {
         let ready = pcm.wait(STALL_MS);
         let at = Instant::now();
@@ -124,7 +124,7 @@ fn record<S: Sample>(
             continue;
         }
         stats.callback();
-        let frames = pcm.read(&mut period);
+        let frames = pcm.read(period);
         if frames < 0 {
             if !recover(pcm, frames as c_int, stats) {
                 return;

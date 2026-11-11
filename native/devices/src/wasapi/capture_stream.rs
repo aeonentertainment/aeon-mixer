@@ -78,7 +78,12 @@ impl CaptureStream {
         )
     }
 
-    /// Reads until `stop` is set or the device fails.
+    pub fn start(&self) -> Result<(), DriverError> {
+        // SAFETY: the client is initialised for event callbacks.
+        unsafe { self.client.Start() }.map_err(failed("start capture"))
+    }
+
+    /// Reads from a started stream until `stop` is set or the device fails, then stops it.
     pub fn record(
         &self,
         feed: &mut CaptureFeed,
@@ -86,8 +91,6 @@ impl CaptureStream {
         stats: &Stats,
         stop: &AtomicBool,
     ) -> windows::core::Result<()> {
-        // SAFETY: the client is initialised for event callbacks.
-        unsafe { self.client.Start()? };
         // Nothing has been lost before anything has been read, whatever the first packet's flag says
         let mut first = true;
         while !stop.load(Ordering::Acquire) {
