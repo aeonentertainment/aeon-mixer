@@ -1,6 +1,7 @@
 # 0020: The echo canceller runs in the slot's block, and phones get a howl guard
 
 **Status:** accepted, 2026-11-11, on the offline driver and on Aeon Karaoke's own synthetic bleed.
+The canceller and the guard ship in separate PRs.
 No real room, speaker or phone has run it; the runs a person owes are at the end.
 
 ## Decision
@@ -114,7 +115,9 @@ A catch ducks 12 dB within the block, holds half a second, and lifts at 3 dB a s
 Measured on the offline driver, a phone 80 ms round trip from the speakers in a room that rings at
 1 kHz, 3 dB over unity there: unguarded, the howl reaches the clipper. Guarded, it is caught 456 ms
 after passing -40 dBFS, at -25.8 dBFS, and never goes louder than -26.1 dBFS in ten seconds, with
-one catch. A steady tone and a ten-second sung voice pass bit for bit. A whistled note that grows
+one catch. A steady tone and a ten-second sung voice pass bit for bit. With correction and a voice on, a
+3 dB loop never runs away at all: the corrector's moving pitch and the voice's formant filter break
+its coherence, as frequency shifting would. A whistled note that grows
 would be taken for a howl; any detector that looks at the signal alone has that limit.
 
 Frequency shifting was rejected because it moves the singer's pitch, which the corrector and the
@@ -149,6 +152,13 @@ From the tests on the offline driver, under the allocation guard, and `measure-e
 | A singer 10 cents sharp of the backing's melody, 40 ms late, and no echo          | nothing found, nothing touched                              | exact                          |
 | A howl 3 dB over unity at 1 kHz, 80 ms round trip: caught after passing -40 dBFS  | 456 ms, at -25.8 dBFS                                       | 500 ms                         |
 | The same, loudest in ten seconds                                                  | -26.1 dBFS, one catch                                       | -20 dBFS                       |
+| A click with the canceller engaged on a room it has learned                       | leaves on the sample it entered                             | 0 samples                      |
+| A click while the guard ducks                                                     | leaves on the sample it entered                             | 0 samples                      |
+| A backing seek of 20 s: the second before, and from 100 ms after                  | 22.3 and 27.1 dB                                            | within 3 dB                    |
+| A phone joining mid-song, from 3 s after                                          | 23.1 dB, the path at 480 frames                             | 20 dB, 16 frames               |
+| A mixer swap mid-song, the new graph's history empty, from 3 s after              | 25.0 dB                                                     | 20 dB                          |
+| The canceller turned off after learning                                           | bit for bit from the block it went off                      | exact                          |
+| A loop 6 dB over unity with correction and a +2 voice on: caught, and its loudest | before it passed -20 dBFS; -21.2 dBFS                       | -20 dBFS                       |
 
 ## What this does not do
 
