@@ -476,9 +476,9 @@ mod tests {
     }
 
     // The done-when: with the high-pass, gate and compressor on, every click comes out loudest on
-    // the frame it went in, so the stages add no samples to the mic path
+    // the frame it went in, so the stages buffer nothing on the mic path
     #[test]
-    fn cleaning_the_voice_adds_no_samples() {
+    fn cleaning_the_voice_buffers_nothing() {
         let params = SlotParams {
             pan: -1.0,
             effects: EffectParams {

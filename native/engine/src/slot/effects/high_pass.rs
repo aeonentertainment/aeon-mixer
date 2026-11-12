@@ -8,9 +8,9 @@ use crate::params::CleanupParams;
 const CORNER_HZ: f64 = 80.0;
 
 /// The slot's high-pass: a 12 dB per octave Butterworth that takes handling noise, stand rumble
-/// and the low end of plosives out of the voice. A causal IIR, so it adds no samples: a click comes
-/// out on the sample it went in. Its phase shift delays a 220 Hz fundamental by 0.41 ms and a
-/// 110 Hz one by 0.77 ms.
+/// and the low end of plosives out of the voice. A causal IIR, so it buffers nothing: a click comes
+/// out on the sample it went in. Its phase shift is still a cost on the mic path: it delays a
+/// 220 Hz fundamental by 0.41 ms, a 110 Hz one by 1.8 ms and an 82 Hz one by 2.7 ms.
 pub struct HighPass {
     b: [f64; 3],
     a: [f64; 2],

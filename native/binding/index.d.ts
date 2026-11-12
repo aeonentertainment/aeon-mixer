@@ -106,6 +106,10 @@ export interface BackingInput {
   speed: number
 }
 
+export interface CleanupInput {
+  enabled: boolean
+}
+
 /** What drives the audio thread. */
 export declare const enum ClockKind {
   /** The offline driver, pumped from JavaScript. */
@@ -207,6 +211,7 @@ export interface SlotParamsInput {
   corrector: CorrectorInput
   reverb: ReverbInput
   voice: VoiceInput
+  cleanup: CleanupInput
   guideOffsetMs: number
 }
 
