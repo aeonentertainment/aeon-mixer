@@ -22,5 +22,5 @@ pub use event::NativeEvent;
 pub use guide::{GuideInput, NoteInput};
 pub use mixer::Mixer;
 pub use rtp_return::{RtpReturnInput, RtpReturnStats};
-pub use slot_params::{CorrectorInput, ReverbInput, SlotParamsInput};
+pub use slot_params::{CorrectorInput, ReverbInput, SlotParamsInput, VoiceInput};
 pub use slot_stats_info::SlotStatsInfo;

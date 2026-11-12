@@ -65,7 +65,7 @@ pub fn run(setup: Setup) -> Take {
         gain,
         pan,
         guide_offset_ms,
-        effects: engine::params::EffectParams { corrector, reverb },
+        effects: engine::params::EffectParams { corrector, reverb, ..Default::default() },
         ..SlotParams::default()
     };
     let mut params = Params::default();

@@ -206,6 +206,7 @@ export interface SlotParamsInput {
   solo: boolean
   corrector: CorrectorInput
   reverb: ReverbInput
+  voice: VoiceInput
   guideOffsetMs: number
 }
 
@@ -224,4 +225,9 @@ export interface SlotStatsInfo {
 export interface StemGainsInput {
   instrumental: number
   guide: number
+}
+
+export interface VoiceInput {
+  enabled: boolean
+  formantSemitones: number
 }
