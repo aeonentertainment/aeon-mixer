@@ -16,6 +16,7 @@ use crate::sung_clip::{MeantNote, SungClip};
 use crate::take_delay::TakeDelay;
 use crate::truth::Truth;
 use crate::variant::Variant;
+use crate::vocal_delays::VocalDelays;
 
 /// Past a note's first moments, where any corrector is still arriving, and before its end.
 const NOTE_LEAD_MS: f64 = 30.0;
@@ -266,6 +267,8 @@ pub fn clip_rows(
                         &TakeDelay::new(&rendered.take.delays),
                         &clip.notes,
                     ),
+                    "delay": matches!(condition, Condition::Direct)
+                        .then(|| VocalDelays::of(&rendered.take, 0.0, f64::INFINITY).summary()),
                     "jitter_buffer": rendered.take.stats.map(|stats| json!({
                         "lost": stats.lost,
                         "late": stats.late,

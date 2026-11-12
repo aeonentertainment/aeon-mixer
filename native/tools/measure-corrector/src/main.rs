@@ -38,6 +38,7 @@ mod truth;
 mod variant;
 mod vibrato;
 mod vocadito;
+mod vocal_delays;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
