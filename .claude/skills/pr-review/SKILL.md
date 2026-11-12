@@ -6,8 +6,8 @@ argument-hint: <pr-number>
 allowed-tools: Read, Grep, Glob, Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh issue view:*)
 ---
 
-Review pull request #$ARGUMENTS against AGENTS.md. Line-level bugs are a finding only when
-they break a rule below; the rules are the review.
+Review pull request #$ARGUMENTS against AGENTS.md. `/bug-review` hunts the lines for bugs;
+here a line-level bug is a finding only when it breaks a rule below.
 
 1. Read the PR: `gh pr view $ARGUMENTS` for the title, body and linked issue, then
    `gh pr diff $ARGUMENTS`. When the body links an issue, `gh issue view` it for scope. Read
