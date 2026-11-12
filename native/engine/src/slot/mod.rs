@@ -3,9 +3,13 @@
 
 pub mod corrector_delay;
 pub mod cue;
+pub mod echo_report;
+#[cfg(test)]
+mod echo_tests;
 pub mod effects;
 pub mod guide;
 pub mod meter;
+pub mod shared;
 pub mod source;
 
 use std::f32::consts::FRAC_PI_4;
@@ -15,10 +19,12 @@ use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{Event, EventProducer};
 use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
-use cue::Cue;
-use effects::{Compressor, Corrector, Gate, HighPass, Reverb, Voice};
+use echo_report::EchoReport;
+use effects::{Compressor, Corrector, EchoCanceller, Gate, HighPass, Reverb, Voice};
 use guide::Guide;
+use kernels::EchoHistory;
 use meter::Meter;
+use shared::Shared;
 use source::Source;
 
 pub struct Slot {
@@ -26,6 +32,10 @@ pub struct Slot {
     high_pass: HighPass,
     gate: Gate,
     guide: Option<Box<Guide>>,
+    echo_canceller: EchoCanceller,
+    echo_report: Arc<EchoReport>,
+    /// What this slot put into the master, folded to mono, for the canceller to adapt without.
+    own: EchoHistory,
     corrector: Corrector,
     corrector_delay: Arc<CorrectorDelay>,
     reverb: Reverb,
@@ -45,6 +55,9 @@ impl Slot {
             high_pass: HighPass::new(),
             gate: Gate::new(),
             guide: None,
+            echo_canceller: EchoCanceller::new(),
+            echo_report: Arc::default(),
+            own: EchoHistory::new(),
             corrector: Corrector::new(),
             corrector_delay: Arc::default(),
             reverb: Reverb::new(),
@@ -67,29 +80,41 @@ impl Slot {
         Arc::clone(&self.corrector_delay)
     }
 
-    /// Pulls one block, cleans it, corrects it toward the guide at `cue`, meters it, compresses
-    /// it, voices it, adds reverb, and adds it to `out` at the ramped gain. `any_solo` is whether
-    /// any slot in the graph is soloed, which silences this one unless it is too.
+    /// What the echo canceller has found, for the control thread.
+    pub fn echo_report(&self) -> Arc<EchoReport> {
+        Arc::clone(&self.echo_report)
+    }
+
+    /// Pulls one block, takes the room's echo of the master out of it, cleans it, corrects it
+    /// toward the guide at the cue, meters it, compresses it, voices it, adds reverb, and adds it
+    /// to `out` at the ramped gain, silent while another slot is soloed and this one is not.
     pub fn render(
         &mut self,
         index: u8,
         params: &SlotParams,
-        any_solo: bool,
-        cue: Cue,
+        shared: Shared<'_>,
         out: &mut Stereo<'_>,
         events: &mut EventProducer,
     ) {
         self.source.pull(&mut self.input);
+        self.echo_canceller.process(
+            &params.effects.echo_cancel,
+            shared.history,
+            &self.own,
+            self.source.latency_frames(),
+            &mut self.input,
+        );
+        self.echo_report.publish(self.echo_canceller.findings());
         self.high_pass.process(&params.effects.cleanup, &mut self.input);
         self.gate.process(&params.effects.cleanup, &mut self.input);
         let guide_offset =
             (f64::from(params.guide_offset_ms) * f64::from(RATE) / 1000.0).round() as i64;
-        let frame = cue.frame - i64::from(self.source.latency_frames()) + guide_offset;
+        let frame = shared.cue.frame - i64::from(self.source.latency_frames()) + guide_offset;
         self.corrector.process(
             &params.effects.corrector,
             self.guide.as_deref(),
             frame,
-            cue.semitones,
+            shared.cue.semitones,
             &mut self.input,
             |reading| {
                 events.push(Event::Pitch {
@@ -118,16 +143,24 @@ impl Slot {
         self.voice.process(&params.effects.voice, &mut self.input);
         self.reverb.process(&params.effects.reverb, &mut self.input);
 
-        let target = target_gains(params, any_solo);
+        let target = target_gains(params, shared.any_solo);
         let [mut left, mut right] = self.gains.unwrap_or(target);
         let step = [(target[0] - left) / BLOCK as f32, (target[1] - right) / BLOCK as f32];
-        for ((sample, l), r) in self.input.iter().zip(out.left.iter_mut()).zip(out.right.iter_mut())
+        let (mut own_left, mut own_right) = ([0.0; BLOCK], [0.0; BLOCK]);
+        for (((sample, l), r), (own_l, own_r)) in self
+            .input
+            .iter()
+            .zip(out.left.iter_mut())
+            .zip(out.right.iter_mut())
+            .zip(own_left.iter_mut().zip(own_right.iter_mut()))
         {
             left += step[0];
             right += step[1];
-            *l += sample * left;
-            *r += sample * right;
+            (*own_l, *own_r) = (sample * left, sample * right);
+            *l += *own_l;
+            *r += *own_r;
         }
+        self.own.push(&own_left, &own_right);
         self.gains = Some(target);
     }
 
@@ -141,9 +174,11 @@ impl Slot {
     }
 
     /// A new singer: the source forgets its stream, the corrector and the voice what they heard,
-    /// and the gate and compressor the level of the phone before.
+    /// and the gate and compressor the level of the phone before, and the echo canceller the
+    /// path, since a new sender is a new one.
     pub fn reset(&mut self) {
         self.source.reset();
+        self.echo_canceller.reset();
         self.corrector.reset();
         self.voice.reset();
         self.gate = Gate::new();
@@ -176,6 +211,7 @@ mod tests {
     use crate::ingest::packet::RING_CAPACITY;
     use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
     use crate::params::{CleanupParams, CorrectorParams, EffectParams, Params};
+    use crate::slot::cue::Cue;
     use crate::slot::guide::Note;
 
     const CORRECTING: CorrectorParams =
@@ -219,13 +255,15 @@ mod tests {
             ..SlotParams::default()
         };
         let (mut events, _drain) = event_ring();
+        let history = EchoHistory::new();
         let mut output = Vec::with_capacity(frames);
         for _ in 0..frames.div_ceil(BLOCK) {
             let mut left = [0.0; BLOCK];
             let mut right = [0.0; BLOCK];
             assert_no_alloc(|| {
                 let mut out = Stereo { left: &mut left, right: &mut right };
-                slot.render(0, &params, false, Cue::default(), &mut out, &mut events);
+                let shared = Shared { any_solo: false, cue: Cue::default(), history: &history };
+                slot.render(0, &params, shared, &mut out, &mut events);
             });
             output.extend_from_slice(&left);
             after_block(delay.frames());
@@ -489,13 +527,15 @@ mod tests {
         };
         let mut slot = Slot::new(Box::new(Clicks { at: 0 }));
         let (mut events, _drain) = event_ring();
+        let history = EchoHistory::new();
         let mut output = Vec::with_capacity(RATE as usize);
         for _ in 0..RATE as usize / BLOCK {
             let mut left = [0.0; BLOCK];
             let mut right = [0.0; BLOCK];
             assert_no_alloc(|| {
                 let mut out = Stereo { left: &mut left, right: &mut right };
-                slot.render(0, &params, false, Cue::default(), &mut out, &mut events);
+                let shared = Shared { any_solo: false, cue: Cue::default(), history: &history };
+                slot.render(0, &params, shared, &mut out, &mut events);
             });
             output.extend_from_slice(&left);
         }

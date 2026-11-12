@@ -7,6 +7,11 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+realfft = "3.5.1"
+
+[features]
+# Synthetic signals for the echo stages' tests and measurements in other crates
+fixtures = []
 
 [build-dependencies]
 cc = "1"

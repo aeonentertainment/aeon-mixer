@@ -2,7 +2,8 @@
 //! slot of the snapshot; the snapshot is published whole.
 
 use engine::params::{
-    CleanupParams, CorrectorParams, EffectParams, ReverbParams, SlotParams, VoiceParams,
+    CleanupParams, CorrectorParams, EchoCancelParams, EffectParams, ReverbParams, SlotParams,
+    VoiceParams,
 };
 use napi_derive::napi;
 
@@ -17,8 +18,15 @@ pub struct SlotParamsInput {
     pub corrector: CorrectorInput,
     pub reverb: ReverbInput,
     pub voice: VoiceInput,
+    pub echo_cancel: SwitchInput,
     pub cleanup: CleanupInput,
     pub guide_offset_ms: f64,
+}
+
+/// An effect with no knob but on and off.
+#[napi(object)]
+pub struct SwitchInput {
+    pub enabled: bool,
 }
 
 #[napi(object)]
@@ -68,6 +76,7 @@ impl From<SlotParamsInput> for SlotParams {
                     enabled: input.voice.enabled,
                     formant_semitones: input.voice.formant_semitones as f32,
                 },
+                echo_cancel: EchoCancelParams { enabled: input.echo_cancel.enabled },
                 cleanup: CleanupParams { enabled: input.cleanup.enabled },
             },
             guide_offset_ms: input.guide_offset_ms as f32,

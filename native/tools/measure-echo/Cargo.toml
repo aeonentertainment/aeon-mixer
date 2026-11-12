@@ -1,0 +1,13 @@
+[package]
+name = "measure-echo"
+description = "The echo canceller's numbers, beside GStreamer's on the same synthetic bleed."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cpu-time = "1.0"
+engine = { workspace = true }
+kernels = { workspace = true, features = ["fixtures"] }
+realfft = "3.5.1"

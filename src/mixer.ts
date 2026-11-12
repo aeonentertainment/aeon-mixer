@@ -56,6 +56,7 @@ function defaultSlotParams(): SlotParamsInput {
     corrector: { enabled: false, strength: 0, retuneMs: 0 },
     reverb: { enabled: false, roomSize: 0, mix: 0 },
     voice: { enabled: false, formantSemitones: 0 },
+    echoCancel: { enabled: false },
     cleanup: { enabled: false },
     guideOffsetMs: 0,
   };
@@ -153,6 +154,8 @@ export class Mixer {
             formantSemitones: finiteIn("formantSemitones", effect.formantSemitones, -12, 12),
           };
           break;
+        case "echo-cancel":
+          next.echoCancel = { enabled: effect.enabled };
         case "cleanup":
           next.cleanup = { enabled: effect.enabled };
           break;
@@ -388,9 +391,12 @@ export class Mixer {
   }
 }
 
-function defaultEffects(): Pick<SlotParamsInput, "corrector" | "reverb" | "voice" | "cleanup"> {
-  const { corrector, reverb, voice, cleanup } = defaultSlotParams();
-  return { corrector, reverb, voice, cleanup };
+function defaultEffects(): Pick<
+  SlotParamsInput,
+  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel"
+> {
+  const { corrector, reverb, voice, cleanup, echoCancel } = defaultSlotParams();
+  return { corrector, reverb, voice, cleanup, echoCancel };
 }
 
 function toGuideInput(guide: MelodyGuide): GuideInput {
