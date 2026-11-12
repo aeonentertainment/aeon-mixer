@@ -28,7 +28,7 @@ list.
 ## What it costs
 
 The stages measured so far sum past 30 ms before a phone is involved: the output alone reports 9
-to 20 ms on the machines in 0003, the playout delay is 15 ms, and the corrector adds up to 15 ms
+to 20 ms on the machines in 0003, the playout delay is 15 ms, and the corrector adds up to 13.5 ms
 for a low voice when engaged. Phone capture and Wi-Fi have no number yet. Meeting the budget takes
 time out of every stage, so each change to one quotes `measure-latency` against 20 to 30 ms.
 
