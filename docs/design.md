@@ -810,8 +810,8 @@ ring into the jitter buffer at the top of each block.
   lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
   16 frames for the wakes of two threads. A trough off target moves the delay one sample a block,
   each move spliced across the block by linear interpolation, so nothing steps. A pull the ring
-  cannot fill plays what it holds and silence after. When full pulls come back within eight, the
-  most a 1024-frame callback takes, the phase of two clocks or a late wake ran the ring short, and the target rises by all
+  cannot fill plays what it holds and silence after. When full pulls come back within the blocks
+  the granted callback takes at a wake, and never fewer than eight, the phase of two clocks or a late wake ran the ring short, and the target rises by all
   those pulls lacked and 16 frames, at most one input period over where it opened. A longer run is
   an input that stopped, and raises it only by what its first pull lacked. A trough that stays a
   whole window more than a period over the target is a stall's backlog, dropped at once to the

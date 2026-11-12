@@ -57,14 +57,15 @@ sweep passes half a sample. At 100 ppm, 4.8 blocks in 375 a second carry a move.
 The slot holds its trough, the lowest fill before a pull over 128 blocks, at a target. It opens at
 a block and 16 frames, 3 ms, the least that works on the output's clock and on most faster
 inputs. A pull the ring cannot fill plays what it has and silence after. When full pulls come
-back within eight, the most a 1024-frame callback takes, the phase of the two clocks or a late wake ran the ring short, and
+back within the blocks the granted callback takes at a wake, never fewer than eight and sixteen
+under a 2048-frame callback, the phase of the two clocks or a late wake ran the ring short, and
 the target rises by all those pulls lacked and 16 frames, at most one input period over where it
 opened. A slower input meets this once, the first time its period slips past the output's, tens
 of seconds in, and jitter may bring it on once more; after that it never is short. Opening at the higher target instead would avoid
 that one gap and cost every same-clock mic 2.67 ms for good. We chose the lower delay.
 
 A longer run of short pulls is an input that stopped, and raises the target only by what its first
-pull lacked. The limit is the ring's, not the output's, so it holds after the output moves.
+pull lacked. The limit follows the output: a move hands the slot the new callback before it plays again.
 
 A backlog is judged by the trough: one that stays a whole window more than a period over the
 target is a stall's, dropped at once to the target. Drift never moves the trough that far between
