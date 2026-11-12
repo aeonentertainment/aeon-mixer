@@ -130,7 +130,7 @@ pub fn check(status: i32, selector: AudioObjectPropertySelector) -> Result<(), D
     }
 }
 
-fn address(
+pub fn address(
     selector: AudioObjectPropertySelector,
     scope: AudioObjectPropertyScope,
 ) -> AudioObjectPropertyAddress {

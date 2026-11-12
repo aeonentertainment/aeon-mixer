@@ -30,6 +30,7 @@ export declare class Engine {
    * gets its socket and send task here too.
    */
   createMixer(kinds: Array<string>, rtpReturn?: RtpReturnInput | undefined | null): Mixer
+  /** The output playing now. After a move the events thread sends the same as `outputChanged`. */
   get output(): OutputInfo
   /** The outputs this OS offers, the default marked. Empty on the offline and timer clocks. */
   outputs(): Array<OutputEntry>
@@ -139,6 +140,7 @@ export type NativeEvent =
   | { kind: 'retired' }
   | { kind: 'renderProgress'; job: number; fraction: number }
   | { kind: 'renderFinished'; job: number }
+  | { kind: 'outputChanged'; output: OutputInfo; gapMs: number }
 
 export interface NoteInput {
   midi: number
@@ -148,11 +150,16 @@ export interface NoteInput {
 
 export interface OpenOptions {
   clock: 'offline' | 'timer' | 'device'
-  /** A device clock's output: an id from `outputs`, or the default output. */
+  /** A device clock's output: an id from `outputs` to pin, or none to follow the default output. */
   device?: string
   periodFrames: number
   /** The jitter buffer's playout delay for every `rtp` and `l16` slot. */
   playoutDelayFrames: number
+}
+
+export interface OutputDevice {
+  id: string
+  name: string
 }
 
 export interface OutputEntry {
@@ -165,6 +172,8 @@ export interface OutputInfo {
   sampleRate: number
   periodFrames: number
   latencyMs: number
+  /** The output playing now; none on the offline clock. */
+  device?: OutputDevice
 }
 
 export interface ReverbInput {

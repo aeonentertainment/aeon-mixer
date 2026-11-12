@@ -15,8 +15,11 @@ use crate::request::Request;
 use crate::sample::Sample;
 use crate::stats::Stats;
 
-/// A device that has not woken the thread in this long has stopped: unplugged or wedged.
-const STALL_MS: c_int = 1000;
+/// How long the thread waits for a free period before it looks at `stop` again. A device that
+/// stays silent, as a wait that hangs after an unplug, is the follower's to call lost after its
+/// `STALL`; the stop that follows waits this out, and the move after it still fits in the second
+/// a command may wait.
+const WAIT_MS: c_int = 200;
 
 /// SCHED_FIFO priority for the audio thread: above every desktop thread, below the kernel's own.
 const PRIORITY: c_int = 70;
@@ -107,10 +110,9 @@ fn play<S: Sample>(pcm: &Pcm, feed: &mut Feed, stats: &Stats, stop: &AtomicBool)
     let mut priming = periods;
 
     while !stop.load(Ordering::Acquire) {
-        let ready = pcm.wait(STALL_MS);
+        let ready = pcm.wait(WAIT_MS);
         if ready == 0 {
-            stats.fail();
-            return;
+            continue;
         }
         if ready < 0 {
             if !recover(pcm, ready, stats) {
@@ -147,7 +149,7 @@ fn recover(pcm: &Pcm, error: c_int, stats: &Stats) -> bool {
     }
     let recovered = pcm.recover(error) >= 0;
     if !recovered {
-        stats.fail();
+        stats.lose();
     }
     recovered
 }

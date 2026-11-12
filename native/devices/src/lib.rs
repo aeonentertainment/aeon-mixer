@@ -14,6 +14,7 @@ mod capture_request;
 #[cfg(any(test, all(feature = "hardware", target_os = "linux")))]
 mod channel_count;
 mod feed;
+mod follow;
 mod output;
 mod report;
 mod request;
@@ -23,11 +24,13 @@ mod stats;
 mod stream_holding;
 mod summary;
 mod timer;
+mod wake;
 
 pub use capture::{Capture, CaptureInfo, Captured, Capturing, Sink};
 pub use capture_feed::CaptureFeed;
 pub use capture_request::CaptureRequest;
 pub use feed::{Feed, interleave};
+pub use follow::{Current, Follower, Playing, System};
 pub use output::{Input, Output};
 pub use report::Report;
 pub use request::Request;
@@ -35,6 +38,7 @@ pub use sample::Sample;
 pub use stats::{BUCKET, BUCKETS, Stats};
 pub use summary::{Summary, ms};
 pub use timer::{Clock, MAX_CATCH_UP, MonotonicClock, Pacer, TimerDriver};
+pub use wake::Wake;
 
 #[cfg(all(feature = "hardware", target_os = "linux"))]
 mod alsa;
@@ -43,10 +47,15 @@ mod coreaudio;
 #[cfg(all(feature = "hardware", windows))]
 mod wasapi;
 
+#[cfg(feature = "hardware")]
+mod os;
+
 #[cfg(all(feature = "hardware", target_os = "linux"))]
 pub use alsa::{AlsaCapture, AlsaDriver, inputs, outputs};
 #[cfg(all(feature = "hardware", target_os = "macos"))]
 pub use coreaudio::{CoreAudioCapture, CoreAudioDriver, inputs, outputs};
+#[cfg(feature = "hardware")]
+pub use os::Os;
 #[cfg(all(feature = "hardware", windows))]
 pub use wasapi::{WasapiCapture, WasapiDriver, WasapiMode, inputs, outputs};
 

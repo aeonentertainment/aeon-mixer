@@ -5,6 +5,7 @@ mod capture_io;
 mod driver;
 mod io;
 mod property;
+mod watch;
 
 use engine::driver::DriverError;
 use objc2_core_audio::{
@@ -16,25 +17,28 @@ use objc2_core_audio::{
 
 pub use capture::CoreAudioCapture;
 pub use driver::CoreAudioDriver;
+pub use watch::Watch;
 
 use crate::output::Output;
 use property::{get, get_list, string};
 
 const SYSTEM: AudioObjectID = kAudioObjectSystemObject as AudioObjectID;
 
-/// Every device with an output stream, by UID, with the system's default output marked.
+/// Every device with an output stream, by UID, with the system's default output marked. A device
+/// whose UID or name cannot be read, as one being unplugged, is left out rather than failing the
+/// list, so the follower still sees the outputs that remain.
 pub fn outputs() -> Result<Vec<Output>, DriverError> {
     let default = default_device().ok();
-    output_devices()?
+    Ok(output_devices()?
         .into_iter()
-        .map(|device| {
-            Ok(Output {
-                id: string(device, kAudioDevicePropertyDeviceUID)?,
-                name: string(device, kAudioObjectPropertyName)?,
+        .filter_map(|device| {
+            Some(Output {
+                id: string(device, kAudioDevicePropertyDeviceUID).ok()?,
+                name: string(device, kAudioObjectPropertyName).ok()?,
                 is_default: Some(device) == default,
             })
         })
-        .collect()
+        .collect())
 }
 
 /// Every device with an input stream, by UID, with the system's default input marked.

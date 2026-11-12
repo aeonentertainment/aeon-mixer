@@ -5,8 +5,10 @@ mod driver;
 mod event;
 mod format;
 mod mode;
+mod notifications;
 mod shared;
 mod stream;
+mod watch;
 
 use std::thread;
 
@@ -22,6 +24,7 @@ use windows::core::PCWSTR;
 pub use capture::WasapiCapture;
 pub use driver::WasapiDriver;
 pub use mode::WasapiMode;
+pub use watch::Watch;
 
 use crate::output::Output;
 use com::Com;
