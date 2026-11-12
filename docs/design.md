@@ -321,7 +321,9 @@ pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbPara
 pub struct VoiceParams { pub enabled: bool, pub formant_semitones: f32 }   // -12 to 12; off is the voice itself
 #[derive(Clone, Copy)]
 pub struct CleanupParams { pub enabled: bool }
+#[derive(Clone, Copy)]
 pub struct EchoCancelParams { pub enabled: bool }
+#[derive(Clone, Copy)]
 pub struct HowlGuardParams { pub enabled: bool }
 
 // engine/src/command.rs
