@@ -29,9 +29,10 @@ impl Ingest {
     /// Builds a slot's source for `kind` and keeps this end of it. An `rtp` or `l16` slot binds
     /// a port of the OS's choice and joins the network thread here, so a failure is the caller's
     /// to see before the mixer exists.
+    /// `playout_delay_frames` pins the delay; without it, each stream chooses its own.
     pub fn open(
         kind: &str,
-        playout_delay_frames: u32,
+        playout_delay_frames: Option<u32>,
         network: &Network,
     ) -> Result<(Self, Box<dyn Source>)> {
         match kind {
@@ -50,13 +51,16 @@ impl Ingest {
 
     fn listen(
         codec: Codec,
-        playout_delay_frames: u32,
+        playout_delay_frames: Option<u32>,
         network: &Network,
     ) -> Result<(Self, Box<dyn Source>)> {
         let (producer, consumer) = packet_ring(RING_CAPACITY);
         let receiver = Receiver::bind(None, producer)?;
         let port = receiver.port()?;
-        let jitter = JitterBuffer::new(playout_delay_frames, codec);
+        let jitter = match playout_delay_frames {
+            Some(frames) => JitterBuffer::new(frames, codec),
+            None => JitterBuffer::chosen(codec),
+        };
         let stats = jitter.shared_stats();
         let switch = receiver.switch();
         let handle = network.add(receiver)?;

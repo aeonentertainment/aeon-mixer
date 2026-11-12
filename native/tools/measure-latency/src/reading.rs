@@ -169,7 +169,7 @@ mod tests {
 
     use super::*;
     use crate::ingest::Ingest;
-    use crate::rig::Rig;
+    use crate::rig::{Delay, Rig};
 
     /// A device of the test's own making, with its answer known.
     struct Device {
@@ -207,7 +207,7 @@ mod tests {
         let signal = programme.signal();
         let frames = signal.len() + programme.interval();
         let Rig { render, controls: _controls, .. } =
-            Rig::new(Ingest::L16 { frame: 240 }, 240, &signal, 0).unwrap();
+            Rig::new(Ingest::L16 { frame: 240 }, Delay::Pinned(240), &signal, 0).unwrap();
         let mut driver = OfflineDriver::new(render);
         let mut rendered = Vec::with_capacity(frames);
         let mut block = [0.0f32; 2 * BLOCK];

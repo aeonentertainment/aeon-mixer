@@ -8,7 +8,7 @@ use engine::driver::OfflineDriver;
 use crate::ingest::Ingest;
 use crate::matched_filter::{MatchedFilter, first_arrival};
 use crate::programme::Programme;
-use crate::rig::Rig;
+use crate::rig::{Delay, Rig};
 
 /// How long the stream's first packet waits for the next block to drain it, in frames. The anchor
 /// fixes that wait for the rest of the stream, so it is part of the delay, and where a stream
@@ -26,7 +26,9 @@ pub struct Row {
     /// the path holds a sample no longer; the high-pass's phase delay on a low fundamental is
     /// under this chirp, which starts at 500 Hz, and decision 0012 gives it.
     pub cleanup: bool,
-    pub playout_frames: u32,
+    pub delay: Delay,
+    /// What the slot reports as its delay when the measurement ends; none for a `push` slot.
+    pub slot_delay_ms: Option<f32>,
     pub lookahead: usize,
     /// From a sample entering the sender to its leaving the master, least and most.
     pub lag: (f64, f64),
@@ -41,29 +43,45 @@ impl Row {
     }
 }
 
-/// Runs every path at the given playout delay, with the slot's cleanup off and then on.
+/// Runs every path at the given playout delay, with the slot's cleanup off and then on, and every
+/// jitter-buffered path once more with the slot left to choose its own delay and cleanup off.
 pub fn measure_all(playout_frames: u32) -> Result<Vec<Row>, String> {
-    [false, true]
-        .into_iter()
-        .flat_map(|cleanup| {
-            Ingest::every().into_iter().map(move |ingest| measure(ingest, playout_frames, cleanup))
-        })
-        .collect()
+    let pinned = [false, true].into_iter().flat_map(|cleanup| {
+        Ingest::every().into_iter().map(move |ingest| measure(ingest, playout_frames, cleanup))
+    });
+    let chooses = Ingest::every().into_iter().filter(Ingest::has_playout_delay).map(measure_chosen);
+    pinned.chain(chooses).collect()
 }
 
 /// Sends the programme through `ingest` from each first-packet wait and reads where it came out.
 pub fn measure(ingest: Ingest, playout_frames: u32, cleanup: bool) -> Result<Row, String> {
-    let programme = Programme::offline();
+    measure_with(ingest, Delay::Pinned(playout_frames), Programme::offline(), cleanup)
+}
+
+/// The same with the slot choosing its delay, read once it has. There is no network here, so this
+/// is what a slot comes to on a link with no jitter, the least it can hold.
+pub fn measure_chosen(ingest: Ingest) -> Result<Row, String> {
+    measure_with(ingest, Delay::Chosen, Programme::offline_settled(), false)
+}
+
+fn measure_with(
+    ingest: Ingest,
+    delay: Delay,
+    programme: Programme,
+    cleanup: bool,
+) -> Result<Row, String> {
     let signal = programme.signal();
     let filter = MatchedFilter::new(programme.chirp.samples());
     let mut lag = (f64::INFINITY, f64::NEG_INFINITY);
     let mut lookahead = 0;
+    let mut slot_delay_ms = None;
     for wait in FIRST_PACKET_WAITS {
         let phase = (2 * BLOCK - (ingest.gather_frames() + wait) % BLOCK) as u64 % BLOCK as u64;
-        let mut rig = Rig::new(ingest, playout_frames, &signal, phase)
+        let mut rig = Rig::new(ingest, delay, &signal, phase)
             .map_err(|error| format!("{ingest}: {error}"))?;
         rig.controls.params.update(|params| params.slots[0].effects.cleanup.enabled = cleanup);
         lookahead = rig.lookahead;
+        let stats = rig.stats.clone();
         let envelope = filter.envelope(&pump(rig, signal.len() + programme.interval()));
         for start in programme.starts() {
             let from = start + phase as usize;
@@ -72,8 +90,9 @@ pub fn measure(ingest: Ingest, playout_frames: u32, cleanup: bool) -> Result<Row
             let seen = arrival.frame - from as f64;
             lag = (lag.0.min(seen), lag.1.max(seen));
         }
+        slot_delay_ms = stats.map(|stats| stats.read().playout_delay_ms);
     }
-    Ok(Row { ingest, corrected: false, cleanup, playout_frames, lookahead, lag })
+    Ok(Row { ingest, corrected: false, cleanup, delay, slot_delay_ms, lookahead, lag })
 }
 
 /// The left channel over `frames`, a block at a time, each block under the allocation guard in
@@ -138,6 +157,28 @@ mod tests {
             let on = measure(ingest, PLAYOUT, true).unwrap();
             let moved = [on.lag.0 - off.lag.0, on.lag.1 - off.lag.1];
             assert!(moved.iter().all(|m| m.abs() < 1.0), "{ingest}: moved {moved:?} frames");
+        }
+    }
+
+    /// A slot left to choose on a link with no jitter comes to the floor, whatever the frame and
+    /// wherever in a block the stream began: the fall measures from the earliest packet, so the
+    /// block's wait a held stream keeps for good is gone from the range too.
+    #[test]
+    fn a_slot_that_chooses_holds_the_floor() {
+        let floor = engine::ingest::delay_chooser::FLOOR as f64;
+        for ingest in [
+            Ingest::L16 { frame: 240 },
+            Ingest::Rtp { frame: 960, encoder: Encoder::RestrictedLowDelay },
+            Ingest::Rtp { frame: 120, encoder: Encoder::RestrictedLowDelay },
+        ] {
+            let row = measure_chosen(ingest).unwrap();
+            let reported = f64::from(row.slot_delay_ms.unwrap()) * f64::from(RATE) / 1000.0;
+            assert!((reported - floor).abs() < 0.5, "{ingest}: reported {reported}");
+            let (least, most) = row.held();
+            assert!(
+                least >= floor - 3.0 && most <= floor + BLOCK as f64 + 3.0,
+                "{ingest}: held {least}..{most} frames"
+            );
         }
     }
 

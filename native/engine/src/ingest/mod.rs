@@ -4,6 +4,7 @@
 //! slot skips all of that: the control thread writes stereo f32 into a ring the slot reads.
 
 pub mod codec;
+pub mod delay_chooser;
 pub mod fifo;
 pub mod jitter;
 pub mod l16;

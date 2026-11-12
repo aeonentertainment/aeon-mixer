@@ -9,6 +9,7 @@ use crate::offline::{Row, ms};
 use crate::opening::Opening;
 use crate::programme::Programme;
 use crate::reading::median;
+use crate::rig::Delay;
 
 /// The offline table: the engine's share of each path.
 pub fn offline(rows: &[Row]) -> String {
@@ -17,14 +18,15 @@ pub fn offline(rows: &[Row]) -> String {
     let _ = writeln!(out, "\n{}\n", machine::describe(None));
     let _ = writeln!(
         out,
-        "| path | corrector | cleanup | sender gathers | sender encoder | engine holds | total |\n\
-         | --- | --- | --- | ---: | ---: | ---: | ---: |"
+        "| path | slot's delay | corrector | cleanup | sender gathers | sender encoder | engine holds | total |\n\
+         | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
     );
     for row in rows {
         let _ = writeln!(
             out,
-            "| {} | {} | {} | {:.2} | {:.2} | {} | {} |",
+            "| {} | {} | {} | {} | {:.2} | {:.2} | {} | {} |",
             row.ingest,
+            slot_delay(row),
             if row.corrected { "on" } else { "off" },
             if row.cleanup { "on" } else { "off" },
             ms(row.ingest.gather_frames() as f64),
@@ -33,20 +35,28 @@ pub fn offline(rows: &[Row]) -> String {
             range(row.lag),
         );
     }
-    let playout =
-        rows.iter().find(|row| row.ingest.has_playout_delay()).map(|row| row.playout_frames);
     let _ = writeln!(
         out,
         "\nAll in ms, a range where it depends on where in a block the stream began. No device, no \
          socket, no network, on the offline driver. **Sender gathers**: the frame or chunk a \
          sender fills before any of it can leave. **Sender encoder**: Opus's lookahead, which the \
-         phone pays. **Engine holds**: from the packet's arrival to the master's output: the wait \
-         for the next block, {} ms of playout delay on the jitter-buffered paths, decode, slot and \
+         phone pays. **Slot's delay**: what the slot reports, pinned by the host or chosen by the \
+         slot. A chosen row is what a slot comes to with no jitter to cover, the least it can hold \
+         on any network. **Engine holds**: from the packet's arrival to the master's output: the \
+         wait for the next block, the slot's delay on the jitter-buffered paths, decode, slot and \
          master. **Total**: a sample entering the sender to its leaving the master; it excludes \
          the mouth to the phone's encoder, the network, and everything after the master.",
-        playout.map_or("no".into(), |frames| format!("{:.2}", ms(f64::from(frames)))),
     );
     out
+}
+
+/// What a row's slot says its delay is, and who set it.
+fn slot_delay(row: &Row) -> String {
+    match (row.slot_delay_ms, row.delay) {
+        (None, _) => "none".into(),
+        (Some(ms), Delay::Pinned(_)) => format!("pinned {ms:.2}"),
+        (Some(ms), Delay::Chosen) => format!("chosen {ms:.2}"),
+    }
 }
 
 /// A range of frames, in milliseconds, or one figure when it is all one.
@@ -87,8 +97,8 @@ pub fn device(
 
     let _ = writeln!(
         out,
-        "\n| path | corrector | cleanup | offline total | output at most | mic path at most |\n\
-         | --- | --- | --- | ---: | ---: | ---: |"
+        "\n| path | slot's delay | corrector | cleanup | offline total | output at most | mic path at most |\n\
+         | --- | --- | --- | --- | ---: | ---: | ---: |"
     );
     for period in distinct_periods(openings) {
         let readings: Vec<f64> = openings
@@ -108,8 +118,9 @@ pub fn device(
             let (least, most) = (ms(row.lag.0), ms(row.lag.1 + extra));
             let _ = writeln!(
                 out,
-                "| {}, period {period} | {} | {} | {:.2} to {:.2} | {output:.2} | {:.2} to {:.2} |",
+                "| {}, period {period} | {} | {} | {} | {:.2} to {:.2} | {output:.2} | {:.2} to {:.2} |",
                 row.ingest,
+                slot_delay(row),
                 if row.corrected { "on" } else { "off" },
                 if row.cleanup { "on" } else { "off" },
                 least,

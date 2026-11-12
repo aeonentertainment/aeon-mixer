@@ -45,6 +45,25 @@ impl Fifo {
         n
     }
 
+    /// Puts silence ahead of what is waiting, as much as fits, and returns how much that was.
+    pub fn push_front_silence(&mut self, count: usize) -> usize {
+        let n = count.min(self.buf.len() - self.len);
+        self.head = (self.head + self.buf.len() - n) % self.buf.len();
+        for i in 0..n {
+            let at = (self.head + i) % self.buf.len();
+            self.buf[at] = 0.0;
+        }
+        self.len += n;
+        n
+    }
+
+    /// The loudest of the next `count` samples, or of all of them when fewer wait.
+    pub fn peak(&self, count: usize) -> f32 {
+        (0..count.min(self.len))
+            .map(|i| self.buf[(self.head + i) % self.buf.len()].abs())
+            .fold(0.0, f32::max)
+    }
+
     pub fn pop(&mut self) -> Option<f32> {
         if self.len == 0 {
             return None;
@@ -74,8 +93,13 @@ mod tests {
         assert_eq!(fifo.push(&[4.0, 5.0, 6.0]), 2, "only what fits");
         fifo.discard(1);
         assert_eq!(fifo.push_silence(1), 1);
+        assert_eq!(fifo.peak(2), 4.0);
         let out: Vec<_> = std::iter::from_fn(|| fifo.pop()).collect();
         assert_eq!(out, vec![3.0, 4.0, 5.0, 0.0]);
+        fifo.push(&[1.0, 2.0]);
+        assert_eq!(fifo.push_front_silence(3), 2, "only what fits");
+        let out: Vec<_> = std::iter::from_fn(|| fifo.pop()).collect();
+        assert_eq!(out, vec![0.0, 0.0, 1.0, 2.0]);
         assert!(fifo.is_empty());
     }
 }

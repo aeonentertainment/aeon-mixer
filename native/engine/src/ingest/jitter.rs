@@ -8,15 +8,17 @@
 //! skew is corrected one frame at a time, by moving the anchor a frame and dropping or concealing
 //! the frame that makes. A new SSRC, a gap over a second on either clock, or `reset` starts a new
 //! stream.
+//! A buffer made with `chosen` lets each stream move its own delay, as `DelayChooser` decides.
 
 use std::sync::Arc;
 
 use super::codec::Codec;
+use super::delay_chooser::{self, DelayChooser, Move};
 use super::fifo::Fifo;
-use super::opus::MAX_FRAME;
+use super::opus::{MAX_FRAME, MIN_FRAME};
 use super::packet::Packet;
 use super::stats::{SharedStats, SlotStats};
-use crate::block::RATE;
+use crate::block::{BLOCK, RATE};
 
 /// Packets held ahead of the decode cursor: 160 ms of 2.5 ms frames, 1.28 s of 20 ms ones.
 pub const STORE: usize = 64;
@@ -44,7 +46,12 @@ const DEFAULT_FRAME: usize = 960;
 
 pub struct JitterBuffer {
     codec: Codec,
+    /// The delay every stream opens at.
+    opening: i64,
+    /// The delay the stream has now.
     playout_delay: i64,
+    /// Whether a stream moves its delay, or holds the one the host pinned.
+    chooses: bool,
     store: Vec<Option<Packet>>,
     fifo: Fifo,
     scratch: Vec<f32>,
@@ -73,6 +80,18 @@ struct Stream {
     /// RFC 3550 section 6.4.1: the last packet's transit time and the smoothed jitter.
     transit: Option<i64>,
     jitter: f32,
+    chooser: Option<DelayChooser>,
+    /// The same stream held at the opening delay, for `late_at_opening`; none when this one is
+    /// held already.
+    held: Option<Held>,
+}
+
+/// Where a held stream's anchor would be: its own skew corrections, at its own delay, decide it,
+/// so it moves apart from this one's as soon as the two delays need different corrections.
+struct Held {
+    /// The held anchor less this one.
+    offset: i64,
+    skew: SkewWindow,
 }
 
 /// How early packets arrived over the last second: the slack between arrival and due time, at
@@ -85,20 +104,35 @@ struct SkewWindow {
 }
 
 impl JitterBuffer {
-    /// Built on the control thread, with the slot's decoder. Everything a block needs is
-    /// allocated here.
+    /// A buffer pinned to one delay for good. Built on the control thread, with the slot's
+    /// decoder. Everything a block needs is allocated here.
     pub fn new(playout_delay_frames: u32, codec: Codec) -> Self {
+        Self::build(playout_delay_frames, false, codec)
+    }
+
+    /// A buffer whose streams choose their own delay.
+    pub fn chosen(codec: Codec) -> Self {
+        Self::build(delay_chooser::OPENING, true, codec)
+    }
+
+    fn build(opening: u32, chooses: bool, codec: Codec) -> Self {
+        let opening = i64::from(opening);
+        let stats = SlotStats { playout_delay_ms: frames_to_ms(opening), ..SlotStats::default() };
+        let shared = Arc::new(SharedStats::default());
+        shared.publish(&stats);
         Self {
             codec,
-            playout_delay: i64::from(playout_delay_frames),
+            opening,
+            playout_delay: opening,
+            chooses,
             store: vec![None; STORE],
             fifo: Fifo::new(FIFO),
             scratch: vec![0.0; MAX_FRAME],
             stream: None,
             anchored: false,
             now: 0,
-            stats: SlotStats::default(),
-            shared: Arc::new(SharedStats::default()),
+            stats,
+            shared,
         }
     }
 
@@ -122,6 +156,7 @@ impl JitterBuffer {
     /// `ResetSlot`: forget the stream. The next packet is a new singer and re-anchors.
     pub fn reset(&mut self) {
         self.stream = None;
+        self.playout_delay = self.opening;
         self.fifo.clear();
     }
 
@@ -140,6 +175,11 @@ impl JitterBuffer {
         // Behind the cursor in sequence, or in time: its frame was concealed while it was awaited
         if ahead < 0 || (packet.timestamp.wrapping_sub(stream.next_ts) as i32) < 0 {
             self.stats.late += 1;
+            let slack = stream.due(packet.timestamp) - self.now;
+            if let Some(chooser) = &mut stream.chooser {
+                chooser.observe(slack);
+            }
+            stream.observe_held(slack, &mut self.stats);
             return;
         }
         if ahead as usize >= STORE {
@@ -147,6 +187,7 @@ impl JitterBuffer {
             return;
         }
         stream.observe(self.now, due);
+        stream.observe_held(due - self.now, &mut self.stats);
         self.store[usize::from(packet.seq) % STORE] = Some(*packet);
     }
 
@@ -158,11 +199,25 @@ impl JitterBuffer {
             && now - stream.last_arrival > REANCHOR_GAP
         {
             // Nothing for a second: stop concealing and wait for a new stream
-            self.stream = None;
-            self.fifo.clear();
+            self.reset();
         }
         if let Some(stream) = &mut self.stream {
-            stream.correct_skew(now, self.playout_delay, &mut self.stats);
+            stream.correct_skew(now, self.playout_delay, self.opening, &mut self.stats);
+            let wanted = stream.chooser.as_mut().and_then(|chooser| chooser.tick(now));
+            if let Some(moved) = wanted
+                && stream.move_anchor(
+                    moved,
+                    now,
+                    &mut self.codec,
+                    &mut self.store,
+                    &mut self.fifo,
+                    &mut self.scratch,
+                    &mut self.stats,
+                )
+            {
+                self.playout_delay = moved.delay;
+                self.stats.resyncs += 1;
+            }
             fill(
                 stream,
                 &mut self.codec,
@@ -171,6 +226,7 @@ impl JitterBuffer {
                 &mut self.scratch,
                 &mut self.stats,
                 end,
+                Fill::Conceal,
             );
         }
 
@@ -188,9 +244,13 @@ impl JitterBuffer {
                 if now + i as i64 >= first_due { self.fifo.pop().unwrap_or(0.0) } else { 0.0 };
         }
 
+        if let Some(chooser) = self.stream.as_mut().and_then(|stream| stream.chooser.as_mut()) {
+            chooser.hear(out);
+        }
         self.now = end;
         self.stats.jitter_ms =
             self.stream.as_ref().map_or(0.0, |stream| stream.jitter * 1000.0 / RATE as f32);
+        self.stats.playout_delay_ms = frames_to_ms(self.playout_delay);
         self.shared.publish(&self.stats);
     }
 
@@ -200,6 +260,7 @@ impl JitterBuffer {
         }
         self.anchored = true;
         self.fifo.clear();
+        self.playout_delay = self.opening;
         let plays_at = self.now + self.playout_delay;
         let mut stream = Stream {
             ssrc: packet.ssrc,
@@ -213,14 +274,29 @@ impl JitterBuffer {
             skew: SkewWindow::new(self.now + SKEW_WINDOW),
             transit: None,
             jitter: 0.0,
+            chooser: self.chooses.then(|| DelayChooser::new(self.now)),
+            held: self
+                .chooses
+                .then(|| Held { offset: 0, skew: SkewWindow::new(self.now + SKEW_WINDOW) }),
         };
         stream.observe(self.now, plays_at);
+        stream.observe_held(self.playout_delay, &mut self.stats);
         self.store[usize::from(packet.seq) % STORE] = Some(*packet);
         self.stream = Some(stream);
     }
 }
 
+/// What `fill` does at a frame that is not in hand yet.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fill {
+    /// Its time has come: conceal it.
+    Conceal,
+    /// Decoding ahead of time: stop there, since it may still arrive.
+    InHand,
+}
+
 /// Decodes or conceals, in sequence order, until the fifo reaches `end` or the step bound.
+#[allow(clippy::too_many_arguments)]
 fn fill(
     stream: &mut Stream,
     codec: &mut Codec,
@@ -229,12 +305,16 @@ fn fill(
     scratch: &mut [f32],
     stats: &mut SlotStats,
     end: i64,
+    mode: Fill,
 ) {
     for _ in 0..MAX_STEPS {
         if stream.fifo_end >= end {
             return;
         }
         let due = stream.due(stream.next_ts);
+        if due > stream.fifo_end && mode == Fill::InHand {
+            return;
+        }
         if due > stream.fifo_end {
             let gap = (due - stream.fifo_end) as usize;
             if gap <= stream.frame {
@@ -254,6 +334,9 @@ fn fill(
         // SSRC says so: an old stream's leftovers never decode into a new one
         let at = usize::from(stream.next_seq) % STORE;
         let present = store[at].as_ref().is_some_and(|packet| stream.owns(packet, stream.next_seq));
+        if !present && mode == Fill::InHand {
+            return;
+        }
         let (frames, consumed) = if present {
             let packet = store[at].as_ref().expect("checked present");
             if packet.timestamp != stream.next_ts {
@@ -330,42 +413,142 @@ impl Stream {
     fn observe(&mut self, now: i64, due: i64) {
         self.last_arrival = now;
         let slack = due - now;
-        self.skew.packets += 1;
-        self.skew.min_slack = self.skew.min_slack.min(slack);
-        self.skew.max_slack = self.skew.max_slack.max(slack);
+        self.skew.observe(slack);
         if let Some(last) = self.transit {
             let difference = (-slack - last).abs() as f32;
             self.jitter += (difference - self.jitter) / 16.0;
         }
         self.transit = Some(-slack);
+        if let Some(chooser) = &mut self.chooser {
+            chooser.observe(slack);
+        }
     }
 
-    /// Once a second: when every packet of the last second came a frame early, the sender's
-    /// clock runs fast and the anchor moves a frame earlier, dropping one; when every packet
-    /// came a frame late, or half the delay when a frame is longer, it runs slow and the anchor
-    /// moves a frame later, concealing one.
-    fn correct_skew(&mut self, now: i64, playout_delay: i64, stats: &mut SlotStats) {
+    /// A packet's slack against the held stream's anchor: counted when the held stream would
+    /// have had it late, and noted for that stream's skew correction when it would not.
+    fn observe_held(&mut self, slack: i64, stats: &mut SlotStats) {
+        let Some(held) = &mut self.held else {
+            if slack < 0 {
+                stats.late_at_opening += 1;
+            }
+            return;
+        };
+        let slack = slack + held.offset;
+        if slack < 0 {
+            stats.late_at_opening += 1;
+        } else {
+            held.skew.observe(slack);
+        }
+    }
+
+    /// A move of the delay, made at the head of what waits to play, right after the quiet the
+    /// gate heard, so what it drops or delays is never a sound already decoded behind that
+    /// quiet. Earlier, it decodes ahead what is in hand and drops the head only when that is
+    /// quiet too; decoding keeps the decoder's state whole. Later, silence goes at the head.
+    /// Returns whether it moved, so the caller asks again next block when it could not.
+    #[allow(clippy::too_many_arguments)]
+    fn move_anchor(
+        &mut self,
+        moved: Move,
+        now: i64,
+        codec: &mut Codec,
+        store: &mut [Option<Packet>],
+        fifo: &mut Fifo,
+        scratch: &mut [f32],
+        stats: &mut SlotStats,
+    ) -> bool {
+        if self.fifo_end - fifo.len() as i64 != now {
+            return false;
+        }
+        if moved.by < 0 {
+            let skip = -moved.by;
+            fill(self, codec, store, fifo, scratch, stats, now + skip, Fill::InHand);
+            if (fifo.len() as i64) < skip || fifo.peak(skip as usize) >= delay_chooser::QUIET_PEAK {
+                return false;
+            }
+            fifo.discard(skip as usize);
+            self.fifo_end -= skip;
+        } else {
+            let added = fifo.push_front_silence(moved.by as usize) as i64;
+            if added < moved.by {
+                fifo.discard(added as usize);
+                return false;
+            }
+            self.fifo_end += added;
+        }
+        self.anchor_out += moved.by;
+        self.skew = SkewWindow::new(now + SKEW_WINDOW);
+        self.transit = None;
+        if let Some(held) = &mut self.held {
+            held.offset -= moved.by;
+        }
+        if let Some(chooser) = &mut self.chooser {
+            chooser.made(moved);
+        }
+        true
+    }
+
+    /// Once a second, this stream's skew correction, and the held stream's at its own delay.
+    fn correct_skew(&mut self, now: i64, playout_delay: i64, opening: i64, stats: &mut SlotStats) {
         if now < self.skew.ends_at {
             return;
         }
         let window = std::mem::replace(&mut self.skew, SkewWindow::new(now + SKEW_WINDOW));
-        if window.packets < SKEW_MIN_PACKETS {
+        let fallen = self.chooser.as_ref().is_some_and(|chooser| chooser.fallen() > 0);
+        let by = window.correction(playout_delay, self.frame as i64, fallen);
+        if let Some(held) = &mut self.held {
+            let window = std::mem::replace(&mut held.skew, SkewWindow::new(now + SKEW_WINDOW));
+            held.offset += window.correction(opening, self.frame as i64, false) - by;
+        }
+        if by == 0 {
             return;
         }
-        let frame = self.frame as i64;
-        if window.min_slack >= playout_delay + frame {
-            self.anchor_out -= frame;
-            stats.resyncs += 1;
-        } else if window.max_slack <= playout_delay - frame.min(playout_delay / 2) {
-            self.anchor_out += frame;
-            stats.resyncs += 1;
+        self.anchor_out += by;
+        stats.resyncs += 1;
+        if let Some(chooser) = &mut self.chooser {
+            chooser.shift(by);
         }
     }
+}
+
+fn frames_to_ms(frames: i64) -> f32 {
+    frames as f32 * 1000.0 / RATE as f32
 }
 
 impl SkewWindow {
     fn new(ends_at: i64) -> Self {
         Self { ends_at, packets: 0, min_slack: i64::MAX, max_slack: i64::MIN }
+    }
+
+    fn observe(&mut self, slack: i64) {
+        self.packets += 1;
+        self.min_slack = self.min_slack.min(slack);
+        self.max_slack = self.max_slack.max(slack);
+    }
+
+    /// How far a second like this one moves the anchor, at `delay` on frames of `frame`. When
+    /// every packet came a step early, the sender's clock runs fast and the anchor moves a step
+    /// earlier, dropping it; when even the earliest came late by a step, or by half the delay's
+    /// room over the block a packet can wait when that is less, it runs slow and the anchor moves
+    /// a step later, concealing it. A step is a frame, or as much of a frame as the delay can take
+    /// in whole 2.5 ms: a 20 ms step would undo a short delay for minutes. Once a delay has fallen
+    /// it is the earliest packets' wait, and stalls say nothing about the sender's clock, so
+    /// `earliest_decides` lets only those packets say it runs fast.
+    fn correction(&self, delay: i64, frame: i64, earliest_decides: bool) -> i64 {
+        if self.packets < SKEW_MIN_PACKETS {
+            return 0;
+        }
+        let whole = MIN_FRAME as i64;
+        let step = frame.min((delay / whole * whole).max(whole));
+        let room = (delay - BLOCK as i64).max(0) / 2;
+        let early = if earliest_decides { self.max_slack } else { self.min_slack };
+        if early >= delay + step {
+            -step
+        } else if self.max_slack <= delay - step.min(room) {
+            step
+        } else {
+            0
+        }
     }
 }
 
@@ -374,7 +557,6 @@ mod tests {
     use super::super::codec::Codec;
     use super::super::fixtures::*;
     use super::*;
-    use crate::block::BLOCK;
 
     const SECOND: i64 = RATE as i64;
 
@@ -479,7 +661,7 @@ mod tests {
         let shared = jitter.shared_stats();
         let out = pull_direct(&mut jitter, &[], 4 * BLOCK as i64);
         assert!(out.iter().all(|s| *s == 0.0));
-        assert_eq!(shared.read(), SlotStats::default());
+        assert_eq!(shared.read(), SlotStats { playout_delay_ms: 15.0, ..SlotStats::default() });
 
         let signal = quantized(&source(RATE as usize));
         let mut sender = L16Sender::new(240, 23);

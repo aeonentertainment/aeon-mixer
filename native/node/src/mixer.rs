@@ -35,7 +35,7 @@ impl Mixer {
     pub(crate) fn build(
         kinds: &[String],
         rtp_return: Option<&RtpReturnInput>,
-        playout_delay_frames: u32,
+        playout_delay_frames: Option<u32>,
         network: &Network,
     ) -> Result<Self> {
         if kinds.len() > MAX_SLOTS {

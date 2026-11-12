@@ -239,6 +239,41 @@ pub fn impair(sent: &[Arrival], impairment: Impairment, seed: u64) -> Vec<Arriva
     arrivals
 }
 
+/// A link with a known spread: every packet takes 1 ms plus up to `jitter` frames, and every
+/// `every` frames, give or take a quarter, a stall holds whatever would arrive during it for
+/// `stall` frames, the way a busy radio does. Every packet arrives, in order.
+#[derive(Clone, Copy)]
+pub struct Stalls {
+    pub stall: i64,
+    pub jitter: i64,
+    pub every: i64,
+}
+
+impl Stalls {
+    pub fn new(stall: i64, every: i64) -> Self {
+        Self { stall, jitter: 48, every }
+    }
+
+    pub fn apply(&self, sent: &[Arrival], seed: u64) -> Vec<Arrival> {
+        let mut rng = Lcg(seed);
+        let quarter = self.every as u32 / 4;
+        let mut stalls_at = sent.first().map_or(0, |first| first.at) + self.every;
+        sent.iter()
+            .map(|sent| {
+                let mut at = sent.at + 48 + i64::from(rng.below(self.jitter as u32 + 1));
+                if at >= stalls_at + self.stall {
+                    stalls_at +=
+                        self.every - i64::from(quarter) + i64::from(rng.below(2 * quarter));
+                }
+                if (stalls_at..stalls_at + self.stall).contains(&at) {
+                    at = stalls_at + self.stall;
+                }
+                Arrival { at, ..*sent }
+            })
+            .collect()
+    }
+}
+
 struct Lcg(u64);
 
 impl Lcg {
@@ -278,8 +313,16 @@ pub struct Rig {
 
 impl Rig {
     pub fn new(codec: Codec) -> Self {
+        Self::around(JitterBuffer::new(DELAY, codec))
+    }
+
+    /// A slot that chooses its own delay.
+    pub fn choosing(codec: Codec) -> Self {
+        Self::around(JitterBuffer::chosen(codec))
+    }
+
+    fn around(jitter: JitterBuffer) -> Self {
         let (producer, consumer) = packet_ring(RING_CAPACITY);
-        let jitter = JitterBuffer::new(DELAY, codec);
         let stats = jitter.shared_stats();
         let source = PacketSource::new(consumer, jitter);
         let graph = Box::new(Graph::new(vec![Slot::new(Box::new(source))]));

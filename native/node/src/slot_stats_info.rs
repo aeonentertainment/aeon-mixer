@@ -13,6 +13,7 @@ pub struct SlotStatsInfo {
     pub pushed: u32,
     pub lost: u32,
     pub late: u32,
+    pub late_at_opening: u32,
     pub concealed: u32,
     pub resyncs: u32,
     pub jitter_ms: f64,
@@ -20,6 +21,7 @@ pub struct SlotStatsInfo {
     pub corrector_max_delay_ms: f64,
     /// Null while the canceller is off or has yet to find and learn the room's echo.
     pub echo: Either<EchoInfo, Null>,
+    pub playout_delay_ms: f64,
 }
 
 impl SlotStatsInfo {
@@ -31,12 +33,14 @@ impl SlotStatsInfo {
             pushed: stats.pushed,
             lost: stats.lost,
             late: stats.late,
+            late_at_opening: stats.late_at_opening,
             concealed: stats.concealed,
             resyncs: stats.resyncs,
             jitter_ms: f64::from(stats.jitter_ms),
             corrector_delay_ms: ms(corrector_delay_frames),
             corrector_max_delay_ms: ms(max_frames),
             echo: echo.findings().map_or(Either::B(Null), |findings| Either::A(findings.into())),
+            playout_delay_ms: f64::from(stats.playout_delay_ms),
         }
     }
 }

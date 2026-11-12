@@ -24,6 +24,11 @@ impl Programme {
         }
     }
 
+    /// The same, after the silence a slot that chooses its delay needs to choose it.
+    pub fn offline_settled() -> Self {
+        Self { preroll: RATE as usize * 11, ..Self::offline() }
+    }
+
     /// A room rings and a device can hide a lot, so the gap is long and the chirps many, which
     /// shows how much the figure moves from one to the next.
     pub fn device(level: f32) -> Self {

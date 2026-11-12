@@ -21,7 +21,10 @@ export interface OpenEngineOptions {
   output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   /** Fixed for the engine's life, default 8, at most 16. */
   slots?: number;
-  /** The ingest jitter buffer, default 15. */
+  /**
+   * Pins the ingest jitter buffer to this delay. Leave it out and each slot chooses its own from
+   * what its stream shows, opening at 15; `stats()` reports where each one is.
+   */
   playoutDelayMs?: number;
 }
 
@@ -82,6 +85,8 @@ export interface SlotStats {
   pushed: number;
   lost: number;
   late: number;
+  /** Of `late`, the packets that would also have been late had the delay stayed where it opened. */
+  lateAtOpening: number;
   concealed: number;
   resyncs: number;
   jitterMs: number;
@@ -99,6 +104,8 @@ export interface SlotStats {
    * found the echo and learned it.
    */
   echo: { pathMs: number; bleedDb: number; removedDb: number } | null;
+  /** The delay the stream's earliest packets wait now; zero for a `push` slot. */
+  playoutDelayMs: number;
 }
 
 export type EngineEvents = {

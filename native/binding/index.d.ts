@@ -170,8 +170,11 @@ export interface OpenOptions {
   /** A device clock's output: an id from `outputs` to pin, or none to follow the default output. */
   device?: string
   periodFrames: number
-  /** The jitter buffer's playout delay for every `rtp` and `l16` slot. */
-  playoutDelayFrames: number
+  /**
+   * Pins the jitter buffer's playout delay for every `rtp` and `l16` slot. Without it, each
+   * stream chooses its own.
+   */
+  playoutDelayFrames?: number
 }
 
 export interface OutputDevice {
@@ -234,6 +237,7 @@ export interface SlotStatsInfo {
   pushed: number
   lost: number
   late: number
+  lateAtOpening: number
   concealed: number
   resyncs: number
   jitterMs: number
@@ -241,6 +245,7 @@ export interface SlotStatsInfo {
   correctorMaxDelayMs: number
   /** Null while the canceller is off or has yet to find and learn the room's echo. */
   echo: EchoInfo | null
+  playoutDelayMs: number
 }
 
 export interface StemGainsInput {

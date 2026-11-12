@@ -12,12 +12,19 @@ pub struct SlotStats {
     pub lost: u32,
     /// Packets that arrived after their samples fell due, and were dropped.
     pub late: u32,
+    /// Of those, the ones that would have been late at the delay the stream opened at: the same
+    /// song on the same network with the delay held, compared in one run. Equal to `late` when
+    /// the delay has not moved.
+    pub late_at_opening: u32,
     /// Frames the decoder filled in for a missing packet, a pause or a skew correction.
     pub concealed: u32,
-    /// Anchor moves: a new stream, or a one-frame skew correction.
+    /// Anchor moves: a new stream, a move of the playout delay, or a skew correction.
     pub resyncs: u32,
     /// RFC 3550 interarrival jitter, in milliseconds.
     pub jitter_ms: f32,
+    /// The delay the stream's earliest packets wait now, in milliseconds. Zero for a `push` slot,
+    /// which has no jitter buffer.
+    pub playout_delay_ms: f32,
 }
 
 /// The crossing: the audio thread stores a snapshot, the control thread loads one.
@@ -26,9 +33,11 @@ pub struct SharedStats {
     pushed: AtomicU32,
     lost: AtomicU32,
     late: AtomicU32,
+    late_at_opening: AtomicU32,
     concealed: AtomicU32,
     resyncs: AtomicU32,
     jitter_bits: AtomicU32,
+    delay_bits: AtomicU32,
 }
 
 impl SharedStats {
@@ -36,9 +45,11 @@ impl SharedStats {
         self.pushed.store(stats.pushed, Ordering::Relaxed);
         self.lost.store(stats.lost, Ordering::Relaxed);
         self.late.store(stats.late, Ordering::Relaxed);
+        self.late_at_opening.store(stats.late_at_opening, Ordering::Relaxed);
         self.concealed.store(stats.concealed, Ordering::Relaxed);
         self.resyncs.store(stats.resyncs, Ordering::Relaxed);
         self.jitter_bits.store(stats.jitter_ms.to_bits(), Ordering::Relaxed);
+        self.delay_bits.store(stats.playout_delay_ms.to_bits(), Ordering::Relaxed);
     }
 
     pub fn read(&self) -> SlotStats {
@@ -46,9 +57,11 @@ impl SharedStats {
             pushed: self.pushed.load(Ordering::Relaxed),
             lost: self.lost.load(Ordering::Relaxed),
             late: self.late.load(Ordering::Relaxed),
+            late_at_opening: self.late_at_opening.load(Ordering::Relaxed),
             concealed: self.concealed.load(Ordering::Relaxed),
             resyncs: self.resyncs.load(Ordering::Relaxed),
             jitter_ms: f32::from_bits(self.jitter_bits.load(Ordering::Relaxed)),
+            playout_delay_ms: f32::from_bits(self.delay_bits.load(Ordering::Relaxed)),
         }
     }
 }

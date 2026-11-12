@@ -46,7 +46,7 @@ mod tests {
     use crate::ingest::Ingest;
     use crate::offline::pump;
     use crate::programme::Programme;
-    use crate::rig::Rig;
+    use crate::rig::{Delay, Rig};
 
     /// A render through the tap matches the render without it, frame for frame, and allocates
     /// nothing on the audio thread.
@@ -55,9 +55,10 @@ mod tests {
         let programme = Programme::offline();
         let signal = programme.signal();
         let ingest = Ingest::L16 { frame: 240 };
-        let plain = pump(Rig::new(ingest, 720, &signal, 0).unwrap(), signal.len());
+        let plain = pump(Rig::new(ingest, Delay::Pinned(720), &signal, 0).unwrap(), signal.len());
 
-        let Rig { render, controls: _controls, .. } = Rig::new(ingest, 720, &signal, 0).unwrap();
+        let Rig { render, controls: _controls, .. } =
+            Rig::new(ingest, Delay::Pinned(720), &signal, 0).unwrap();
         let (tapped, mut recording) = tap_render(render, signal.len(), Instant::now());
         let mut driver = OfflineDriver::new(tapped);
         let mut block = [0.0f32; 2 * BLOCK];
