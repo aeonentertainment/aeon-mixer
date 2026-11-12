@@ -64,8 +64,9 @@ export class Engine {
 
   constructor(options: OpenEngineOptions) {
     this.#slots = integerIn("slots", options.slots ?? 8, 1, 16);
-    // The jitter buffer holds 64 packets ahead of its cursor, 160 ms of the phone's shortest
-    // frame; under 5 ms, two blocks, that frame has no slack and ordinary jitter is all late packets
+    // A pinned delay can never rise, so under 5 ms, two blocks, ordinary jitter would be all late
+    // packets for good. A slot left to choose goes as low as 3.67 ms, because it rises when packets
+    // come late. 100 ms stays inside the 64 packets the buffer holds, 160 ms of the shortest frame
     const pinned =
       options.playoutDelayMs === undefined
         ? {}
