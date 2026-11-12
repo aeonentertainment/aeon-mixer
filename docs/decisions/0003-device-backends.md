@@ -84,6 +84,6 @@ engine now opens there. The laptop has no MSVC tools, so its measure-sink was bu
   `cargo run --release -p devices --features hardware --bin measure-sink -- --period 128` under
   a unit or limit that grants rtprio.
 - Latency at the speaker. Every figure above is what the OS reports: ALSA reports nothing past
-  its ring, and the Windows exclusive figure is suspect. `measure-latency` (design 8.9) measures
-  it through a loopback.
+  its ring, and the Windows exclusive figure is suspect. `measure-latency` measures it with a mic
+  at the speaker or a cable, as far as software can: decision 0006.
 - A Windows driver that offers small shared periods, and a USB audio interface on any OS.
