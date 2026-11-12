@@ -85,3 +85,79 @@ fn a_click_while_ducked_leaves_on_the_sample_it_entered() {
     assert_eq!(loudest, Some(click));
     assert!(out[click] < 0.5 * 0.6, "ducked: the click came out at {}", out[click]);
 }
+
+/// `signal` through a guard under the allocation guard, with the frame at the end of the block
+/// each catch landed in.
+fn guarded_catching(mut signal: Vec<f32>) -> (Vec<f32>, Vec<usize>) {
+    let mut guard = HowlGuard::new(RATE);
+    let mut catches = Vec::new();
+    for (index, block) in signal.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+        assert_no_alloc(|| guard.process(block));
+        if guard.catches() as usize > catches.len() {
+            catches.push((index + 1) * BLOCK);
+        }
+    }
+    (signal, catches)
+}
+
+// A tone that settled loud, fell 30 dB and stayed down, then grows as a loop does is judged
+// from where it fell to, not from where it first settled: the fall itself is no howl, and the
+// growth is caught within 400 ms of starting, before it passes -30 dBFS.
+#[test]
+fn a_tone_that_fell_and_then_grows_is_caught_from_where_it_fell() {
+    let rate = RATE as usize;
+    let grows_from = 2 * rate;
+    let level = |i: usize| match i {
+        i if i < rate => -10.0,
+        i if i < grows_from => -40.0,
+        i => -40.0 + 25.0 * (i - grows_from) as f32 / RATE as f32,
+    };
+    let (_, catches) = guarded_catching(sine(1200.0, 4 * rate, level));
+    let caught = *catches.first().expect("caught");
+    assert!(caught > grows_from, "caught at {caught} frames, before the tone grew");
+    let after_ms = (caught - grows_from) as f32 * 1000.0 / RATE as f32;
+    println!("caught {after_ms:.0} ms after it started to grow, at {:.1} dBFS", level(caught));
+    assert!(after_ms < 400.0 && level(caught) < -30.0, "caught {after_ms:.0} ms in");
+}
+
+// After a catch the duck holds for half a second, lifts at 3 dB a second to its ceiling 6 dB
+// under the gain that howled, and then rises with the ceiling at 0.1 dB a second until the slot
+// is at unity again, from where it hands the voice over bit for bit. A quiet steady tone carries
+// on after the howl stops, so the gain can be read. Tolerances: 0.1 dB in the hold, 0.5 dB on
+// the release, 0.3 dB on the ceiling.
+#[test]
+fn after_a_catch_the_duck_holds_then_lifts_to_its_ceiling_and_back_to_unity() {
+    let rate = RATE as usize;
+    let howl = sine(1200.0, rate / 2, |i| -50.0 + 25.0 * i as f32 / RATE as f32);
+    let probe = sine(300.0, 70 * rate, |_| -30.0);
+    let mut signal = howl;
+    signal.extend_from_slice(&probe);
+    let input = signal.clone();
+    let (out, catches) = guarded_catching(signal);
+    assert_eq!(catches.len(), 1, "one catch: {catches:?}");
+    let caught = catches[0];
+    let gain_at = |seconds: f32| {
+        let at = caught + (seconds * RATE as f32) as usize;
+        let range = at..at + BLOCK;
+        db(rms(&out[range.clone()])) - db(rms(&input[range]))
+    };
+    let close = |seconds: f32, expected: f32, tolerance: f32| {
+        let gain = gain_at(seconds);
+        assert!(
+            (gain - expected).abs() <= tolerance,
+            "{gain:.2} dB at {seconds} s, not {expected}"
+        );
+    };
+    // The probe is under the howl until it stops, so the hold is read once it has
+    let stopped = (rate / 2 - caught) as f32 / RATE as f32 + 0.05;
+    close(stopped, -12.0, 0.1);
+    close(0.45, -12.0, 0.1);
+    close(1.5, -9.0, 0.5);
+    close(10.0, -5.0, 0.3);
+    close(40.0, -2.0, 0.3);
+    let unity = caught + 62 * rate;
+    assert!(
+        out[unity..].iter().zip(&input[unity..]).all(|(o, i)| o.to_bits() == i.to_bits()),
+        "not bit for bit 62 s after the catch"
+    );
+}

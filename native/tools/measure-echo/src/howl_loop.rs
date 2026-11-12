@@ -25,6 +25,10 @@ const TRIP_PEAK: f32 = 0.5;
 const TRIP_BLOCKS: u32 = 40;
 /// After the first catch the check holds the gain there this long, to see the loop stay quiet.
 const AFTER_CATCH: Duration = Duration::from_secs(10);
+/// At the top gain the check watches this long before it reports no howl. The guard needs 107 ms
+/// to settle on a tone and then 6 dB of growth: a loop 0.5 dB over unity on an 80 ms round trip
+/// grows that in about a second, so ten seconds covers a loop ten times slower than that.
+const AT_THE_TOP: Duration = Duration::from_secs(10);
 
 pub struct Options {
     pub input: Option<String>,
@@ -105,6 +109,7 @@ pub fn run(options: Options) -> Result<(), String> {
     let mut levels = Vec::new();
     let mut caught = None;
     let mut gain_db = START_DB;
+    let mut topped = None;
     loop {
         std::thread::sleep(Duration::from_millis(50));
         let at = started.elapsed().as_secs_f32();
@@ -125,8 +130,14 @@ pub fn run(options: Options) -> Result<(), String> {
                 );
             }
             None if gain_db >= MOST_DB => {
-                println!("no howl up to {MOST_DB:+.1} dB of gain; the loop never ran away");
-                break;
+                let since = *topped.get_or_insert(at);
+                if Duration::from_secs_f32(at - since) >= AT_THE_TOP {
+                    println!(
+                        "no howl up to {MOST_DB:+.1} dB of gain, held {} s; the loop never ran away",
+                        AT_THE_TOP.as_secs()
+                    );
+                    break;
+                }
             }
             None => {
                 gain_db = (START_DB + RISE_DB_PER_SECOND * at).min(MOST_DB);
