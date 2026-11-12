@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vite-plus/test";
-import { type Mixer, type OfflineEngine, openEngine } from "../src/index.ts";
+import { type Mixer, type OfflineEngine, openEngine, type SlotEffect } from "../src/index.ts";
 
 const BLOCK = 128;
 /** The swap fade is 5 ms, under two blocks; the third block is clean. */
@@ -145,12 +145,17 @@ test("settings on an armed mixer wait for its start and never touch the live one
   await engine.close();
 });
 
-test("cleanup turns a room nobody sings over down by the gate's 18 dB less its 6 dB of makeup", async () => {
+/**
+ * Plays a room nobody sings over, white noise at -50 dBFS RMS, through one slot with `effects`
+ * on, and gives the last half second's level in dBFS at the slot, once a gate would have learned
+ * the room and closed.
+ */
+async function roomTailDb(effects: SlotEffect[]) {
   const engine = await openEngine({ output: { offline: true } });
   const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
-  mixer.setSlotEffects(0, [{ kind: "cleanup", enabled: true }]);
+  mixer.setSlotEffects(0, effects);
   await startLive(engine, mixer);
-  // White noise at -50 dBFS RMS, a host pushing a block ahead of the clock
+  // A host pushing a block ahead of the clock
   let seed = 1;
   const amplitude = 10 ** (-50 / 20) * Math.sqrt(3);
   const roomBlock = () => {
@@ -166,12 +171,21 @@ test("cleanup turns a room nobody sings over down by the gate's 18 dB less its 6
     mixer.push(0, roomBlock());
     heard.push(...left(engine.pump(1)));
   }
-  // The last half second, once the gate has learned the room and closed
   const tail = heard.slice(-24000);
   const rmsDb = 10 * Math.log10(tail.reduce((sum, s) => sum + s * s, 0) / tail.length);
-  expect(rmsDb - 20 * Math.log10(CENTRE)).toBeCloseTo(-50 - 12, 0);
   await destroyLive(engine, mixer);
   await engine.close();
+  return rmsDb - 20 * Math.log10(CENTRE);
+}
+
+test("cleanup turns a room nobody sings over down by the gate's 18 dB less its 6 dB of makeup", async () => {
+  expect(await roomTailDb([{ kind: "cleanup", enabled: true }])).toBeCloseTo(-50 - 12, 0);
+});
+
+// The canceller has no echo to take out here, so a room it passes keeps its level; cleanup, had
+// it come on with the canceller, would gate it 12 dB down
+test("turning on the echo canceller leaves cleanup off", async () => {
+  expect(await roomTailDb([{ kind: "echo-cancel", enabled: true }])).toBeCloseTo(-50, 0);
 });
 
 test("level events read the slot's RMS and peak within a tenth of a decibel", async () => {

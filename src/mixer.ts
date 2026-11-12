@@ -156,6 +156,7 @@ export class Mixer {
           break;
         case "echo-cancel":
           next.echoCancel = { enabled: effect.enabled };
+          break;
         case "cleanup":
           next.cleanup = { enabled: effect.enabled };
           break;
