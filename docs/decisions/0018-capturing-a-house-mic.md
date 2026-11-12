@@ -97,7 +97,8 @@ headroom: the stream may render before the cell is written, but the slot is sile
 over when the callback changes. A command from the binding on `outputChanged` would have arrived a
 5 ms drain and a turn of the event loop later, and been lost to a full command ring. Kept at the old callback, a 128-frame mic moved
 from 128-frame to 480-frame callbacks never settled again. The ring is a
-fixed 4096 frames, so a period or a callback over 1024 frames is refused there.
+fixed 4096 frames, so a period over 1024 frames, or a callback the ring cannot hold beside the
+period, is refused there.
 
 At the opening the slot stays silent one window longer than it needs to fill, reads the trough
 and drops the excess at once. Played instead, that excess would go a sample a block, sliding the
@@ -179,9 +180,14 @@ between slips, which would hold the echo's delay to a sample.
 - No timestamps. The capture thread's `at` could date the fill below a period and spread a slower
   input's correction ahead of its slip, taking about half a period off its mean. That wants a clock
   on the audio thread or a loop on the capture thread, and waits for a measurement that asks for it.
-- No input period or output callback over 1024 frames, 21 ms. The ring is a fixed 4096 frames, so
-  the audio thread never sizes it, and at 1024 of each with the target at its ceiling the healthy
-  fill still fits. A device that grants more is refused when the input opens. Every backend
+- No input period over 1024 frames, 21 ms, and no output callback the ring cannot hold beside it.
+  The ring is a fixed 4096 frames, so the audio thread never sizes it. The healthy fill reaches the
+  target's ceiling and the headroom: twice the input period, the callback in whole blocks and 16
+  frames. A 2048-frame callback, which some Bluetooth outputs grant, fits under any input of 1016
+  frames or less; a 128-frame mic fits under callbacks up to 3712 frames. `createMixer` refuses
+  what does not fit when the input opens. A move cannot be refused, so a move to such an output
+  leaves the slot silent until the next one: it counts one resync, reads 0 as `playoutDelayMs`, and
+  does not prime under a callback it would only run dry under, again and again. Every backend
   measured in 0003 grants 480 or less.
 - No sharing of one input between slots or between an armed mixer and a live one. On CoreAudio and
   WASAPI two slots may open one device; ALSA's `hw:` opens once.

@@ -792,8 +792,11 @@ ring into the jitter buffer at the top of each block.
   until `measure-latency` (8.9) gives the push path a number.
 - A `capture` slot is a mic on this machine, with no socket and no jitter buffer. `createMixer`
   starts its input through `devices::capture` (8.3) at the output's period, or as near as the
-  device allows, and rejects if it cannot, or if the input's period or the output's callback is
-  over 1024 frames; `destroy` stops it. The capture thread's sink pushes each delivery into an SPSC
+  device allows, and rejects if it cannot, or if the input's period is over 1024 frames, or the
+  ring cannot hold the output's callback beside it: the target's ceiling and the headroom, twice
+  the period, the callback in whole blocks and 16 frames, over its 4096 frames. So a 2048-frame
+  callback, which some Bluetooth outputs grant, plays under any input of 1016 frames or less, and a
+  128-frame mic under any callback up to 3712. `destroy` stops it. The capture thread's sink pushes each delivery into an SPSC
   ring of 4096 frames, fixed so the audio thread never sizes it, and the slot pulls a block from
   it. Its headroom is what the fill holds over the trough just after a delivery: an input period,
   and the blocks an output callback pulls back to back after the first, three more under a
@@ -820,7 +823,10 @@ ring into the jitter buffer at the top of each block.
   reads from the follower's cell at its next block. The new stream may render before its `start`
   returns and the cell is written, but nothing plays under the old headroom: a slot that re-primes
   is silent through one whole settling window, 0.34 s, before it plays a sample, and a change of
-  callback while it is silent starts it over under the new one.
+  callback while it is silent starts it over under the new one. A move to a callback the ring
+  cannot hold beside the input's period cannot be refused as `createMixer` refuses one: the slot
+  stays silent until the next move, drops what it captures, counts one resync and reads 0 as
+  `playoutDelayMs`, and never primes under it. A move back to a callback it can hold primes again.
   On the output's clock the trough never moves and holds the target exactly, 3 ms for a
   128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
