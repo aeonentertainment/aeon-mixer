@@ -22,6 +22,10 @@ pub struct Row {
     /// Whether the slot's corrector is engaged. Off in every row today: a row with it on needs the
     /// voiced phrase and short sweep decision 0009 describes, since the corrector acts on this chirp.
     pub corrected: bool,
+    /// Whether the slot's high-pass, gate and compressor are on. None buffers, so this row says
+    /// the path holds a sample no longer; the high-pass's phase delay on a low fundamental is
+    /// under this chirp, which starts at 500 Hz, and decision 0012 gives it.
+    pub cleanup: bool,
     pub playout_frames: u32,
     pub lookahead: usize,
     /// From a sample entering the sender to its leaving the master, least and most.
@@ -37,13 +41,18 @@ impl Row {
     }
 }
 
-/// Runs every path at the given playout delay.
+/// Runs every path at the given playout delay, with the slot's cleanup off and then on.
 pub fn measure_all(playout_frames: u32) -> Result<Vec<Row>, String> {
-    Ingest::every().into_iter().map(|ingest| measure(ingest, playout_frames)).collect()
+    [false, true]
+        .into_iter()
+        .flat_map(|cleanup| {
+            Ingest::every().into_iter().map(move |ingest| measure(ingest, playout_frames, cleanup))
+        })
+        .collect()
 }
 
 /// Sends the programme through `ingest` from each first-packet wait and reads where it came out.
-pub fn measure(ingest: Ingest, playout_frames: u32) -> Result<Row, String> {
+pub fn measure(ingest: Ingest, playout_frames: u32, cleanup: bool) -> Result<Row, String> {
     let programme = Programme::offline();
     let signal = programme.signal();
     let filter = MatchedFilter::new(programme.chirp.samples());
@@ -51,8 +60,9 @@ pub fn measure(ingest: Ingest, playout_frames: u32) -> Result<Row, String> {
     let mut lookahead = 0;
     for wait in FIRST_PACKET_WAITS {
         let phase = (2 * BLOCK - (ingest.gather_frames() + wait) % BLOCK) as u64 % BLOCK as u64;
-        let rig = Rig::new(ingest, playout_frames, &signal, phase)
+        let mut rig = Rig::new(ingest, playout_frames, &signal, phase)
             .map_err(|error| format!("{ingest}: {error}"))?;
+        rig.controls.params.update(|params| params.slots[0].effects.cleanup.enabled = cleanup);
         lookahead = rig.lookahead;
         let envelope = filter.envelope(&pump(rig, signal.len() + programme.interval()));
         for start in programme.starts() {
@@ -63,7 +73,7 @@ pub fn measure(ingest: Ingest, playout_frames: u32) -> Result<Row, String> {
             lag = (lag.0.min(seen), lag.1.max(seen));
         }
     }
-    Ok(Row { ingest, corrected: false, playout_frames, lookahead, lag })
+    Ok(Row { ingest, corrected: false, cleanup, playout_frames, lookahead, lag })
 }
 
 /// The left channel over `frames`, a block at a time, each block under the allocation guard in
@@ -105,7 +115,7 @@ mod tests {
         let block = BLOCK as f64;
         for ingest in Ingest::every().into_iter().filter(Ingest::has_playout_delay) {
             let tolerance = if matches!(ingest, Ingest::L16 { .. }) { 0.5 } else { 3.0 };
-            let row = measure(ingest, PLAYOUT).unwrap();
+            let row = measure(ingest, PLAYOUT, false).unwrap();
             let (least, most) = row.held();
             assert!(
                 least >= playout - tolerance && most <= playout + block + tolerance,
@@ -119,12 +129,24 @@ mod tests {
         }
     }
 
+    /// The slot's cleanup buffers nothing, so on every path a sample leaves when it did with
+    /// cleanup off, to within a frame of the chirp's peak moving under the high-pass's phase.
+    #[test]
+    fn cleanup_holds_a_sample_no_longer_on_any_path() {
+        for ingest in Ingest::every() {
+            let off = measure(ingest, PLAYOUT, false).unwrap();
+            let on = measure(ingest, PLAYOUT, true).unwrap();
+            let moved = [on.lag.0 - off.lag.0, on.lag.1 - off.lag.1];
+            assert!(moved.iter().all(|m| m.abs() < 1.0), "{ingest}: moved {moved:?} frames");
+        }
+    }
+
     /// A playout delay is what the row says it is, so the number moves frame for frame with it.
     #[test]
     fn the_lag_moves_with_the_playout_delay() {
         let ingest = Ingest::L16 { frame: 240 };
-        let usual = measure(ingest, PLAYOUT).unwrap();
-        let shorter = measure(ingest, PLAYOUT / 3).unwrap();
+        let usual = measure(ingest, PLAYOUT, false).unwrap();
+        let shorter = measure(ingest, PLAYOUT / 3, false).unwrap();
         let moved = usual.lag.0 - shorter.lag.0;
         assert!((moved - f64::from(PLAYOUT - PLAYOUT / 3)).abs() < 0.5, "moved {moved} frames");
     }
@@ -135,7 +157,7 @@ mod tests {
     #[test]
     fn a_push_slot_settles_within_two_blocks_of_its_chunk() {
         let chunk = RATE as usize / 100;
-        let row = measure(Ingest::Push { chunk }, PLAYOUT).unwrap();
+        let row = measure(Ingest::Push { chunk }, PLAYOUT, false).unwrap();
         let (least, most) = row.held();
         assert!(least >= -0.5 && most <= (2 * BLOCK) as f64 + 0.5, "held {least}..{most} frames");
     }
@@ -145,9 +167,10 @@ mod tests {
     #[test]
     fn low_delay_costs_the_sender_four_milliseconds_less_and_the_engine_nothing() {
         let frame = 240;
-        let voip = measure(Ingest::Rtp { frame, encoder: Encoder::Voip }, PLAYOUT).unwrap();
+        let voip = measure(Ingest::Rtp { frame, encoder: Encoder::Voip }, PLAYOUT, false).unwrap();
         let low =
-            measure(Ingest::Rtp { frame, encoder: Encoder::RestrictedLowDelay }, PLAYOUT).unwrap();
+            measure(Ingest::Rtp { frame, encoder: Encoder::RestrictedLowDelay }, PLAYOUT, false)
+                .unwrap();
         assert_eq!(voip.lookahead - low.lookahead, 192);
         let difference = voip.lag.0 - low.lag.0;
         assert!((difference - 192.0).abs() < 4.0, "the lags differ by {difference} frames");

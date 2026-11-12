@@ -17,15 +17,16 @@ pub fn offline(rows: &[Row]) -> String {
     let _ = writeln!(out, "\n{}\n", machine::describe(None));
     let _ = writeln!(
         out,
-        "| path | corrector | sender gathers | sender encoder | engine holds | total |\n\
-         | --- | --- | ---: | ---: | ---: | ---: |"
+        "| path | corrector | cleanup | sender gathers | sender encoder | engine holds | total |\n\
+         | --- | --- | --- | ---: | ---: | ---: | ---: |"
     );
     for row in rows {
         let _ = writeln!(
             out,
-            "| {} | {} | {:.2} | {:.2} | {} | {} |",
+            "| {} | {} | {} | {:.2} | {:.2} | {} | {} |",
             row.ingest,
             if row.corrected { "on" } else { "off" },
+            if row.cleanup { "on" } else { "off" },
             ms(row.ingest.gather_frames() as f64),
             ms(row.lookahead as f64),
             range(row.held()),
@@ -86,8 +87,8 @@ pub fn device(
 
     let _ = writeln!(
         out,
-        "\n| path | corrector | offline total | output at most | mic path at most |\n\
-         | --- | --- | ---: | ---: | ---: |"
+        "\n| path | corrector | cleanup | offline total | output at most | mic path at most |\n\
+         | --- | --- | --- | ---: | ---: | ---: |"
     );
     for period in distinct_periods(openings) {
         let readings: Vec<f64> = openings
@@ -107,9 +108,10 @@ pub fn device(
             let (least, most) = (ms(row.lag.0), ms(row.lag.1 + extra));
             let _ = writeln!(
                 out,
-                "| {}, period {period} | {} | {:.2} to {:.2} | {output:.2} | {:.2} to {:.2} |",
+                "| {}, period {period} | {} | {} | {:.2} to {:.2} | {output:.2} | {:.2} to {:.2} |",
                 row.ingest,
                 if row.corrected { "on" } else { "off" },
+                if row.cleanup { "on" } else { "off" },
                 least,
                 most,
                 least + output,

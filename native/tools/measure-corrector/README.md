@@ -47,6 +47,10 @@ To compare settings without changing code, add a variant:
 ... run ... --variant quick:melody:1:10 --variant slow:melody:0.6:80
 ```
 
+To compare the slot's cleanup, the high-pass, gate and compressor, run the same branch twice and
+diff: once as above and once with `--cleanup`, which turns it on for the clip and CPU rows. The
+answer key keeps it off, since it measures the corrector alone.
+
 To add a condition or a standard variant, add a line to `Condition::standard` or
 `Variant::standard` in `src/variant.rs`, and every row picks it up. `--variant` needs no
 recompile, but a new knob needs a field on `Variant` that `Variant::params` passes along.

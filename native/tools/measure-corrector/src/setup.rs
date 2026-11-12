@@ -1,5 +1,5 @@
 use engine::backing::Planar;
-use engine::params::{CorrectorParams, ReverbParams};
+use engine::params::{CleanupParams, CorrectorParams, ReverbParams};
 use engine::slot::guide::Guide;
 
 use crate::rtp::Arrival;
@@ -17,6 +17,7 @@ pub struct Setup {
     pub frames: usize,
     pub corrector: CorrectorParams,
     pub reverb: ReverbParams,
+    pub cleanup: CleanupParams,
     pub guide: Option<Guide>,
     pub guide_offset_ms: f32,
     /// Slots beside the first, all the same voice: the CPU row's four singers.
@@ -38,6 +39,7 @@ impl Setup {
             frames,
             corrector,
             reverb: ReverbParams::default(),
+            cleanup: CleanupParams::default(),
             guide: None,
             guide_offset_ms: 0.0,
             extra_voices: Vec::new(),

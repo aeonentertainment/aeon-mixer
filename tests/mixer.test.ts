@@ -143,6 +143,35 @@ test("settings on an armed mixer wait for its start and never touch the live one
   await engine.close();
 });
 
+test("cleanup turns a room nobody sings over down by the gate's 18 dB less its 6 dB of makeup", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  mixer.setSlotEffects(0, [{ kind: "cleanup", enabled: true }]);
+  await startLive(engine, mixer);
+  // White noise at -50 dBFS RMS, a host pushing a block ahead of the clock
+  let seed = 1;
+  const amplitude = 10 ** (-50 / 20) * Math.sqrt(3);
+  const roomBlock = () => {
+    const block = new Float32Array(2 * BLOCK);
+    for (let i = 0; i < BLOCK; i += 1) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      block[2 * i] = block[2 * i + 1] = amplitude * (seed / 2 ** 31 - 1);
+    }
+    return block;
+  };
+  const heard: number[] = [];
+  for (let i = 0; i < 750; i += 1) {
+    mixer.push(0, roomBlock());
+    heard.push(...left(engine.pump(1)));
+  }
+  // The last half second, once the gate has learned the room and closed
+  const tail = heard.slice(-24000);
+  const rmsDb = 10 * Math.log10(tail.reduce((sum, s) => sum + s * s, 0) / tail.length);
+  expect(rmsDb - 20 * Math.log10(CENTRE)).toBeCloseTo(-50 - 12, 0);
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
 test("level events read the slot's RMS and peak within a tenth of a decibel", async () => {
   const engine = await openEngine({ output: { offline: true } });
   const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });

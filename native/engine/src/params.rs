@@ -30,6 +30,7 @@ pub struct EffectParams {
     pub corrector: CorrectorParams,
     pub reverb: ReverbParams,
     pub voice: VoiceParams,
+    pub cleanup: CleanupParams,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -37,6 +38,12 @@ pub struct CorrectorParams {
     pub enabled: bool,
     pub strength: f32,
     pub retune_ms: f32,
+}
+
+/// The high-pass, gate and compressor, together: they have no knobs a host needs yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CleanupParams {
+    pub enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

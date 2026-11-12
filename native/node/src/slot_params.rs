@@ -1,7 +1,9 @@
 //! A slot's whole `SlotParams`, as `src/` hands it over after validating it. One call writes one
 //! slot of the snapshot; the snapshot is published whole.
 
-use engine::params::{CorrectorParams, EffectParams, ReverbParams, SlotParams, VoiceParams};
+use engine::params::{
+    CleanupParams, CorrectorParams, EffectParams, ReverbParams, SlotParams, VoiceParams,
+};
 use napi_derive::napi;
 
 #[napi(object)]
@@ -15,6 +17,7 @@ pub struct SlotParamsInput {
     pub corrector: CorrectorInput,
     pub reverb: ReverbInput,
     pub voice: VoiceInput,
+    pub cleanup: CleanupInput,
     pub guide_offset_ms: f64,
 }
 
@@ -23,6 +26,11 @@ pub struct CorrectorInput {
     pub enabled: bool,
     pub strength: f64,
     pub retune_ms: f64,
+}
+
+#[napi(object)]
+pub struct CleanupInput {
+    pub enabled: bool,
 }
 
 #[napi(object)]
@@ -60,6 +68,7 @@ impl From<SlotParamsInput> for SlotParams {
                     enabled: input.voice.enabled,
                     formant_semitones: input.voice.formant_semitones as f32,
                 },
+                cleanup: CleanupParams { enabled: input.cleanup.enabled },
             },
             guide_offset_ms: input.guide_offset_ms as f32,
         }
