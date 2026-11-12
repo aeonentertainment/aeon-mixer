@@ -3,7 +3,6 @@
 //! does to them on a channel, and the test waits on that, never on time.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -163,11 +162,12 @@ impl Driver for FakeDriver {
     }
 }
 
-/// A render that writes the frames it has rendered, so a stream's first sample says whether it
-/// carried on from the last one, and counts its moves.
+/// A render that writes the frames it has rendered, counting from 1, so a stream's first sample says whether it
+/// carried on from the last one. The block after a move is written negated, as the audio thread
+/// fades that block in, so the output shows that the render heard the move.
 struct Counter {
     frame: f32,
-    moves: Arc<AtomicU32>,
+    moved: bool,
     panics: bool,
     dropped: Sender<Seen>,
 }
@@ -175,15 +175,16 @@ struct Counter {
 impl Movable for Counter {
     fn render(&mut self, out: Stereo<'_>) {
         assert!(!self.panics, "a render that panics");
+        let sign = if std::mem::take(&mut self.moved) { -1.0 } else { 1.0 };
         for (left, right) in out.left.iter_mut().zip(out.right.iter_mut()) {
-            *left = self.frame;
-            *right = self.frame;
+            *left = sign * self.frame;
+            *right = sign * self.frame;
             self.frame += 1.0;
         }
     }
 
     fn moved(&mut self) {
-        self.moves.fetch_add(1, Ordering::Relaxed);
+        self.moved = true;
     }
 }
 
@@ -196,7 +197,6 @@ impl Drop for Counter {
 struct Rig {
     fake: Fake,
     seen: Receiver<Seen>,
-    moves: Arc<AtomicU32>,
     stats: Arc<Stats>,
     follower: Option<Follower>,
 }
@@ -211,14 +211,13 @@ impl Rig {
         let (sender, seen) = channel();
         let fake = Fake { room: Arc::default(), seen: sender.clone() };
         fake.offer(outputs);
-        let moves = Arc::new(AtomicU32::new(0));
-        let counter = Counter { frame: 0.0, moves: Arc::clone(&moves), panics, dropped: sender };
+        let counter = Counter { frame: 1.0, moved: false, panics, dropped: sender };
         let stats = Arc::new(Stats::new());
         let request = Request { device: pinned.map(Into::into), ..Request::default() };
         let follower =
             Follower::stalling_after(stall, request, counter, fake.clone(), Arc::clone(&stats))
                 .expect("the first output opens");
-        Self { fake, seen, moves, stats, follower: Some(follower) }
+        Self { fake, seen, stats, follower: Some(follower) }
     }
 
     fn next(&self) -> Seen {
@@ -271,10 +270,11 @@ fn a_new_default_takes_the_song_with_nothing_lost_but_the_gap() {
     rig.expect(&[stopped("hdmi"), started("built-in")]);
     rig.settle();
     assert_eq!(rig.playing(), ("built-in".into(), 1, 800), "the new output and its latency");
-    assert_eq!(rig.moves.load(Ordering::Relaxed), 1);
 
     let after = rig.fake.pump(2);
-    assert_eq!(after[0], before[before.len() - 1] + 1.0, "the next frame, on the new output");
+    let next = before[before.len() - 1] + 1.0;
+    assert_eq!(after[0], -next, "the next frame, on the new output, in the block the move fades");
+    assert_eq!(after[BLOCK], next + BLOCK as f32, "and the song plays on after it");
 }
 
 #[test]
@@ -304,11 +304,12 @@ fn a_pinned_output_ignores_the_default_until_it_goes_and_returns_when_it_comes_b
 
     rig.fake.offer(&[("hdmi", false), ("built-in", true)]);
     rig.expect(&[stopped("usb"), started("built-in")]);
+    assert!(rig.fake.pump(1)[0] < 0.0, "the render heard the move to the default");
     rig.fake.offer(&[("hdmi", false), ("built-in", true), ("usb", false)]);
     rig.expect(&[stopped("built-in"), started("usb")]);
     rig.settle();
     assert_eq!(rig.playing(), ("usb".into(), 2, 300));
-    assert_eq!(rig.moves.load(Ordering::Relaxed), 2);
+    assert_eq!(rig.fake.pump(1)[0], -(1.0 + BLOCK as f32), "and the move back, a block on");
 }
 
 #[test]
@@ -403,7 +404,6 @@ fn a_render_that_panicked_is_never_moved() {
     rig.expect(&[Seen::Dropped, stopped("usb")]);
     rig.settle();
     assert!(rig.stats.report().failed);
-    assert_eq!(rig.moves.load(Ordering::Relaxed), 0);
     assert_eq!(rig.opened(), None, "no stream starts with a torn render");
 }
 
