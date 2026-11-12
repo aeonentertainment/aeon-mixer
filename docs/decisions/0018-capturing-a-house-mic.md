@@ -56,15 +56,33 @@ sweep passes half a sample. At 100 ppm, 4.8 blocks in 375 a second carry a move.
 
 The slot holds its trough, the lowest fill before a pull over 128 blocks, at a target. It opens at
 a block and 16 frames, 3 ms, the least that works on the output's clock and on most faster
-inputs. A pull the ring cannot fill plays what it has and silence after, and raises the target by
-what was missing and 16 frames, at most one input period over where it opened. A slower input
-meets this once, the first time its period slips past the output's, tens of seconds in; after
-that it never is short. Opening at the higher target instead would avoid that one gap and cost
-every same-clock mic 2.67 ms for good. We chose the lower delay.
+inputs. A pull the ring cannot fill plays what it has and silence after. When full pulls come
+back within one wake's pulls, the phase of the two clocks or a late wake ran the ring short, and
+the target rises by all those pulls lacked and 16 frames, at most one input period over where it
+opened. A slower input meets this once, the first time its period slips past the output's, tens
+of seconds in, and jitter may bring it on once more; after that it never is short. Opening at the higher target instead would avoid
+that one gap and cost every same-clock mic 2.67 ms for good. We chose the lower delay.
 
-An empty ring is an input that stopped and moves no target. A fill more than a period and a
-block over the target is a stall's backlog, dropped at once to a period over the target, which
-leaves the next trough on or above it whatever the phase.
+A longer run of short pulls is an input that stopped, and raises the target only by what its first
+pull lacked. A fill more than the headroom and a block over the target is a stall's backlog,
+dropped at once to the headroom over the target, which leaves the next trough on or above it
+whatever the phase.
+
+## The headroom
+
+The headroom is what the fill holds over the trough just after a delivery: an input period, and
+the blocks an output callback pulls back to back after the first. A callback longer than a block
+pulls its blocks back to back: a 480-frame callback, WASAPI shared's on the laptop in 0003, takes
+three or four at a wake, and the input delivers nothing between them. So its headroom holds three
+blocks more than a block-a-wake output's. The slot counts them for priming, for what it calls a
+backlog, for how much a short run may raise the target, and for the wait. Counting the input
+period alone, it dropped that healthy audio as backlog and then ran short: 282 short pulls in 6 s
+under a 128-frame input. And it raised the target by one short pull's lack where a whole wake ran
+short, so a 480-frame input under a 480-frame callback, slipping a wake at a time, ran short ten
+times in its first half hour at 200 ppm instead of once.
+
+The voice learns the callback from the output's granted period when its input opens. The ring is a
+fixed 4096 frames, so a period or a callback over 1024 frames is refused there.
 
 At the opening the slot stays silent one window longer than it needs to fill, reads the trough
 and drops the excess at once. Played instead, that excess would go a sample a block, sliding the
@@ -74,39 +92,49 @@ found the path: on a 480-frame input it settled 96 frames off and took out 1 dB 
 ## The wait
 
 The fill before a pull is not how long a sample waited. Deliveries come a period at a time and
-pulls a block at a time, so a pull just after a delivery finds more in the ring than one just
-before it, and its samples waited as much less. The wait itself holds still: the trough, an input
-period, less a part of the step the two periods make, the greatest common divisor of the period
-and the block. The slot reports the middle of that step. The tests check it against the real wait
-on 64-, 128- and 480-frame inputs on either clock: within a step, and still for a minute at a time.
-
-An output callback longer than a block pulls its blocks back to back: a 480-frame callback, WASAPI
-shared's on the laptop in 0003, takes three or four at a wake, and the input delivers nothing
-between them. So the fill before the first of them holds up to three blocks more than a
-block-a-wake output would leave, all of it healthy. The slot counts those blocks in its headroom,
-for priming, for what it calls a backlog, and for the wait. Counting the input period alone, it
-dropped that healthy audio as backlog and then ran short: 282 gaps in 6 s under a 128-frame input.
+pulls a block or a wake at a time, so a pull just after a delivery finds more in the ring than one
+just before it, and its samples waited as much less. The wait itself holds still: the trough and
+the headroom, less where in the input's period the pulls fall, which the fill cannot see. Under an
+output that takes a block a wake the pulls fall on a step of the greatest common divisor of the
+period and the block. Under a longer callback the blocks a wake takes vary, three and four at 480
+frames, and the step is the whole input period. The slot reports the middle of that step. The tests
+check it against the real wait on 64-, 128- and 480-frame inputs, and on 128-, 256- and 480-frame
+inputs under a 480-frame callback, on either clock: within a step, and still for a minute at a
+time.
 
 ## Numbers
 
 From the tests in `engine/src/ingest/capture.rs`, an hour at 200 ppm either way with wakes up to
 8 frames early or late. The wait runs from a sample reaching the input to its pull, the input's
-period included; what the OS reports for the hardware comes on top.
+period included; what the OS reports for the hardware comes on top. Short pulls are those the ring
+could not fill, in the first half hour then the second.
 
-| Input period | Input clock        | Target     | Wait            | Reported | Gaps         |
-| ------------ | ------------------ | ---------- | --------------- | -------- | ------------ |
-| 64           | the output's       | 144 frames | 3.00 to 4.33 ms | 3.67 ms  | 0            |
-| 128          | the output's       | 144 frames | 3.00 to 5.67 ms | 4.33 ms  | 0            |
-| 128          | 200 ppm fast       | 144 frames | 3.00 to 5.67 ms | 4.33 ms  | 0            |
-| 128          | 200 ppm slow       | 272 frames | 5.67 to 8.33 ms | 7.00 ms  | 1, then none |
-| 480          | the output's       | 144 frames | 12.33 to 13 ms  | 12.67 ms | 0            |
-| 480          | 200 ppm either way | 176 frames | 13 to 13.67 ms  | 13.33 ms | 1, then none |
+| Input period | Output callback | Input clock        | Target     | Wait              | Reported | Short pulls                         |
+| ------------ | --------------- | ------------------ | ---------- | ----------------- | -------- | ----------------------------------- |
+| 64           | 128             | the output's       | 144 frames | 3.00 to 4.33 ms   | 3.67 ms  | 0                                   |
+| 128          | 128             | the output's       | 144 frames | 3.00 to 5.67 ms   | 4.33 ms  | 0                                   |
+| 128          | 128             | 200 ppm fast       | 144 frames | 3.00 to 5.67 ms   | 4.33 ms  | 0                                   |
+| 128          | 128             | 200 ppm slow       | 272 frames | 5.67 to 8.33 ms   | 7.00 ms  | 1, then none                        |
+| 480          | 128             | the output's       | 144 frames | 12.33 to 13 ms    | 12.67 ms | 0                                   |
+| 480          | 128             | 200 ppm either way | 176 frames | 13 to 13.67 ms    | 13.33 ms | 1, then none                        |
+| 128          | 480             | the output's       | 144 frames | 11 to 13.67 ms    | 12.33 ms | 0; 282 in 6 s before                |
+| 128          | 480             | 200 ppm fast       | 144 frames | 11 to 13.67 ms    | 12.33 ms | 0                                   |
+| 128          | 480             | 200 ppm slow       | 272 frames | 13.67 to 16.33 ms | 15.00 ms | 1, then none                        |
+| 480          | 480             | the output's       | 144 frames | 11 to 21 ms       | 16.00 ms | 0                                   |
+| 480          | 480             | 200 ppm fast       | 223 frames | 12.65 to 22.65 ms | 17.65 ms | 2, then none                        |
+| 480          | 480             | 200 ppm slow       | 560 frames | 19.67 to 29.67 ms | 24.67 ms | 4 in one wake, then none; 10 before |
 
 Where in its range a wait falls depends on the phase of the two clocks, which nothing here can
 see. So a 128-frame mic costs the engine 3 to 5.67 ms before the output on one clock, and 5.67 to
-8.33 ms on a slower one, against 22.31 to 24.96 ms for the `l16` path. A 480-frame input pays for
-its period in full, so a Windows house mic wants a driver with short shared periods as much as its
-output does (0003).
+8.33 ms on a slower one, against 22.31 to 24.96 ms for the `l16` path.
+
+A 480-frame callback costs the mic path three blocks more of wait, 8 ms, and widens the wait's
+range to a whole input period: a 128-frame mic under it waits 11 to 13.67 ms. That is the callback's
+cost, not one the slot adds: the three blocks are audio the ring must hold for the pulls that come
+after the first, and dropping them is what made the 282 gaps. Under it a 480-frame input on a
+slower clock slips a whole wake at a time and settles at 19.67 to 29.67 ms, before the output's
+own 20 ms. A Windows house mic at shared 480-frame periods does not fit the 20 to 30 ms budget; it
+wants a driver with short shared periods as much as its output does (0003).
 
 `measure-latency` (#61) gives the phone path's engine share offline. With a capture variant in its
 rig it would give this one. Its device mode (#70) gives the sum through a real mic and speaker,

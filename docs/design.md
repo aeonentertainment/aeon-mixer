@@ -379,7 +379,7 @@ pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder
 pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; chosen(codec) lets each stream choose; push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
 pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
 pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
-pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, upstream_frames) before it goes live
+pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, hardware_frames, output_frames) -> Result before it goes live: the input's granted period, what the OS reports for its hardware, and the output's granted period, StreamInfo.period_frames, the most the output pulls at one wake
 pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push slot, a capture slot's wait from input to mix (8.4)
 
 // transport/src/
@@ -800,19 +800,22 @@ ring into the jitter buffer at the top of each block.
   lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
   16 frames for the wakes of two threads. A trough off target moves the delay one sample a block,
   each move spliced across the block by linear interpolation, so nothing steps. A pull the ring
-  cannot fill plays what it holds and silence after; when the ring held something, the phase of
-  two clocks or a late wake caught it out, and the target rises by what was missing and 16 frames,
-  at most one input period over where it opened. An empty ring is an input that stopped, and moves
-  no target. A fill more than its headroom and a block over the target is a stall's backlog,
-  dropped at once down to its headroom over it. On the output's clock the trough never moves and holds the
-  target exactly, 3 ms for a 128-frame input. Decision
+  cannot fill plays what it holds and silence after. When full pulls come back within one wake's
+  pulls, the phase of two clocks or a late wake ran the ring short, and the target rises by all
+  those pulls lacked and 16 frames, at most one input period over where it opened. A longer run is
+  an input that stopped, and raises it only by what its first pull lacked. A fill more than its
+  headroom and a block over the target is a stall's backlog, dropped at once down to its headroom
+  over it. On the output's clock the trough never moves and holds the target exactly, 3 ms for a
+  128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
 - The fill before a pull is not how long a sample waited: a pull just after a delivery finds more
   in the ring than one just before it, and its samples waited as much less. The wait holds still:
-  the trough and its headroom, less a part of the step the input's period and the output's wakes
-  make, the greatest common divisor of the period and the callback in whole blocks.
-  The slot reports the middle of that step, within half a step of the truth: 4.33 ms for a
-  128-frame input at its opening target. `latency_frames`, which the guide clock subtracts and the
+  the trough and its headroom, less where in the input's period the pulls fall, which the fill
+  cannot see. Under an output that takes a block a wake the pulls fall on a step of
+  `gcd(period, 128)`. Under a longer callback, one that takes three blocks on some wakes and four
+  on others at 480 frames, the step is the whole input period. The slot reports the middle of that
+  step, within half a step of the truth: 4.33 ms for a 128-frame input at its opening target, and
+  12.33 ms under a 480-frame callback. `latency_frames`, which the guide clock subtracts and the
   echo canceller follows, is that wait and what the OS reports for the input's hardware, and it
   moves only when the target does. `stats()` gives the wait as `playoutDelayMs`, zero until the
   slot first plays. `concealed` counts pulls the ring could not fill, `resyncs` each move of the
