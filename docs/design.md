@@ -139,7 +139,11 @@ path or an output to the master, never a general graph.
 **A slot**, in order: source, echo canceller, howl guard, high-pass, gate, pitch corrector,
 meter, compressor, voice, reverb, gain and pan into the stereo bus. The echo canceller and the howl
 guard are off until a host turns them on, for a house mic near the speakers or a phone that might
-howl; off, each hands the slot over bit for bit and does no work. The meter sits after the
+howl; off, each hands the slot over bit for bit and does no work. The canceller comes first
+because what it models is the room's path from the master to the mic, and it hears that path as
+the source hands it over. After the gate, which opens and closes with the singing, the corrector,
+whose delay moves with the voice, or the voice, which moves formants, the path it had to learn
+would move with the singing. The meter sits after the
 corrector and before the compressor, voice, reverb and gain, so the level words tell the singer
 about their singing, not the compressor's evening out, the effect or the room, and mute never
 changes them. Pitch readings come from the corrector, ahead of the voice, so the display's trail
@@ -951,8 +955,12 @@ share on real hardware, which a person runs with `device --open-device`. Decisio
 [0006](decisions/0006-measuring-latency.md) has how it works and what its figures cannot say. Their
 output is the evidence a PR quotes.
 
-A new ingest kind is a variant of `Ingest`, and a new stage on the mic path, such as correction or
-echo cancelling, is a new row in the offline table with its own guard.
+A new ingest kind is a variant of `Ingest`, and a new stage on the mic path that holds samples,
+such as correction, is a new row in the offline table with its own guard. A stage that holds none,
+such as the voice, the echo canceller or the howl guard, proves it instead with a test that a click
+leaves on the sample it entered while the stage is engaged: shaping a voice, cancelling an echo it
+has learned, or ducking. The offline table's chirp would not engage them, so a row would show
+nothing the test does not.
 
 `native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
 chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
