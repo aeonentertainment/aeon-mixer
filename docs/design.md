@@ -122,14 +122,24 @@ What the engine reports so the rest of the device can follow:
   the first and budgets with the second. Neither enters a clock: nothing can play a live voice
   early, and the guide clock and a pitch reading both name the corrector's input, ahead of its
   delay. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) has the reasons.
+- The echo canceller and the howl guard add no delay, so nothing about them enters a clock. The
+  canceller's reference is the master the graph already rendered, which any echo of it trails by at
+  least the output's latency, so it works in the slot's own block and waits for nothing. `stats()`
+  gives each slot `echo`, what the canceller found: `pathMs` from the master being rendered to its
+  echo reaching the slot, `bleedDb` how far under the master the echo arrives, `removedDb` how much
+  quieter the slot came out; null while it is off or until it has found the echo and learned it. It
+  gives `howlCatches`, how often the guard has ducked the slot. Decision
+  [0020](decisions/0020-echo-cancelling.md) has the reasons and the numbers.
 
 ## 4. Signal path
 
 The topology is fixed. Adding a feature means adding a stage to a chain, a stem to the backing
 path or an output to the master, never a general graph.
 
-**A slot**, in order: source, echo cancel when compiled in, high-pass, gate, pitch corrector,
-meter, compressor, voice, reverb, gain and pan into the stereo bus. The meter sits after the
+**A slot**, in order: source, echo canceller, howl guard, high-pass, gate, pitch corrector,
+meter, compressor, voice, reverb, gain and pan into the stereo bus. The echo canceller and the howl
+guard are off until a host turns them on, for a house mic near the speakers or a phone that might
+howl; off, each hands the slot over bit for bit and does no work. The meter sits after the
 corrector and before the compressor, voice, reverb and gain, so the level words tell the singer
 about their singing, not the compressor's evening out, the effect or the room, and mute never
 changes them. Pitch readings come from the corrector, ahead of the voice, so the display's trail
@@ -246,7 +256,8 @@ native/
     src/backing/        Stems, playhead, stem gains, live key, render job
     src/master.rs       sum, soft clipper, master meter, push into the return ring
     src/return_ring.rs  the return branch's ring: whole blocks in, any number of frames out
-  kernels/              C++ leaves behind extern "C": corrector, stretcher. Rust leaves: reverb, voice shifter
+  kernels/              C++ leaves behind extern "C": corrector, stretcher. Rust leaves: reverb, voice shifter,
+                        echo canceller, howl guard
     build.rs            cc compiles cpp/
     cpp/                vendored sources with licences and the commit they came from
   transport/            the network thread: UDP receive into packet rings, RTP return sender
@@ -255,6 +266,7 @@ native/
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
   tools/measure-latency/  the mic path's latency: the engine's share offline, the output's on hardware
   tools/replay/         a slot's recording through the real chain on the offline driver
+  tools/measure-echo/   the echo stages' numbers beside GStreamer's, the bleed run, the live howl check
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
 ```
@@ -304,11 +316,13 @@ pub struct Params { pub slots: [SlotParams; MAX_SLOTS], pub stems: StemGains }
 #[derive(Clone, Copy)]
 pub struct SlotParams { pub gain: f32, pub pan: f32, pub mute: bool, pub solo: bool, pub effects: EffectParams, pub guide_offset_ms: f32 }
 #[derive(Clone, Copy)]
-pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams, pub cleanup: CleanupParams }
+pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams, pub cleanup: CleanupParams, pub echo_cancel: EchoCancelParams, pub howl_guard: HowlGuardParams }
 #[derive(Clone, Copy)]
 pub struct VoiceParams { pub enabled: bool, pub formant_semitones: f32 }   // -12 to 12; off is the voice itself
 #[derive(Clone, Copy)]
 pub struct CleanupParams { pub enabled: bool }
+pub struct EchoCancelParams { pub enabled: bool }
+pub struct HowlGuardParams { pub enabled: bool }
 
 // engine/src/command.rs
 pub enum Command {
@@ -346,6 +360,11 @@ impl Graph {
 pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16 }   // built on the control thread, followed on the audio thread
 pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
 pub struct CorrectorDelay;  // published once a block; Slot::corrector_delay() hands the control thread its Arc
+pub struct EchoReport;      // findings() -> Option<EchoFindings>, howl_catches(); published once a block; Slot::echo_report() hands the control thread its Arc
+pub struct Shared<'a> { pub any_solo: bool, pub cue: Cue, pub history: &'a EchoHistory }   // what every slot shares for one block: Slot::render(index, params, shared, out, events)
+
+// engine/src/master.rs
+impl Master { pub fn history(&self) -> &EchoHistory; }   // what the graph has sent to the device, pushed after the clipper every block
 
 // engine/src/ingest/
 pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
@@ -379,6 +398,10 @@ pub struct Stretch;         // new(channels, rate, preset), set_transpose_semito
 pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
 pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
 pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
+pub struct EchoHistory;     // new(), push(left, right) folds a block to mono, read(lag, out): the frames ending `lag` before the next one
+pub struct EchoCanceller;   // new(rate), process(history, own, source_latency_frames, block) in place, reset(), findings() -> Option<EchoFindings>; adds no delay
+pub struct EchoFindings { pub path_frames: u32, pub bleed_db: f32, pub removed_db: f32 }
+pub struct HowlGuard;       // new(rate), process(block) in place, reset(), catches(); adds no delay
 ```
 
 ### 7.2 TypeScript
@@ -459,7 +482,9 @@ export type SlotEffect =
   | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
   | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
   | { kind: "voice"; enabled: boolean; formantSemitones: number }
-  | { kind: "cleanup"; enabled: boolean };
+  | { kind: "cleanup"; enabled: boolean }
+  | { kind: "echo-cancel"; enabled: boolean }
+  | { kind: "howl-guard"; enabled: boolean };
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
   keyMask: number; // the key's pitch classes as bits, C in bit 0
@@ -475,6 +500,8 @@ export interface SlotStats {
   jitterMs: number;
   correctorDelayMs: number;
   correctorMaxDelayMs: number;
+  echo: { pathMs: number; bleedDb: number; removedDb: number } | null;
+  howlCatches: number;
 }
 
 export interface Mixer {
@@ -573,6 +600,9 @@ writes the device buffer and the return ring, and pushes events.
   block, and every graph rendering in that block sums them ahead of its master through
   `Graph::render_with`, so a reaction plays straight through a swap fade and is clipped and
   metered with the mix.
+- The master pushes every block it sends to the device into its echo history, and each slot pushes
+  its own share of the bus into one of its own, so its canceller can adapt without the singer's
+  voice (decision 0020). The graph hands the master's to every slot in `Shared`.
 - The soft clipper is transparent below its knee and never hard-clips. Its curve and knee are
   the implementer's, tested by feeding a sum above full scale and asserting no sample exceeds
   1.0 and a sum at half scale passes unchanged within 0.01 dB.
@@ -838,7 +868,13 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   then carry no target and no error, since nothing pulls.
 - A reading carries the note the follower set for the run it closes and the kernel's error at
   that reading, so the target and the error a host shows are the ones the shifter acts on.
+- The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
+  finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
+  growing. Decision [0020](decisions/0020-echo-cancelling.md) has both. The port carries mdf.c's
+  BSD licence in its file.
 - The slot drives its stages from `slot::effects`, each in place on its mono block.
+  `EchoCanceller::process(params, history, own, source_frames, block)` and
+  `HowlGuard::process(params, block)` run first, after the source.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
   calls `on_reading` per reading for the slot to push as `Event::Pitch`.
@@ -866,7 +902,9 @@ within the tolerances its test names and leaves its pitch, an off voice is bit-i
 and a click and a tone through a voice leave on the sample they entered; with cleanup on, a click
 leaves the slot on the frame it entered, `measure-latency` reads the mic path against the budget,
 the gate takes at least 15 dB off a room between lines without moving a soft note by 1 dB, and a
-12 dB level swing comes out 5 dB wide.
+12 dB level swing comes out 5 dB wide; on the offline driver, the canceller takes a room's echo
+out of a house mic by the tolerances in decision 0020, the singer in the master and singing, and
+the guard catches a loop running away.
 
 ### 8.7 Return branch: `engine/src/return_ring.rs`, the push in `engine/src/master.rs`, `transport/src/{packetizer,send}.rs`
 
@@ -917,6 +955,10 @@ echo cancelling, is a new row in the offline table with its own guard.
 `native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
 chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
 blind-listen set. Decision [0005](decisions/0005-corrector-measurement.md) has the reasons.
+
+`native/tools/measure-echo` replays Aeon Karaoke's `aec:measure` files through the canceller and
+scores them by its own formulas, times both echo stages per slot, writes and reads the bleed run's
+programme, and, built with `hardware` and run with `--open-device`, is the live howl check.
 
 `native/tools/replay` opens no device or socket. It reads a slot's recording, or any classic pcap
 of one RTP stream, parses each datagram as the receiver does, and feeds it through the real
@@ -994,8 +1036,9 @@ Each is deliberate and here so no one reverts it by accident.
 
 ## 12. Decided later
 
-- Echo cancellation: the stage exists in the chain; the calibration probe decides whether a
-  phone at the mouth needs it before the WebRTC canceller is linked.
+- Whether a phone at the mouth needs the echo canceller as well as the howl guard: the bleed run in
+  decision 0020 decides. Then a stereo reference and a residual echo suppressor, if a real room
+  shows the linear filter leaves too much.
 - The offline stretcher: signalsmith at a quality setting first, an A/B against Rubber Band on
   three tracks before paying for a licence.
 - Stem storage on a LAN box: planar f32 is about 23 MB per stem minute; int16 storage or
