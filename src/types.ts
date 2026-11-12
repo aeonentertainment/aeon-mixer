@@ -73,7 +73,9 @@ export type SlotEffect =
    * A high-pass and gate ahead of the corrector and a compressor after the meter. None reads
    * ahead or buffers; decision 0012 has their numbers and costs.
    */
-  | { kind: "cleanup"; enabled: boolean };
+  | { kind: "cleanup"; enabled: boolean }
+  /** Ducks the slot when its loop through the speakers starts to howl, with no added delay. */
+  | { kind: "howl-guard"; enabled: boolean };
 
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
@@ -106,6 +108,8 @@ export interface SlotStats {
   echo: { pathMs: number; bleedDb: number; removedDb: number } | null;
   /** The delay the stream's earliest packets wait now; zero for a `push` slot. */
   playoutDelayMs: number;
+  /** How often the howl guard has ducked this slot. */
+  howlCatches: number;
 }
 
 export type EngineEvents = {

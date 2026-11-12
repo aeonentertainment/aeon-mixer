@@ -20,7 +20,7 @@ use crate::command::{Event, EventProducer};
 use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
 use echo_report::EchoReport;
-use effects::{Compressor, Corrector, EchoCanceller, Gate, HighPass, Reverb, Voice};
+use effects::{Compressor, Corrector, EchoCanceller, Gate, HighPass, HowlGuard, Reverb, Voice};
 use guide::Guide;
 use kernels::EchoHistory;
 use meter::Meter;
@@ -33,6 +33,7 @@ pub struct Slot {
     gate: Gate,
     guide: Option<Box<Guide>>,
     echo_canceller: EchoCanceller,
+    howl_guard: HowlGuard,
     echo_report: Arc<EchoReport>,
     /// What this slot put into the master, folded to mono, for the canceller to adapt without.
     own: EchoHistory,
@@ -56,6 +57,7 @@ impl Slot {
             gate: Gate::new(),
             guide: None,
             echo_canceller: EchoCanceller::new(),
+            howl_guard: HowlGuard::new(),
             echo_report: Arc::default(),
             own: EchoHistory::new(),
             corrector: Corrector::new(),
@@ -80,14 +82,15 @@ impl Slot {
         Arc::clone(&self.corrector_delay)
     }
 
-    /// What the echo canceller has found, for the control thread.
+    /// What the echo stages have found, for the control thread.
     pub fn echo_report(&self) -> Arc<EchoReport> {
         Arc::clone(&self.echo_report)
     }
 
-    /// Pulls one block, takes the room's echo of the master out of it, cleans it, corrects it
-    /// toward the guide at the cue, meters it, compresses it, voices it, adds reverb, and adds it
-    /// to `out` at the ramped gain, silent while another slot is soloed and this one is not.
+    /// Pulls one block, takes the room's echo of the master out of it, guards it against a howl,
+    /// cleans it, corrects it toward the guide at the cue, meters it, compresses it, voices it, adds
+    /// reverb, and adds it to `out` at the ramped gain, silent while another slot is soloed and this
+    /// one is not.
     pub fn render(
         &mut self,
         index: u8,
@@ -104,7 +107,9 @@ impl Slot {
             self.source.latency_frames(),
             &mut self.input,
         );
+        self.howl_guard.process(&params.effects.howl_guard, &mut self.input);
         self.echo_report.publish(self.echo_canceller.findings());
+        self.echo_report.publish_howl_catches(self.howl_guard.catches());
         self.high_pass.process(&params.effects.cleanup, &mut self.input);
         self.gate.process(&params.effects.cleanup, &mut self.input);
         let guide_offset =
@@ -174,11 +179,12 @@ impl Slot {
     }
 
     /// A new singer: the source forgets its stream, the corrector and the voice what they heard,
-    /// and the gate and compressor the level of the phone before, and the echo canceller the
-    /// path, since a new sender is a new one.
+    /// and the gate and compressor the level of the phone before, and the echo stages the path,
+    /// since a new sender is a new one.
     pub fn reset(&mut self) {
         self.source.reset();
         self.echo_canceller.reset();
+        self.howl_guard.reset();
         self.corrector.reset();
         self.voice.reset();
         self.gate = Gate::new();

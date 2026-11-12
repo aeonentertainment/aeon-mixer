@@ -78,6 +78,7 @@ test("a slot's echo canceller finds the room's echo, takes it out, reports it, a
   expect(Math.abs((echo?.pathMs ?? 0) - (PATH_BLOCKS * BLOCK) / 48)).toBeLessThanOrEqual(16 / 48);
   expect(10 * Math.log10(heard / handedOn)).toBeGreaterThanOrEqual(20);
   expect(echo?.removedDb).toBeGreaterThanOrEqual(20);
+  expect(mixer.stats().slots[0]?.howlCatches).toBe(0);
 
   mixer.setSlotEffects(0, []);
   engine.pump(1);

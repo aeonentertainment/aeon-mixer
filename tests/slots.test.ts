@@ -21,6 +21,7 @@ const SILENT_STATS = {
   correctorMaxDelayMs: 0,
   echo: null,
   playoutDelayMs: 0,
+  howlCatches: 0,
 };
 
 async function startLive(engine: OfflineEngine, mixer: Mixer) {

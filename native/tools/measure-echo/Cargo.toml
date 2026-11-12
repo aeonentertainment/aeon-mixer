@@ -1,13 +1,18 @@
 [package]
 name = "measure-echo"
-description = "The echo canceller's numbers, beside GStreamer's on the same synthetic bleed."
+description = "The echo canceller's and howl guard's numbers, beside GStreamer's on the same synthetic bleed."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The live check on a real input and output; off so CI builds the rest with no audio stack
+hardware = ["dep:devices", "devices/hardware"]
+
 [dependencies]
 cpu-time = "1.0"
+devices = { workspace = true, optional = true }
 engine = { workspace = true }
 kernels = { workspace = true, features = ["fixtures"] }
 realfft = "3.5.1"

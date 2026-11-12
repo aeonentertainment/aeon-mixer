@@ -1,10 +1,10 @@
-//! CPU per slot: thread time over audio time for the canceller on a minute of a room's echo, in
+//! CPU per slot: thread time over audio time for each stage on a minute of a room's echo, in
 //! the slot's own blocks. It is this machine's number. Build with `--release`.
 
 use cpu_time::ThreadTime;
 use engine::block::{BLOCK, RATE};
 use kernels::fixtures::{at_db, pink_noise, room, talker, through};
-use kernels::{EchoCanceller, EchoHistory};
+use kernels::{EchoCanceller, EchoHistory, HowlGuard};
 
 const SECONDS: usize = 60;
 const REPEATS: usize = 5;
@@ -12,6 +12,7 @@ const REPEATS: usize = 5;
 pub struct Cpu {
     /// Percent of one core, the median of `REPEATS` runs.
     pub canceller: f64,
+    pub guard: f64,
     pub block_micros: f64,
 }
 
@@ -42,8 +43,18 @@ pub fn run() -> Cpu {
         }
         percent(started.elapsed().as_secs_f64())
     }));
+    let guard = median((0..REPEATS).map(|_| {
+        let mut guard = HowlGuard::new(RATE);
+        let mut block = [0.0; BLOCK];
+        let started = ThreadTime::now();
+        for heard in mic.as_chunks::<BLOCK>().0.iter() {
+            block.copy_from_slice(heard);
+            guard.process(&mut block);
+        }
+        percent(started.elapsed().as_secs_f64())
+    }));
     let block_seconds = BLOCK as f64 / f64::from(RATE);
-    Cpu { canceller, block_micros: canceller / 100.0 * block_seconds * 1e6 }
+    Cpu { canceller, guard, block_micros: canceller / 100.0 * block_seconds * 1e6 }
 }
 
 fn median(runs: impl Iterator<Item = f64>) -> f64 {

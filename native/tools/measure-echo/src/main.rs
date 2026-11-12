@@ -1,20 +1,42 @@
-//! The echo canceller's numbers. Opens no device.
+//! The echo stages' numbers. Opens no device.
 //!
 //! `measure-echo harness <dir>` replays Aeon Karaoke's `aec:measure` files.
-//! `measure-echo cpu` times the canceller per slot. Build with `--release`.
+//! `measure-echo cpu` times each stage per slot. Build with `--release`.
 //! `measure-echo programme <out.wav>` and `measure-echo bleed <programme.wav> <take.wav>` are the
 //! bleed measurement with a phone at the mouth.
+//! `measure-echo howl --open-device [--input ID] [--output ID] [--cancel]`, built with
+//! `--features hardware`, is the forced feedback check on real speakers. It is the only mode
+//! that opens a device, and only a person runs it.
 
 mod bleed;
 mod cancel;
 mod cpu;
 mod harness;
+#[cfg(feature = "hardware")]
+mod howl_loop;
 mod wav;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: measure-echo harness <dir> | cpu | programme <out.wav> | bleed <programme.wav> <take.wav>";
+const USAGE: &str = "usage: measure-echo harness <dir> | cpu | programme <out.wav> | \
+                     bleed <programme.wav> <take.wav> | \
+                     howl --open-device [--input ID] [--output ID] [--cancel]";
+
+#[cfg(feature = "hardware")]
+fn howl(rest: &[&str]) -> Result<(), String> {
+    let mut options = howl_loop::Options { input: None, output: None, cancel: false };
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
+        match *arg {
+            "--input" => options.input = args.next().map(|id| id.to_string()),
+            "--output" => options.output = args.next().map(|id| id.to_string()),
+            "--cancel" => options.cancel = true,
+            _ => return Err(USAGE.into()),
+        }
+    }
+    howl_loop::run(options)
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -58,11 +80,13 @@ fn main() -> ExitCode {
         ["cpu"] => {
             let cpu = cpu::run();
             println!(
-                "canceller {:.2} % of a core per slot, {:.1} us a block",
-                cpu.canceller, cpu.block_micros
+                "canceller {:.2} % of a core per slot, {:.1} us a block; howl guard {:.3} %",
+                cpu.canceller, cpu.block_micros, cpu.guard
             );
             Ok(())
         }
+        #[cfg(feature = "hardware")]
+        ["howl", "--open-device", ref rest @ ..] => howl(rest),
         _ => Err(USAGE.into()),
     };
     match result {
