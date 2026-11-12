@@ -128,14 +128,19 @@ What the engine reports so the rest of the device can follow:
 The topology is fixed. Adding a feature means adding a stage to a chain, a stem to the backing
 path or an output to the master, never a general graph.
 
-**A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, voice, reverb,
-gain and pan into the stereo bus. The meter sits after the corrector and before the voice, reverb
-and gain, so the level words tell the singer about their singing, not the effect or the room, and
-mute never changes them. Pitch readings come from the corrector, ahead of the voice, so the
-display's trail and the score judge the singing. The voice moves formants only and adds no sample.
-It comes after the corrector, which reads the singer's own voice, and before the reverb, so the
-room hears the voice the singer chose. Decision [0014](decisions/0014-the-first-voices.md) has the
-reasons. The corrector costs a singer who asks for it a delay that moves with the voice,
+**A slot**, in order: source, echo cancel when compiled in, high-pass, gate, pitch corrector,
+meter, compressor, voice, reverb, gain and pan into the stereo bus. The meter sits after the
+corrector and before the compressor, voice, reverb and gain, so the level words tell the singer
+about their singing, not the compressor's evening out, the effect or the room, and mute never
+changes them. Pitch readings come from the corrector, ahead of the voice, so the display's trail
+and the score judge the singing. The voice moves formants only and adds no sample. It comes after
+the corrector, which reads the singer's own voice, and before the reverb, so the room hears the
+voice the singer chose. Decision [0014](decisions/0014-the-first-voices.md) has the reasons. The
+high-pass, gate and compressor are one effect, cleanup, which a host turns on per slot. None reads
+ahead or buffers, so a click leaves on the sample it entered, but the high-pass's phase shift
+delays a voice's fundamental near its corner: 1.8 ms at 110 Hz, 0.4 at 220. Decision
+[0012](decisions/0012-cleaning-the-voice.md) has the reasons for their order and numbers. The
+corrector costs a singer who asks for it a delay that moves with the voice,
 from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
 stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
 the voice over bit for bit with no delay and still reads pitch. The source is a
@@ -299,9 +304,11 @@ pub struct Params { pub slots: [SlotParams; MAX_SLOTS], pub stems: StemGains }
 #[derive(Clone, Copy)]
 pub struct SlotParams { pub gain: f32, pub pan: f32, pub mute: bool, pub solo: bool, pub effects: EffectParams, pub guide_offset_ms: f32 }
 #[derive(Clone, Copy)]
-pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams }
+pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams, pub cleanup: CleanupParams }
 #[derive(Clone, Copy)]
 pub struct VoiceParams { pub enabled: bool, pub formant_semitones: f32 }   // -12 to 12; off is the voice itself
+#[derive(Clone, Copy)]
+pub struct CleanupParams { pub enabled: bool }
 
 // engine/src/command.rs
 pub enum Command {
@@ -451,7 +458,8 @@ export interface SlotSettings {
 export type SlotEffect =
   | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
   | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
-  | { kind: "voice"; enabled: boolean; formantSemitones: number };
+  | { kind: "voice"; enabled: boolean; formantSemitones: number }
+  | { kind: "cleanup"; enabled: boolean };
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
   keyMask: number; // the key's pitch classes as bits, C in bit 0
@@ -559,7 +567,8 @@ writes the device buffer and the return ring, and pushes events.
 
 - Solo: when any slot is soloed, every unsoloed slot's effective gain is zero. Mute wins over
   solo. The effective gain ramps across the block like any other gain change.
-- Meters publish RMS and peak over the last 100 ms at 10 Hz, from after the corrector.
+- Meters publish RMS and peak over the last 100 ms at 10 Hz, from after the corrector and before
+  the compressor.
 - The reaction voices are the engine's, not a graph's. The audio thread renders them once a
   block, and every graph rendering in that block sums them ahead of its master through
   `Graph::render_with`, so a reaction plays straight through a swap fade and is clipped and
@@ -829,25 +838,35 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   then carry no target and no error, since nothing pulls.
 - A reading carries the note the follower set for the run it closes and the kernel's error at
   that reading, so the target and the error a host shows are the ones the shifter acts on.
-- The slot drives three stages from `slot::effects`, each in place on its mono block.
+- The slot drives its stages from `slot::effects`, each in place on its mono block.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
   calls `on_reading` per reading for the slot to push as `Event::Pitch`.
   `Voice::process(params, block)` runs the voice shifter at the voice's formant move and no
   transposition, so it adds no sample. `Reverb::process(params, block)` takes the reverb knobs.
+  `HighPass`, `Gate` and `Compressor` each take `process(&CleanupParams, block)`.
 - A voice is a formant move in semitones from the singer's own. Voice names and their settings
   are presets and live with the host. Off, or on at 0, the stage hands the voice over bit for
   bit.
 - A voice that moves pitch will come through the corrector's shifter, which takes the
   transposition into its own ratio, so a voice and correction cost one delay and not two, and
   `correctorDelayMs` reports it. Its knob joins the contract with that work, not before.
+- Cleanup's stages are causal, with no lookahead and no frame. The high-pass is a 12 dB per
+  octave Butterworth at 80 Hz, whose phase shift delays a fundamental by 1.8 ms at 110 Hz and
+  0.4 at 220. The gate follows the room's own level, so it needs no threshold per phone, and
+  takes up to 18 dB off between lines. The compressor is 3:1 over -30 dBFS with at most 6 dB of
+  makeup, so it never brings a slot more than 6 dB closer to feedback. Off, each fades to unity
+  over a block and then costs nothing.
 
 Done when: the corrector through its shim pulls harmonic tones from 82 to 880 Hz onto the asked
 pitch class within the tolerances the C++ tests use; the stretcher moves a tone by the asked
 semitones; the follower changes target within one block of each edge of a known guide; the
 pitch event cadence is 10 ms; each first voice in decision 0014 moves a known vowel's formants
 within the tolerances its test names and leaves its pitch, an off voice is bit-identical to none,
-and a click and a tone through a voice leave on the sample they entered.
+and a click and a tone through a voice leave on the sample they entered; with cleanup on, a click
+leaves the slot on the frame it entered, `measure-latency` reads the mic path against the budget,
+the gate takes at least 15 dB off a room between lines without moving a soft note by 1 dB, and a
+12 dB level swing comes out 5 dB wide.
 
 ### 8.7 Return branch: `engine/src/return_ring.rs`, the push in `engine/src/master.rs`, `transport/src/{packetizer,send}.rs`
 
