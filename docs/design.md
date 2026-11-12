@@ -787,8 +787,11 @@ ring into the jitter buffer at the top of each block.
   starts its input through `devices::capture` (8.3) at the output's period, or as near as the
   device allows, and rejects if it cannot; `destroy` stops it. The capture thread's sink pushes
   each delivery into an SPSC ring of 4096 frames, and the slot pulls a block from it. Its first
-  pull drops what arrived while armed, then it plays silence until the ring holds its target and
-  an input period. An offline engine opens no input, so it refuses a capture slot. ALSA opens a
+  pull drops what arrived while armed. It plays silence until the ring holds its target and an
+  input period, then for one more window of 128 blocks while it reads the trough, and drops the
+  excess at once, so its first sample waits as long as every one after it: a third of a second
+  of silence when a song starts. An offline engine opens no input, so it refuses a capture slot;
+  the timer clock opens one, since a box that plays nothing may still have a mic. ALSA opens a
   `hw:` device once, so on Linux an input feeds one mixer at a time, armed or live.
 - The ring's fill drifts when the input runs on another clock than the output. The slot holds the
   lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
@@ -801,9 +804,20 @@ ring into the jitter buffer at the top of each block.
   at once down to a period over it. On the output's clock the trough never moves and holds the
   target exactly, 3 ms for a 128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
-- A capture slot's `latency_frames` is the input's period, what the OS reports for its hardware,
-  and how long the block's first sample waited in the ring. Its `concealed` counts pulls the ring
-  could not fill, `resyncs` each move of the delay and each dropped backlog, and the rest stay 0.
+- The fill before a pull is not how long a sample waited: a pull just after a delivery finds more
+  in the ring than one just before it, and its samples waited as much less. The wait holds still:
+  the trough, an input period, less a part of the step the two periods make, `gcd(period, 128)`.
+  The slot reports the middle of that step, within half a step of the truth: 4.33 ms for a
+  128-frame input at its opening target. `latency_frames`, which the guide clock subtracts and the
+  echo canceller follows, is that wait and what the OS reports for the input's hardware, and it
+  moves only when the target does. `stats()` gives the wait as `playoutDelayMs`, zero until the
+  slot first plays. `concealed` counts pulls the ring could not fill, `resyncs` each move of the
+  delay and each dropped backlog, and the rest stay 0.
+- The echo canceller works on a capture slot whose mic is on the output's clock, as one on the
+  same interface is: it finds the path to the frame and takes 20 dB or more out, as on any slot.
+  A mic on its own clock moves the echo's delay a few samples a second between the slot's moves,
+  which the canceller cannot follow, so it takes out about 10 dB at first and less as the path
+  walks. Decision 0018 has the numbers.
 - A slot can be recorded, so a problem heard in a real room can be replayed offline (8.9). With
   `recordSlot` on, the slot's receiver hands every datagram it reads, RTCP and all, to a `Tap`
   with the moment it read it, after the packet is in the ring. The tap copies it into a ring of

@@ -66,27 +66,62 @@ An empty ring is an input that stopped and moves no target. A fill more than a p
 block over the target is a stall's backlog, dropped at once to a period over the target, which
 leaves the next trough on or above it whatever the phase.
 
+At the opening the slot stays silent one window longer than it needs to fill, reads the trough
+and drops the excess at once. Played instead, that excess would go a sample a block, sliding the
+delay by up to a period in the first second of a song, under an echo canceller that has just
+found the path: on a 480-frame input it settled 96 frames off and took out 1 dB instead of 26.
+
+## The wait
+
+The fill before a pull is not how long a sample waited. Deliveries come a period at a time and
+pulls a block at a time, so a pull just after a delivery finds more in the ring than one just
+before it, and its samples waited as much less. The wait itself holds still: the trough, an input
+period, less a part of the step the two periods make, the greatest common divisor of the period
+and the block. The slot reports the middle of that step. The tests check it against the real wait
+on 64-, 128- and 480-frame inputs on either clock: within a step, and still for a minute at a time.
+
 ## Numbers
 
 From the tests in `engine/src/ingest/capture.rs`, an hour at 200 ppm either way with wakes up to
-8 frames early or late, the ring's share of the delay:
+8 frames early or late. The wait runs from a sample reaching the input to its pull, the input's
+period included; what the OS reports for the hardware comes on top.
 
-| Input period | Input clock        | Target     | Ring delay low, mean, high | Gaps         |
-| ------------ | ------------------ | ---------- | -------------------------- | ------------ |
-| 128          | the output's       | 144 frames | 3.00 ms throughout         | 0            |
-| 128          | 200 ppm fast       | 144 frames | 3.00, 3.29, 5.67 ms        | 0            |
-| 128          | 200 ppm slow       | 272 frames | 3.00, 5.75, 8.33 ms        | 1, then none |
-| 480          | 200 ppm either way | 176 frames | 3.00, about 8.5, 13.67 ms  | 1, then none |
+| Input period | Input clock        | Target     | Wait            | Reported | Gaps         |
+| ------------ | ------------------ | ---------- | --------------- | -------- | ------------ |
+| 64           | the output's       | 144 frames | 3.00 to 4.33 ms | 3.67 ms  | 0            |
+| 128          | the output's       | 144 frames | 3.00 to 5.67 ms | 4.33 ms  | 0            |
+| 128          | 200 ppm fast       | 144 frames | 3.00 to 5.67 ms | 4.33 ms  | 0            |
+| 128          | 200 ppm slow       | 272 frames | 5.67 to 8.33 ms | 7.00 ms  | 1, then none |
+| 480          | the output's       | 144 frames | 12.33 to 13 ms  | 12.67 ms | 0            |
+| 480          | 200 ppm either way | 176 frames | 13 to 13.67 ms  | 13.33 ms | 1, then none |
 
-Before the ring sit the input's period, 2.67 ms at 128 frames, and what the OS reports for its
-hardware. So a 128-frame mic on the output's clock costs the engine 5.67 ms before the output, and
-a slower one 8.4 ms on average, against 22.31 to 24.96 ms for the `l16` path. A 480-frame input
-pays for its period twice, in the wait and in the swing of the fill, so a Windows house mic wants
-a driver with short shared periods as much as its output does (0003).
+Where in its range a wait falls depends on the phase of the two clocks, which nothing here can
+see. So a 128-frame mic costs the engine 3 to 5.67 ms before the output on one clock, and 5.67 to
+8.33 ms on a slower one, against 22.31 to 24.96 ms for the `l16` path. A 480-frame input pays for
+its period in full, so a Windows house mic wants a driver with short shared periods as much as its
+output does (0003).
 
 `measure-latency` (#61) gives the phone path's engine share offline. With a capture variant in its
-rig it would give this one: a block of pull and the ring's 3 ms on one clock. Its device mode
-(#70) gives the sum through a real mic and speaker, the number this table cannot.
+rig it would give this one. Its device mode (#70) gives the sum through a real mic and speaker,
+the number this table cannot.
+
+## Echo cancelling
+
+The canceller follows the latency its slot reports, which for a capture slot is the wait, still
+until the target moves. From the closed-loop tests in `engine/src/ingest/capture_edges.rs`, a
+living room's echo of the far end in a house mic:
+
+| Input                      | Taken out, second 3, 5 to 9 | Path found                              |
+| -------------------------- | --------------------------- | --------------------------------------- |
+| 128 frames, output's clock | 15.3, 23.5 to 28.8 dB       | 624 frames, the room's 480 and the wait |
+| 480 frames, output's clock | 16.0, 23.4 to 29.6 dB       | 1072 frames, the same                   |
+| 128 frames, 100 ppm slow   | 10.9, 6.6 to 11.1 dB        | 752 frames, still moving                |
+
+On its own clock the mic's echo of the room moves 4.8 samples a second until the slot's next move,
+27 s on, and the canceller cannot follow a path that never holds still. It never makes the slot
+louder. A house mic beside the speakers on its own clock, the commonest kind, gets partial
+cancelling until the slot spreads its moves at the rate it has learned, one sample at a time
+between slips, which would hold the echo's delay to a sample.
 
 ## What this does not do
 
