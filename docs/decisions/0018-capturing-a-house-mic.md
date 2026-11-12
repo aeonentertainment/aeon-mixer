@@ -57,14 +57,15 @@ sweep passes half a sample. At 100 ppm, 4.8 blocks in 375 a second carry a move.
 The slot holds its trough, the lowest fill before a pull over 128 blocks, at a target. It opens at
 a block and 16 frames, 3 ms, the least that works on the output's clock and on most faster
 inputs. A pull the ring cannot fill plays what it has and silence after. When full pulls come
-back within eight, the most a 1024-frame callback takes, the phase of the two clocks or a late wake ran the ring short, and
+back within the blocks the granted callback takes at a wake, never fewer than eight and sixteen
+under a 2048-frame callback, the phase of the two clocks or a late wake ran the ring short, and
 the target rises by all those pulls lacked and 16 frames, at most one input period over where it
 opened. A slower input meets this once, the first time its period slips past the output's, tens
 of seconds in, and jitter may bring it on once more; after that it never is short. Opening at the higher target instead would avoid
 that one gap and cost every same-clock mic 2.67 ms for good. We chose the lower delay.
 
 A longer run of short pulls is an input that stopped, and raises the target only by what its first
-pull lacked. The limit is the ring's, not the output's, so it holds after the output moves.
+pull lacked. The limit follows the output: a move hands the slot the new callback before it plays again.
 
 A backlog is judged by the trough: one that stays a whole window more than a period over the
 target is a stall's, dropped at once to the target. Drift never moves the trough that far between
@@ -97,7 +98,8 @@ headroom: the stream may render before the cell is written, but the slot is sile
 over when the callback changes. A command from the binding on `outputChanged` would have arrived a
 5 ms drain and a turn of the event loop later, and been lost to a full command ring. Kept at the old callback, a 128-frame mic moved
 from 128-frame to 480-frame callbacks never settled again. The ring is a
-fixed 4096 frames, so a period or a callback over 1024 frames is refused there.
+fixed 4096 frames, so a period over 1024 frames, or a callback the ring cannot hold beside the
+period, is refused there.
 
 At the opening the slot stays silent one window longer than it needs to fill, reads the trough
 and drops the excess at once. Played instead, that excess would go a sample a block, sliding the
@@ -179,9 +181,14 @@ between slips, which would hold the echo's delay to a sample.
 - No timestamps. The capture thread's `at` could date the fill below a period and spread a slower
   input's correction ahead of its slip, taking about half a period off its mean. That wants a clock
   on the audio thread or a loop on the capture thread, and waits for a measurement that asks for it.
-- No input period or output callback over 1024 frames, 21 ms. The ring is a fixed 4096 frames, so
-  the audio thread never sizes it, and at 1024 of each with the target at its ceiling the healthy
-  fill still fits. A device that grants more is refused when the input opens. Every backend
+- No input period over 1024 frames, 21 ms, and no output callback the ring cannot hold beside it.
+  The ring is a fixed 4096 frames, so the audio thread never sizes it. The healthy fill reaches the
+  target's ceiling and the headroom: twice the input period, the callback in whole blocks and 16
+  frames. A 2048-frame callback, which some Bluetooth outputs grant, fits under any input of 1016
+  frames or less; a 128-frame mic fits under callbacks up to 3712 frames. `createMixer` refuses
+  what does not fit when the input opens. A move cannot be refused, so a move to such an output
+  leaves the slot silent until the next one: it counts one resync, reads 0 as `playoutDelayMs`, and
+  does not prime under a callback it would only run dry under, again and again. Every backend
   measured in 0003 grants 480 or less.
 - No sharing of one input between slots or between an armed mixer and a live one. On CoreAudio and
   WASAPI two slots may open one device; ALSA's `hw:` opens once.

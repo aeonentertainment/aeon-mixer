@@ -792,8 +792,11 @@ ring into the jitter buffer at the top of each block.
   until `measure-latency` (8.9) gives the push path a number.
 - A `capture` slot is a mic on this machine, with no socket and no jitter buffer. `createMixer`
   starts its input through `devices::capture` (8.3) at the output's period, or as near as the
-  device allows, and rejects if it cannot, or if the input's period or the output's callback is
-  over 1024 frames; `destroy` stops it. The capture thread's sink pushes each delivery into an SPSC
+  device allows, and rejects if it cannot, or if the input's period is over 1024 frames, or the
+  ring cannot hold the output's callback beside it: the target's ceiling and the headroom, twice
+  the period, the callback in whole blocks and 16 frames, over its 4096 frames. So a 2048-frame
+  callback, which some Bluetooth outputs grant, plays under any input of 1016 frames or less, and a
+  128-frame mic under any callback up to 3712. `destroy` stops it. The capture thread's sink pushes each delivery into an SPSC
   ring of 4096 frames, fixed so the audio thread never sizes it, and the slot pulls a block from
   it. Its headroom is what the fill holds over the trough just after a delivery: an input period,
   and the blocks an output callback pulls back to back after the first, three more under a
@@ -807,8 +810,8 @@ ring into the jitter buffer at the top of each block.
   lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
   16 frames for the wakes of two threads. A trough off target moves the delay one sample a block,
   each move spliced across the block by linear interpolation, so nothing steps. A pull the ring
-  cannot fill plays what it holds and silence after. When full pulls come back within eight, the
-  most a 1024-frame callback takes, the phase of two clocks or a late wake ran the ring short, and the target rises by all
+  cannot fill plays what it holds and silence after. When full pulls come back within the blocks
+  the granted callback takes at a wake, and never fewer than eight, the phase of two clocks or a late wake ran the ring short, and the target rises by all
   those pulls lacked and 16 frames, at most one input period over where it opened. A longer run is
   an input that stopped, and raises it only by what its first pull lacked. A trough that stays a
   whole window more than a period over the target is a stall's backlog, dropped at once to the
@@ -820,7 +823,10 @@ ring into the jitter buffer at the top of each block.
   reads from the follower's cell at its next block. The new stream may render before its `start`
   returns and the cell is written, but nothing plays under the old headroom: a slot that re-primes
   is silent through one whole settling window, 0.34 s, before it plays a sample, and a change of
-  callback while it is silent starts it over under the new one.
+  callback while it is silent starts it over under the new one. A move to a callback the ring
+  cannot hold beside the input's period cannot be refused as `createMixer` refuses one: the slot
+  stays silent until the next move, drops what it captures, counts one resync and reads 0 as
+  `playoutDelayMs`, and never primes under it. A move back to a callback it can hold primes again.
   On the output's clock the trough never moves and holds the target exactly, 3 ms for a
   128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
@@ -834,8 +840,11 @@ ring into the jitter buffer at the top of each block.
   12.33 ms under a 480-frame callback. `latency_frames`, which the guide clock subtracts and the
   echo canceller follows, is that wait and what the OS reports for the input's hardware, and it
   moves only when the target does. `stats()` gives the wait as `playoutDelayMs`, zero until the
-  slot first plays. `concealed` counts pulls the ring could not fill, `resyncs` each move of the
-  delay and each dropped backlog, and the rest stay 0.
+  slot first plays, and zero from a move to a callback its ring cannot hold until the next move.
+  `concealed` counts pulls the ring could not fill, `resyncs` each move of the delay, each dropped
+  backlog and each move to a callback the ring cannot hold, and the rest stay 0. While the slot is
+  silent under such a callback, `latency_frames` keeps the hardware's share and the wait its target
+  sets; nothing plays, so the guide clock and the canceller have nothing to follow.
 - The echo canceller works on a capture slot whose mic is on the output's clock, as one on the
   same interface is: it finds the path to the frame and takes 20 dB or more out, as on any slot.
   A mic on its own clock moves the echo's delay a few samples a second between the slot's moves,
