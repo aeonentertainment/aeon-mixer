@@ -65,8 +65,8 @@ a decision record and the developer's agreement.
 
 1. **Killing by pattern.** Never `pkill -f` or kill a PID found by name. Kill only a PID you
    captured at spawn.
-2. **Grabbing the developer's audio device.** Tests run on the offline driver. Only the
-   measurement tools in `tools/` open a real device, and only when a person runs them.
+2. **Grabbing the developer's audio device.** Tests run on the offline driver. Only `measure-sink`
+   and the tools in `native/tools/` open a real device, and only when a person runs them.
 3. **Blocking the control thread.** A wait on the audio thread or on a render job holds Node's
    event loop and starves the device service. Await the event or promise instead.
 4. **Editing another workstream's files.** Parallel work is split by directory in
@@ -96,7 +96,7 @@ a decision record and the developer's agreement.
 - Every realtime `process` and `render` runs under the allocation guard in tests. A guard
   failure is a bug in the code, never a reason to loosen the guard.
 - Timing claims need a number. A latency change ships with the measurement that justifies it,
-  taken with the tools in `tools/`.
+  taken with `measure-latency` or `measure-sink`.
 - Never wait on sleeps or polling in tests. Await the event or promise that marks the milestone.
 
 ## Pull requests

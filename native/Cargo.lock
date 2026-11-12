@@ -309,6 +309,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "measure-latency"
+version = "0.0.0"
+dependencies = [
+ "assert_no_alloc",
+ "engine",
+ "opus",
+ "rustfft",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

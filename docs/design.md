@@ -227,7 +227,6 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 ```
 src/                    TypeScript public API, the only thing Aeon Karaoke imports
 tests/                  TypeScript tests through the binding, on the offline driver
-tools/                  measurement scripts a person runs: measure-sink, measure-latency
 native/
   Cargo.toml            the workspace
   engine/               pure core: no device, socket or Node
@@ -249,6 +248,7 @@ native/
   devices/              Driver implementations: coreaudio, wasapi, alsa, the timer clock;
                         the measure-sink and measure-clock binaries
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
+  tools/measure-latency/  the engine's share of the mic path, per ingest kind, on the offline driver
   tools/replay/         a slot's recording through the real chain on the offline driver
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
@@ -883,11 +883,16 @@ section 7.2 with typed events and validation of ranges before anything crosses.
 Done when: every method and event in 7.2 exists, `vp check` passes with no `any`, and the
 TypeScript suite exercises them on the offline engine.
 
-### 8.9 Tools: `tools/`
+### 8.9 Tools: `native/tools/`
 
-Scripts a person runs on real hardware. `measure-sink` is in `devices`. `measure-latency`
-plays a click through a slot and records it at the output to give the mic-path number. Their
-output is the evidence a PR quotes.
+Tools live in the Rust workspace, because what they measure is the engine. `measure-sink` is in
+`devices`. `measure-latency` gives the mic-path number. Today that is the engine's share of each
+ingest kind on the offline driver, which opens nothing and which a test holds. The output's share
+on real hardware is #40's next step. Decision [0006](decisions/0006-measuring-latency.md) has how it
+works. Their output is the evidence a PR quotes.
+
+A new ingest kind is a variant of `Ingest`, and a new stage on the mic path, such as correction or
+echo cancelling, is a new row in the offline table with its own guard.
 
 `native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
 chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
@@ -918,7 +923,7 @@ GStreamer and the `aeonpitch` element are deleted in a later PR.
   allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
   so the engine does not.
 - DSP tests feed known signals and assert within tolerances named in the test.
-- Timing claims carry a number from `tools/` or `measure-sink`, and the number goes in the PR
+- Timing claims carry a number from `measure-latency` or `measure-sink`, and the number goes in the PR
   and, when it decides something, in `docs/decisions`.
 - CI builds and tests the workspace on macOS, Windows and Linux. Device backends compile behind
   a feature so a runner without hardware still builds them.
