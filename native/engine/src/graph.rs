@@ -106,6 +106,13 @@ impl Graph {
         }
     }
 
+    /// Every slot hears that the output's callback now takes `callback_frames` at a wake.
+    pub fn output_moved(&mut self, callback_frames: u32) {
+        for slot in &mut self.slots {
+            slot.output_moved(callback_frames);
+        }
+    }
+
     pub fn reset_slot(&mut self, slot: u8) {
         if let Some(slot) = self.slots.get_mut(usize::from(slot)) {
             slot.reset();

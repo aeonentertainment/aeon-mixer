@@ -9,7 +9,7 @@ export type Capability =
   | "shortVersion"
   | "pause"
   | "level";
-export type IngestKind = "rtp" | "l16" | "push";
+export type IngestKind = "rtp" | "l16" | "push" | "capture";
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
@@ -36,8 +36,17 @@ export interface OutputInfo {
   readonly device: { readonly id: string; readonly name: string } | null;
 }
 
+/**
+ * One slot as a mixer asks for it. A `capture` slot is an input on this machine, a house mic:
+ * `device` is an id from `inputDevices()`, the default input when left out, and `channel` the
+ * device's channel from 0, default 0.
+ */
+export type SlotConfig =
+  | { kind: Exclude<IngestKind, "capture"> }
+  | { kind: "capture"; device?: string; channel?: number };
+
 export interface MixerConfig {
-  slots: ReadonlyArray<{ kind: IngestKind }>;
+  slots: ReadonlyArray<SlotConfig>;
   backing?: {
     stems: ReadonlyArray<{ kind: StemKind; path: string }>;
     /** Semitones, rendered before start. */
@@ -106,7 +115,11 @@ export interface SlotStats {
    * found the echo and learned it.
    */
   echo: { pathMs: number; bleedDb: number; removedDb: number } | null;
-  /** The delay the stream's earliest packets wait now; zero for a `push` slot. */
+  /**
+   * The delay the stream's earliest packets wait now; zero for a `push` slot. A `capture` slot
+   * has no jitter buffer: this is how long its mic's samples wait from the input to the mix, the
+   * input's period included, and zero until it first plays.
+   */
   playoutDelayMs: number;
   /** How often the howl guard has ducked this slot. */
   howlCatches: number;

@@ -178,6 +178,11 @@ impl Slot {
         self.guide.as_deref()
     }
 
+    /// The output's callback now takes `callback_frames` at a wake.
+    pub fn output_moved(&mut self, callback_frames: u32) {
+        self.source.output_moved(callback_frames);
+    }
+
     /// A new singer: the source forgets its stream, the corrector and the voice what they heard,
     /// and the gate and compressor the level of the phone before, and the echo stages the path,
     /// since a new sender is a new one.

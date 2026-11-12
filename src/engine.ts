@@ -16,7 +16,7 @@ import type {
   OutputInfo,
 } from "./types.ts";
 import { framesToMs, msToFrames } from "./units.ts";
-import { finiteIn, ingestKind, integerIn, pcm, rtpReturn } from "./validate.ts";
+import { finiteIn, integerIn, pcm, rtpReturn, slotInput } from "./validate.ts";
 
 type State = "running" | "faulted" | "closed";
 
@@ -56,6 +56,8 @@ export class Engine {
   readonly #events = new Emitter<EngineEvents>();
   /** Swaps in flight, oldest first; a `retired` event completes the oldest. */
   readonly #retirements: Array<() => void> = [];
+  /** Each mixer's release until it is destroyed; `close` calls whatever is left. */
+  readonly #held = new Set<() => void>();
   /** Render jobs on the worker thread, by the id their progress events carry. */
   readonly #renders = new Map<number, RenderWatch>();
   #live: { mixer: Mixer; events: Emitter<MixerEvents> } | null = null;
@@ -110,6 +112,10 @@ export class Engine {
       swapIn: (mixer, graph, events, onTimeout) => this.#swapIn(mixer, graph, events, onTimeout),
       swapOut: (mixer) => this.#swapOut(mixer),
       onFault: (listener) => this.#events.on("fault", listener),
+      hold: (release) => {
+        this.#held.add(release);
+        return () => this.#held.delete(release);
+      },
       isLive: (mixer) => this.#live?.mixer === mixer,
       anyLive: () => this.#live !== null,
       underruns: () => this.#underruns,
@@ -141,6 +147,12 @@ export class Engine {
     return this.#native.outputs();
   }
 
+  /** The inputs a `capture` slot may name, the default marked. None on an offline engine. */
+  async inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>> {
+    this.#assertRunning();
+    return this.#native.inputs();
+  }
+
   async createMixer(config: MixerConfig): Promise<Mixer> {
     this.#assertRunning();
     if (config.slots.length > this.#slots) {
@@ -148,11 +160,11 @@ export class Engine {
         `the engine has ${this.#slots} slots; the mixer asks for ${config.slots.length}`,
       );
     }
-    const kinds = config.slots.map(({ kind }, i) => ingestKind(`slots[${i}].kind`, kind));
+    const slots = config.slots.map((slot, i) => slotInput(`slots[${i}]`, slot));
     const destination = config.rtpReturn === undefined ? null : rtpReturn(config.rtpReturn);
     return new Mixer(
       this.#host,
-      kinds,
+      slots,
       new Emitter<MixerEvents>(),
       config.backing ?? null,
       destination,
@@ -171,6 +183,8 @@ export class Engine {
     }
     this.#state = "closed";
     this.#native.close();
+    // Armed mixers, and a live one on a faulted engine, still hold their inputs and ports
+    for (const release of this.#held) release();
     this.#stop(new Error("the engine is closed"));
   }
 

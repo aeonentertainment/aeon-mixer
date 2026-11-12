@@ -1,6 +1,18 @@
-import { Backing, type BackingConfig, type RenderHost, STOP_FADE_MS } from "./backing.ts";
+import {
+  Backing,
+  type BackingConfig,
+  backingSettings,
+  type RenderHost,
+  STOP_FADE_MS,
+} from "./backing.ts";
 import type { Emitter } from "./emitter.ts";
-import type { GuideInput, NativeMixer, RtpReturnInput, SlotParamsInput } from "./native.ts";
+import type {
+  GuideInput,
+  NativeMixer,
+  RtpReturnInput,
+  SlotInput,
+  SlotParamsInput,
+} from "./native.ts";
 import type {
   IngestKind,
   MelodyGuide,
@@ -40,6 +52,11 @@ export interface MixerHost extends RenderHost {
   swapOut(mixer: Mixer): Promise<void>;
   /** Hears the engine's fault until the returned function is called. */
   onFault(listener: (error: Error) => void): () => void;
+  /**
+   * Holds `release` until the returned function is called, and calls it when the engine closes:
+   * a mixer's capture inputs and ports outlive no engine, whatever state the mixer is in.
+   */
+  hold(release: () => void): () => void;
   isLive(mixer: Mixer): boolean;
   anyLive(): boolean;
   underruns(): number;
@@ -64,13 +81,14 @@ function defaultSlotParams(): SlotParamsInput {
 }
 
 /**
- * One mixing graph for one performance. Its `rtp` and `l16` slots listen on their ports from
- * here until `destroy`; its return stream sends the mix from `start` until `destroy`. Settings
+ * One mixing graph for one performance. Its `rtp` and `l16` slots listen on their ports, and its
+ * `capture` slots hold their inputs open, from here until `destroy`; its return stream sends the
+ * mix from `start` until `destroy`. Settings
  * made while armed are kept here and written to the engine when `start` swaps the graph in, so
  * arming the next song never touches the live one.
  */
 export class Mixer {
-  /** Each slot's kind and, for `rtp` and `l16`, the UDP port it listens on; `null` for `push`. */
+  /** Each slot's kind and, for `rtp` and `l16`, the UDP port it listens on; `null` for the rest. */
   readonly slots: ReadonlyArray<{ index: number; kind: IngestKind; port: number | null }>;
   readonly #host: MixerHost;
   readonly #native: NativeMixer;
@@ -79,6 +97,7 @@ export class Mixer {
   readonly #guides: Array<GuideInput | null>;
   readonly #backing: Backing | null;
   readonly #offFault: () => void;
+  readonly #letGo: () => void;
   #phase: Phase = "armed";
   #failed = false;
 
@@ -94,21 +113,25 @@ export class Mixer {
 
   constructor(
     host: MixerHost,
-    kinds: ReadonlyArray<IngestKind>,
+    inputs: ReadonlyArray<SlotInput & { kind: IngestKind }>,
     events: Emitter<MixerEvents>,
     backing: BackingConfig | null,
     rtpReturn: RtpReturnInput | null,
   ) {
     this.#host = host;
     this.#events = events;
-    this.#native = host.native.createMixer([...kinds], rtpReturn);
-    this.slots = kinds.map((kind, index) => ({ index, kind, port: this.#native.port(index) }));
-    this.#params = kinds.map(defaultSlotParams);
-    this.#guides = kinds.map(() => null);
+    // Checked before the native mixer binds its ports and opens its inputs, which a throw after it
+    // would leave held with no mixer to destroy
+    const settings = backing === null ? null : backingSettings(backing);
+    this.#native = host.native.createMixer([...inputs], rtpReturn);
+    this.#letGo = host.hold(() => this.#release());
+    this.slots = inputs.map(({ kind }, index) => ({ index, kind, port: this.#native.port(index) }));
+    this.#params = inputs.map(defaultSlotParams);
+    this.#guides = inputs.map(() => null);
     this.#backing =
-      backing === null
+      settings === null
         ? null
-        : new Backing(host, backing, this.#native, {
+        : new Backing(host, settings, this.#native, {
             progress: (fraction) => {
               if (this.#phase !== "destroyed") this.#events.emit("renderProgress", fraction);
             },
@@ -206,8 +229,8 @@ export class Mixer {
   recordSlot(index: number, path: string | null) {
     const slot = this.#slot(index);
     const kind = this.slots[slot]?.kind;
-    if (kind === "push") {
-      throw new Error(`slot ${slot} is a push slot; only rtp and l16 slots record`);
+    if (kind !== "rtp" && kind !== "l16") {
+      throw new Error(`slot ${slot} is a ${String(kind)} slot; only rtp and l16 slots record`);
     }
     if (this.#phase === "destroyed") {
       throw new Error("the mixer is destroyed");
@@ -362,6 +385,7 @@ export class Mixer {
   #release() {
     this.#phase = "destroyed";
     this.#offFault();
+    this.#letGo();
     this.#native.release();
   }
 

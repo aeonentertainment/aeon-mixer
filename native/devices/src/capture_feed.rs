@@ -118,6 +118,17 @@ mod tests {
         });
     }
 
+    /// Every backend refuses a channel past the device's when it opens, so `createMixer` rejects;
+    /// were one to reach the feed, it would hand over silence, never another channel's audio.
+    #[test]
+    fn a_channel_past_the_devices_is_silence() {
+        let at = Instant::now();
+        let seen = collect(|feed| feed.deliver(&[0.1f32, 0.2, 0.3, 0.4], 2, 5, at));
+        assert_eq!(seen, [0.0, 0.0]);
+        let mut feed = CaptureFeed::new(Box::new(|_| {}), Arc::new(Stats::new()));
+        assert_no_alloc(|| feed.deliver(&[0.1f32, 0.2, 0.3, 0.4], 2, 5, at));
+    }
+
     #[test]
     fn a_panicking_sink_fails_the_stream_and_is_never_called_again() {
         let stats = Arc::new(Stats::new());

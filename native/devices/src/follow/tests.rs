@@ -3,6 +3,7 @@
 //! does to them on a channel, and the test waits on that, never on time.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -140,11 +141,12 @@ impl Driver for FakeDriver {
             let _ = fake.seen.send(Seen::Refused(id));
             return Err(DriverError::Backend("refused".into()));
         }
-        // A latency of its own per output, so the move shows in what the follower reports
+        // A latency and a period of its own per output, so the move shows in what the follower
+        // reports and hands the render
         let latency = 100 * id.len() as u32;
         let info = StreamInfo {
             sample_rate: RATE,
-            period_frames: BLOCK as u32,
+            period_frames: 60 * id.len() as u32,
             output_latency_frames: latency,
         };
         let mut room = fake.room();
@@ -170,6 +172,7 @@ struct Counter {
     moved: bool,
     panics: bool,
     dropped: Sender<Seen>,
+    callback: Arc<AtomicU32>,
 }
 
 impl Movable for Counter {
@@ -186,6 +189,10 @@ impl Movable for Counter {
     fn moved(&mut self) {
         self.moved = true;
     }
+
+    fn callback_frames(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.callback)
+    }
 }
 
 impl Drop for Counter {
@@ -197,6 +204,8 @@ impl Drop for Counter {
 struct Rig {
     fake: Fake,
     seen: Receiver<Seen>,
+    /// What the render was told of each stream's period.
+    callback: Arc<AtomicU32>,
     stats: Arc<Stats>,
     follower: Option<Follower>,
 }
@@ -211,13 +220,20 @@ impl Rig {
         let (sender, seen) = channel();
         let fake = Fake { room: Arc::default(), seen: sender.clone() };
         fake.offer(outputs);
-        let counter = Counter { frame: 1.0, moved: false, panics, dropped: sender };
+        let callback = Arc::new(AtomicU32::new(0));
+        let counter = Counter {
+            frame: 1.0,
+            moved: false,
+            panics,
+            dropped: sender,
+            callback: Arc::clone(&callback),
+        };
         let stats = Arc::new(Stats::new());
         let request = Request { device: pinned.map(Into::into), ..Request::default() };
         let follower =
             Follower::stalling_after(stall, request, counter, fake.clone(), Arc::clone(&stats))
                 .expect("the first output opens");
-        Self { fake, seen, stats, follower: Some(follower) }
+        Self { fake, seen, stats, callback, follower: Some(follower) }
     }
 
     fn next(&self) -> Seen {
@@ -275,6 +291,21 @@ fn a_new_default_takes_the_song_with_nothing_lost_but_the_gap() {
     let next = before[before.len() - 1] + 1.0;
     assert_eq!(after[0], -next, "the next frame, on the new output, in the block the move fades");
     assert_eq!(after[BLOCK], next + BLOCK as f32, "and the song plays on after it");
+}
+
+/// A capture slot sizes its ring by how much the output pulls at a wake, so the render hears each
+/// stream's granted period as that stream starts, before the follower reports the move: 240 frames
+/// on `hdmi`, then 480 on `built-in`.
+#[test]
+fn each_stream_tells_the_render_its_period_as_it_starts() {
+    let rig = Rig::new(&[("hdmi", true), ("built-in", false)], None);
+    rig.expect(&[started("hdmi")]);
+    rig.settle();
+    assert_eq!(rig.callback.load(Ordering::Acquire), 240);
+    rig.fake.offer(&[("hdmi", false), ("built-in", true)]);
+    rig.expect(&[stopped("hdmi"), started("built-in")]);
+    rig.settle();
+    assert_eq!(rig.callback.load(Ordering::Acquire), 480);
 }
 
 #[test]

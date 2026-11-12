@@ -6,6 +6,8 @@
 //! fades in (section 5).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::backing::Transport;
 use crate::block::{BLOCK, MAX_SLOTS, RATE, Stereo};
@@ -42,6 +44,10 @@ pub struct AudioThread {
     fault_sent: bool,
     /// Set by a move: the next block starts every slot's stream again on the new clock.
     restart: bool,
+    /// The stream's granted period, which the follower writes as each stream starts, and the
+    /// one the graphs last heard: a graph swapped in hears it too.
+    callback: Arc<AtomicU32>,
+    heard: u32,
     /// Frames of the fade in after a move that have played; the fade is done at the swap fade.
     faded_in: u32,
 }
@@ -79,6 +85,8 @@ impl AudioThread {
             faulted: false,
             fault_sent: false,
             restart: false,
+            callback: Arc::default(),
+            heard: 0,
             faded_in: SWAP_FADE_FRAMES,
         };
         let controls = Controls {
@@ -111,6 +119,14 @@ impl AudioThread {
     fn render_block(&mut self, out: &mut Stereo<'_>) {
         if std::mem::take(&mut self.restart) {
             self.restart_slots();
+        }
+        let callback = self.callback.load(Ordering::Acquire);
+        if callback != 0 && callback != self.heard {
+            self.heard = callback;
+            self.live.output_moved(callback);
+            if let Some(outgoing) = &mut self.outgoing {
+                outgoing.output_moved(callback);
+            }
         }
         self.drain_commands();
         let params = *self.params.latest();
@@ -169,7 +185,11 @@ impl AudioThread {
             }
             let Some(command) = self.commands.pop() else { return };
             match command {
-                Command::Swap { id, graph } => {
+                Command::Swap { id, mut graph } => {
+                    // Built before a move, a graph learns the output it now plays to
+                    if self.heard != 0 {
+                        graph.output_moved(self.heard);
+                    }
                     if let Some(previous) = self.outgoing.take() {
                         self.retire(Retired::Graph(previous));
                     }
@@ -248,6 +268,10 @@ impl Movable for AudioThread {
     fn moved(&mut self) {
         self.restart = true;
         self.faded_in = 0;
+    }
+
+    fn callback_frames(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.callback)
     }
 }
 

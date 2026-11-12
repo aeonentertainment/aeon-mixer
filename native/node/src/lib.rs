@@ -4,6 +4,7 @@
 //! TypeScript API.
 
 mod backing;
+mod capture_input;
 mod clock;
 mod echo_info;
 mod engine;
@@ -13,6 +14,7 @@ mod guide;
 mod ingest;
 mod mixer;
 mod rtp_return;
+mod slot_input;
 mod slot_params;
 mod slot_stats_info;
 
@@ -24,5 +26,6 @@ pub use event::NativeEvent;
 pub use guide::{GuideInput, NoteInput};
 pub use mixer::Mixer;
 pub use rtp_return::{RtpReturnInput, RtpReturnStats};
+pub use slot_input::SlotInput;
 pub use slot_params::{CorrectorInput, ReverbInput, SlotParamsInput, SwitchInput, VoiceInput};
 pub use slot_stats_info::SlotStatsInfo;

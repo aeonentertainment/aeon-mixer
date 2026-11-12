@@ -20,6 +20,7 @@ use crate::events_thread::EventsThread;
 use crate::guide::GuideInput;
 use crate::mixer::Mixer;
 use crate::rtp_return::RtpReturnInput;
+use crate::slot_input::SlotInput;
 use crate::slot_params::SlotParamsInput;
 
 /// What drives the audio thread.
@@ -119,17 +120,25 @@ impl Engine {
         })
     }
 
-    /// Builds a mixer with one slot per kind, in order: `"rtp"`, `"l16"` or `"push"`. The rtp
-    /// and l16 slots bind their ports here and report them through `Mixer.port`; a return stream
-    /// gets its socket and send task here too.
+    /// Builds a mixer with one slot per input, in order: `"rtp"`, `"l16"`, `"push"` or
+    /// `"capture"`. The rtp and l16 slots bind their ports here and report them through
+    /// `Mixer.port`, the capture slots start their inputs here, and a return stream gets its socket
+    /// and send task here too.
     #[napi]
     pub fn create_mixer(
         &self,
-        kinds: Vec<String>,
+        slots: Vec<SlotInput>,
         rtp_return: Option<RtpReturnInput>,
     ) -> Result<Mixer> {
         let network = self.network.as_ref().ok_or_else(closed)?;
-        Mixer::build(&kinds, rtp_return.as_ref(), self.playout_delay_frames, network)
+        let clock = self.clock()?;
+        if matches!(clock, Clock::Offline(_)) && slots.iter().any(|slot| slot.kind == "capture") {
+            return Err(Error::from_reason(
+                "an offline engine opens no input, so has no capture slot",
+            ));
+        }
+        let period = clock.info().period_frames;
+        Mixer::build(slots, rtp_return.as_ref(), self.playout_delay_frames, period, network)
     }
 
     /// The output playing now. After a move the events thread sends the same as `outputChanged`.
@@ -144,6 +153,19 @@ impl Engine {
     #[napi]
     pub fn outputs(&self) -> Result<Vec<OutputEntry>> {
         self.clock()?.outputs()
+    }
+
+    /// The inputs this OS offers, the default marked: the devices a `capture` slot may name. Empty
+    /// on the offline clock, which opens none. A box on the timer clock plays nothing locally but
+    /// may still have a mic plugged in.
+    #[napi]
+    pub fn inputs(&self) -> Result<Vec<OutputEntry>> {
+        match self.clock()? {
+            Clock::Offline(_) => Ok(Vec::new()),
+            Clock::Timer { .. } | Clock::Device { .. } => devices::inputs()
+                .map(|inputs| inputs.into_iter().map(OutputEntry::from).collect())
+                .map_err(|error| Error::from_reason(error.to_string())),
+        }
     }
 
     /// Offline clock only: renders `blocks` blocks and returns them as interleaved stereo.

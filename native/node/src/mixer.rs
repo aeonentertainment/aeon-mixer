@@ -1,7 +1,7 @@
 //! One mixing graph, built on the control thread by `Engine::create_mixer` and handed to the
 //! engine by its `swap`. The mixer keeps the control thread's end of every slot's ingest: the
-//! push feeds the host pushes into, and the ports the network thread listens on for the rest;
-//! and the end of its return stream, when it has one.
+//! push feeds the host pushes into, the ports the network thread listens on, and the capture
+//! slots' input streams; and the end of its return stream, when it has one.
 
 use std::sync::Arc;
 
@@ -17,6 +17,7 @@ use transport::Network;
 use crate::backing::BackingRender;
 use crate::ingest::Ingest;
 use crate::rtp_return::{RtpReturn, RtpReturnInput, RtpReturnStats};
+use crate::slot_input::SlotInput;
 use crate::slot_stats_info::SlotStatsInfo;
 
 #[napi]
@@ -31,20 +32,29 @@ pub struct Mixer {
 }
 
 impl Mixer {
-    /// One slot per kind, in order: `"rtp"`, `"l16"` or `"push"`.
+    /// One slot per input, in order: `"rtp"`, `"l16"`, `"push"` or `"capture"`. A capture slot's
+    /// input runs at `input_period_frames`, the output's period, or as near as its device allows.
     pub(crate) fn build(
-        kinds: &[String],
+        inputs: Vec<SlotInput>,
         rtp_return: Option<&RtpReturnInput>,
         playout_delay_frames: Option<u32>,
+        input_period_frames: u32,
         network: &Network,
     ) -> Result<Self> {
-        if kinds.len() > MAX_SLOTS {
+        if inputs.len() > MAX_SLOTS {
             return Err(Error::from_reason(format!("a mixer holds at most {MAX_SLOTS} slots")));
         }
-        let (ingests, slots): (Vec<_>, Vec<_>) = kinds
-            .iter()
-            .map(|kind| {
-                let (ingest, source) = Ingest::open(kind, playout_delay_frames, network)?;
+        let (ingests, slots): (Vec<_>, Vec<_>) = inputs
+            .into_iter()
+            .map(|input| {
+                let (ingest, source) = match input.kind.as_str() {
+                    "capture" => {
+                        let channel = u16::try_from(input.channel.unwrap_or(0))
+                            .map_err(|_| Error::from_reason("a channel is at most 65535"))?;
+                        Ingest::capture(input.device, channel, input_period_frames)?
+                    }
+                    kind => Ingest::open(kind, playout_delay_frames, network)?,
+                };
                 Ok((ingest, Slot::new(source)))
             })
             .collect::<Result<Vec<_>>>()?
@@ -81,7 +91,7 @@ impl Mixer {
         Ok(())
     }
 
-    /// The UDP port a slot listens on, or null for a push slot.
+    /// The UDP port a slot listens on, or null for a push or capture slot.
     #[napi]
     pub fn port(&self, index: u32) -> Result<Option<u16>> {
         self.slot(index).map(Ingest::port)

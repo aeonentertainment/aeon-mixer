@@ -1,18 +1,33 @@
 // Range checks at the edge, so nothing out of range crosses to the native side.
 
 import { isIP } from "node:net";
-import type { RtpReturnInput } from "./native.ts";
-import type { IngestKind, MixerConfig } from "./types.ts";
+import type { RtpReturnInput, SlotInput } from "./native.ts";
+import type { IngestKind, MixerConfig, SlotConfig } from "./types.ts";
 
-const INGEST_KINDS: ReadonlyArray<IngestKind> = ["rtp", "l16", "push"];
+const INGEST_KINDS: ReadonlyArray<IngestKind> = ["rtp", "l16", "push", "capture"];
 
 /** A kind as a JavaScript caller may have spelt it, so an unknown one never crosses. */
 export function ingestKind(name: string, value: string) {
   const kind = INGEST_KINDS.find((known) => known === value);
   if (kind === undefined) {
-    throw new RangeError(`${name} must be rtp, l16 or push, got ${value}`);
+    throw new RangeError(`${name} must be rtp, l16, push or capture, got ${value}`);
   }
   return kind;
+}
+
+/** A slot as the addon takes it: its kind, and for a `capture` slot its device and channel. */
+export function slotInput(name: string, slot: SlotConfig): SlotInput & { kind: IngestKind } {
+  const kind = ingestKind(`${name}.kind`, slot.kind);
+  if (slot.kind !== "capture") return { kind };
+  const { device, channel = 0 } = slot;
+  if (device !== undefined && (typeof device !== "string" || device === "")) {
+    throw new TypeError(`${name}.device must be an id from inputDevices()`);
+  }
+  return {
+    kind,
+    channel: integerIn(`${name}.channel`, channel, 0, 255),
+    ...(device === undefined ? {} : { device }),
+  };
 }
 
 /**

@@ -2,6 +2,8 @@
 //! the offline driver in tests and in `openEngine({ offline: true })`.
 
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use crate::block::{BLOCK, RATE, Stereo};
 
@@ -29,6 +31,12 @@ pub trait Movable: Send + 'static {
     fn render(&mut self, out: Stereo<'_>);
     /// Called between streams, never on the audio thread: one clock stopped and another starts.
     fn moved(&mut self);
+    /// Where the follower writes each stream's granted period, `StreamInfo.period_frames`, as its
+    /// `start` returns: the most it pulls at a normal wake. Taken before the movable is lent, since
+    /// the stream holds it from then on. A movable that has no use for it keeps the default.
+    fn callback_frames(&self) -> Arc<AtomicU32> {
+        Arc::default()
+    }
 }
 
 pub struct Running {
