@@ -204,6 +204,59 @@ test("pitch events read a sung tone's frequency on the slot that sang it", async
   await engine.close();
 });
 
+/**
+ * The first voiced reading of a slot singing 30 cents above A3, 0.7 of a semitone under the
+ * guide's B flat 3, with correction `enabled` or not.
+ */
+async function firstVoicedReading(enabled: boolean) {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  // With no backing the guide's clock holds still; the offset parks it inside the B flat
+  mixer.setSlotGuide(0, { notes: [{ midi: 58, startMs: 0, endMs: 1000 }], keyMask: 0 }, 500);
+  mixer.setSlotEffects(0, [{ kind: "pitch-correction", enabled, strength: 1, retuneMs: 0 }]);
+  const hz = 220 * 2 ** (30 / 1200);
+  let frame = 0;
+  // Six harmonics, so the detector reads it as it reads a voice
+  const voiceBlock = () => {
+    const block = new Float32Array(2 * BLOCK);
+    for (let i = 0; i < BLOCK; i += 1, frame += 1) {
+      let sample = 0;
+      for (let h = 1; h <= 6; h += 1)
+        sample += Math.sin((2 * Math.PI * hz * h * frame) / 48000) / h;
+      block[2 * i] = 0.25 * sample;
+      block[2 * i + 1] = 0.25 * sample;
+    }
+    return block;
+  };
+  const reading = new Promise<[targetMidi: number | null, errorSemitones: number]>((resolve) => {
+    const off = mixer.on("pitch", (_slot, _positionMs, _hz, confidence, targetMidi, error) => {
+      if (confidence < 0.9) return;
+      off();
+      resolve([targetMidi, error]);
+    });
+  });
+  await startLive(engine, mixer);
+  for (let i = 0; i < Math.ceil(9600 / BLOCK); i += 1) {
+    mixer.push(0, voiceBlock());
+    engine.pump(1);
+  }
+  const shown = await reading;
+  await destroyLive(engine, mixer);
+  await engine.close();
+  return shown;
+}
+
+test("a corrected slot's pitch events name the guide note and how far flat the voice is", async () => {
+  const [targetMidi, errorSemitones] = await firstVoicedReading(true);
+  expect(targetMidi).toBe(58);
+  // 10 cents, the corrector tests' tolerance for the detector's error
+  expect(Math.abs(errorSemitones - 0.7)).toBeLessThan(0.1);
+});
+
+test("with correction off a pitch event names no target and no error", async () => {
+  expect(await firstVoicedReading(false)).toEqual([null, 0]);
+});
+
 test("destroy swaps silence in, resolves once the graph is back, and the mixer refuses after", async () => {
   const engine = await openEngine({ output: { offline: true } });
   const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });

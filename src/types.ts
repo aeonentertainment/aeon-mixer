@@ -92,7 +92,21 @@ export type EngineEvents = {
 
 export type MixerEvents = {
   level: (slot: number, rmsDb: number, peakDb: number) => void;
-  pitch: (slot: number, positionMs: number, hz: number, confidence: number) => void;
+  /**
+   * Every 10 ms, on the guide's clock. `targetMidi` is the guide note the corrector pulls toward,
+   * after the backing's key shift: null with correction off, with no guide, or between notes,
+   * where it pulls toward the key. `errorSemitones` is the class it pulls toward less the
+   * reading, in the singer's own octave, so positive is flat: 0 with correction off or while
+   * unvoiced.
+   */
+  pitch: (
+    slot: number,
+    positionMs: number,
+    hz: number,
+    confidence: number,
+    targetMidi: number | null,
+    errorSemitones: number,
+  ) => void;
   position: (positionMs: number) => void;
   renderProgress: (fraction: number) => void;
   backingEnded: () => void;

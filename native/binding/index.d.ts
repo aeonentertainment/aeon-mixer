@@ -132,7 +132,7 @@ export type NativeEvent =
   | { kind: 'ack'; id: number; positionFrames: number }
   | { kind: 'level'; slot: number; rmsDb: number; peakDb: number }
   | { kind: 'masterLevel'; rmsDb: number; peakDb: number }
-  | { kind: 'pitch'; slot: number; positionMs: number; hz: number; confidence: number }
+  | { kind: 'pitch'; slot: number; positionMs: number; hz: number; confidence: number; targetMidi?: number; errorSemitones: number }
   | { kind: 'position'; frames: number }
   | { kind: 'backingEnded' }
   | { kind: 'underrun' }

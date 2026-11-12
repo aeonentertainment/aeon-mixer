@@ -52,6 +52,7 @@ impl Corrector {
         mut on_reading: impl FnMut(Reading),
     ) {
         let strength = if params.enabled { params.strength } else { 0.0 };
+        let correcting = strength > 0.0;
         let mut done = 0;
         while done < block.len() {
             let at = frame + done as i64;
@@ -78,7 +79,14 @@ impl Corrector {
                 let pitch = self.kernel.detected();
                 let centre = at + frames as i64 - self.kernel.reading_lag_samples() as i64;
                 let position_ms = centre as f64 * 1000.0 / f64::from(RATE);
-                on_reading(Reading { position_ms, hz: pitch.hz, confidence: pitch.confidence });
+                // The kernel read with the target this run set, so the two belong together
+                on_reading(Reading {
+                    position_ms,
+                    hz: pitch.hz,
+                    confidence: pitch.confidence,
+                    target_midi: target.midi.filter(|_| correcting),
+                    error_semitones: if correcting { self.kernel.error_semitones() } else { 0.0 },
+                });
             }
         }
     }
