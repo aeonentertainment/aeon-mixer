@@ -15,8 +15,9 @@ latency.
 `stats()` gives each slot two numbers. Both read 0 with correction off.
 
 - **`correctorDelayMs`** is the delay as it stands, for a status panel or a log.
-- **`correctorMaxDelayMs`** is 15 ms: the shifter's floor and 1.125 periods of the lowest voice it
-  corrects, 82 Hz. It holds still, so a latency budget adds this one.
+- **`correctorMaxDelayMs`** is 13.5 ms: the shifter's floor six semitones up and one period of the
+  lowest voice it corrects, 82 Hz. It was 15 ms, with 1.125 periods, until #112 (decision
+  0021). It holds still, so a latency budget adds this one.
 
 Neither enters a clock. Nothing can play a live voice early, so there is no compensation for a
 moving figure to drive. The guide clock and a pitch reading's position both name the corrector's
@@ -77,15 +78,17 @@ readings sit under 87 Hz, so 13 ms is what such a voice costs and does not point
 I did not run the GStreamer harness, since that writes into Aeon Karaoke's tree, so this shows the
 gap is within the spread and does not show why that one run landed where it did.
 
-Draining the delay to its floor during a rest looks like a free win and is not. In a scratch build,
-the first voiced block after a rest of 100 ms or more went from a median of 5.0 to 1.6 ms, but the
-voiced mean only went from 5.2 to 4.6 and the voiced p95 rose from 9.2 to 10.5: a voice shifting up
-from the floor jumps a period back at once. It is not worth a change to the shifter on these numbers.
+Draining the delay to its floor during a rest was tried here and lost: the first voiced block after
+a rest of 100 ms or more went from a median of 5.0 to 1.6 ms, but the voiced p95 rose from 9.2 to
+10.5, because a voice shifting up from the floor jumps a period back at once. #112 moves it to a
+quarter period above the floor instead, which leaves that voice room, and on the same clip the
+voiced p95 fell to 5.6 ms (decision 0021).
 
 ## When correction is worth its cost
 
-What a slot pays depends on the voice. On a held tone the most it reaches is 2.5 ms at 880 Hz, 3.7 at
-440, 6.25 at 220, 11.2 at 110 and 14.6 at 82.5, and the mean sits near half that. A singer who has not
+What a slot pays depends on the voice. On a held tone the most it reaches is 1.3 ms at 880 Hz, 2.5 at
+440, 4.8 at 220, 9.4 at 110 and 12.0 at 82.5, and the mean sits near half that. Before #112 these
+were 2.5, 3.7, 6.25, 11.2 and 14.6. A singer who has not
 asked pays nothing, which a test holds bit for bit. Without a guide the corrector pulls to the nearest
 semitone at the same delay, so Aeon Karaoke's rule that a song without a guide is not corrected should
 carry over to this engine.
@@ -93,7 +96,7 @@ carry over to this engine.
 Whether it fits the budget needs a mic-path figure, and the hardware ones do not exist. As arithmetic
 across sources, against decision 0008's 20 to 30 ms with correction included, every path is over it
 today. A house mic over l16 is about 22 to 25 ms offline plus 9.8 to 20 ms of output on a Mac, 32 to
-45 ms, before correction adds anything; the 15 ms ceiling takes it to 47 to 60 ms. A phone is 71 to
+45 ms, before correction adds anything; the 13.5 ms ceiling takes it to 46 to 59 ms. A phone is 71 to
 114 ms with 20 ms frames and its capture, and correction adds about 5 ms on average to that. So the
 corrector's delay is one of several stages that have to shrink: #56's chosen playout delay takes
 about 11 ms off the engine's share, and the sender's frame size is worth 21.5 ms by #61's
@@ -116,8 +119,8 @@ a low, middle and high voice. It has not been tried through Opus.
 
 ## Not measured
 
-- Whether anyone hears the delay move, or how a singer takes 15 ms against 5.
+- Whether anyone hears the delay move, or how a singer takes 13.5 ms against 5.
 - Any hardware figure, or any phone stream.
-- The ceiling is a measured one: 717 frames against 720 at 82 Hz, with targets flipping by up to six
-  semitones. Working from the code alone, a shift that reverses during a jump's crossfade could pass
-  it by up to 37 frames. That did not occur in these runs.
+- The ceiling is a measured one: 637 frames against 648 at 82 Hz, with targets flipping by up to six
+  semitones. Since #112 neither read point can pass the newest sample when a shift reverses during a
+  jump's crossfade, which before could have passed the ceiling by up to 37 frames.
