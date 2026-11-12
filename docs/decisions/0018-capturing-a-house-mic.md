@@ -57,16 +57,23 @@ sweep passes half a sample. At 100 ppm, 4.8 blocks in 375 a second carry a move.
 The slot holds its trough, the lowest fill before a pull over 128 blocks, at a target. It opens at
 a block and 16 frames, 3 ms, the least that works on the output's clock and on most faster
 inputs. A pull the ring cannot fill plays what it has and silence after. When full pulls come
-back within one wake's pulls, the phase of the two clocks or a late wake ran the ring short, and
+back within eight, the most a 1024-frame callback takes, the phase of the two clocks or a late wake ran the ring short, and
 the target rises by all those pulls lacked and 16 frames, at most one input period over where it
 opened. A slower input meets this once, the first time its period slips past the output's, tens
 of seconds in, and jitter may bring it on once more; after that it never is short. Opening at the higher target instead would avoid
 that one gap and cost every same-clock mic 2.67 ms for good. We chose the lower delay.
 
 A longer run of short pulls is an input that stopped, and raises the target only by what its first
-pull lacked. A fill more than the headroom and a block over the target is a stall's backlog,
-dropped at once to the headroom over the target, which leaves the next trough on or above it
-whatever the phase.
+pull lacked. The limit is the ring's, not the output's, so it holds after the output moves.
+
+A backlog is judged by the trough: one that stays a whole window more than a period over the
+target is a stall's, dropped at once to the target. Drift never moves the trough that far between
+windows. A fill high for one wake is no backlog. An output that catches up after a late wake, as
+WASAPI shared does when it fills two periods and the timer clock's pacer does when it renders the
+blocks it fell behind on, pulls past the headroom at one wake and drains what the input delivered
+meanwhile. Judged by one pull's fill instead, a late wake a second under a 480-frame callback
+dropped healthy audio as backlog and then ran short: 12 short pulls and 11 drops in 6 s. Judged by
+the trough, nothing.
 
 ## The headroom
 
@@ -81,7 +88,11 @@ under a 128-frame input. And it raised the target by one short pull's lack where
 short, so a 480-frame input under a 480-frame callback, slipping a wake at a time, ran short ten
 times in its first half hour at 200 ppm instead of once.
 
-The voice learns the callback from the output's granted period when its input opens. The ring is a
+The voice learns the output's normal callback, `StreamInfo.period_frames`, when its input opens.
+A move to another output brings the new one through `OutputMoved`, to the live graph and to each
+graph swapped in later, and the slot primes and settles again under it, silent for a third of a
+second, as the jitter buffer re-anchors on a move. Kept at the old callback, a 128-frame mic moved
+from 128-frame to 480-frame callbacks never settled again. The ring is a
 fixed 4096 frames, so a period or a callback over 1024 frames is refused there.
 
 At the opening the slot stays silent one window longer than it needs to fill, reads the trough

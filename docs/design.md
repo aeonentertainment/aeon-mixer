@@ -51,13 +51,13 @@ into Node.
 Everything that crosses to or from the audio thread crosses one of five ways. Every ring has one
 producer and one consumer.
 
-| Crossing   | Mechanism                              | Direction                                                         | Carries                                                                                                    |
-| ---------- | -------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Parameters | triple buffer of a fixed-size `Params` | control to audio                                                  | gains, pans, mute, solo, effect knobs, stem gains, guide offsets                                           |
-| Commands   | SPSC ring of `Command`                 | control to audio                                                  | `Swap`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt` with an id; `SetGuide`, `ResetSlot` without |
-| Events     | SPSC ring of `Event`                   | audio to control                                                  | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`                     |
-| Retired    | SPSC ring of `Retired`                 | audio to control                                                  | graphs and guides the audio thread no longer holds, dropped on the control thread                          |
-| Audio      | SPSC rings of stereo f32 frames        | control to audio for push voices, audio to network for the return | PCM; the audio thread pushes or pulls one block at a time                                                  |
+| Crossing   | Mechanism                              | Direction                                                         | Carries                                                                                                                   |
+| ---------- | -------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Parameters | triple buffer of a fixed-size `Params` | control to audio                                                  | gains, pans, mute, solo, effect knobs, stem gains, guide offsets                                                          |
+| Commands   | SPSC ring of `Command`                 | control to audio                                                  | `Swap`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt` with an id; `SetGuide`, `ResetSlot`, `OutputMoved` without |
+| Events     | SPSC ring of `Event`                   | audio to control                                                  | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`                                    |
+| Retired    | SPSC ring of `Retired`                 | audio to control                                                  | graphs and guides the audio thread no longer holds, dropped on the control thread                                         |
+| Audio      | SPSC rings of stereo f32 frames        | control to audio for push voices, audio to network for the return | PCM; the audio thread pushes or pulls one block at a time                                                                 |
 
 Rules that follow:
 
@@ -218,7 +218,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   the retired ring and is dropped. Slot ports close within the network thread's next tick after
   that, since that thread owns the sockets and `destroy` only queues their removal. Nothing
   waits for it: the ports are ephemeral and no caller binds one again.
-- **Close.** `close` destroys any live mixer, stops the driver, joins the threads.
+- **Close.** `close` destroys any live mixer, stops the driver, joins the threads, and releases
+  every mixer still held, armed or live on a faulted engine, so no capture input outlives the
+  engine.
 - **Move.** The engine plays on the output the host pinned with `output.device` while the OS
   lists it, and otherwise on the OS default. When that changes, because the default moved or the
   open output went away, the engine stops the old stream and starts the new one with the same
@@ -341,6 +343,7 @@ pub enum Command {
     StopAt { id: u32, at_frame: u64, fade_frames: u32 },
     SetGuide { slot: u8, guide: Option<Box<Guide>> },
     ResetSlot { slot: u8 },
+    OutputMoved { callback_frames: u32 },   // after a move: the new output's callback, for every graph and each one swapped in later
 }
 #[derive(Clone, Copy)]
 pub enum Event {
@@ -379,7 +382,7 @@ pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder
 pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; chosen(codec) lets each stream choose; push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
 pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
 pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
-pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, hardware_frames, output_frames) -> Result before it goes live: the input's granted period, what the OS reports for its hardware, and the output's granted period, StreamInfo.period_frames, the most the output pulls at one wake
+pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, hardware_frames, output_frames) -> Result before it goes live: the input's granted period, what the OS reports for its hardware, and the output's normal callback, StreamInfo.period_frames; OutputMoved brings a moved output's
 pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push slot, a capture slot's wait from input to mix (8.4)
 
 // transport/src/
@@ -800,12 +803,17 @@ ring into the jitter buffer at the top of each block.
   lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
   16 frames for the wakes of two threads. A trough off target moves the delay one sample a block,
   each move spliced across the block by linear interpolation, so nothing steps. A pull the ring
-  cannot fill plays what it holds and silence after. When full pulls come back within one wake's
-  pulls, the phase of two clocks or a late wake ran the ring short, and the target rises by all
+  cannot fill plays what it holds and silence after. When full pulls come back within eight, the
+  most a 1024-frame callback takes, the phase of two clocks or a late wake ran the ring short, and the target rises by all
   those pulls lacked and 16 frames, at most one input period over where it opened. A longer run is
-  an input that stopped, and raises it only by what its first pull lacked. A fill more than its
-  headroom and a block over the target is a stall's backlog, dropped at once down to its headroom
-  over it. On the output's clock the trough never moves and holds the target exactly, 3 ms for a
+  an input that stopped, and raises it only by what its first pull lacked. A trough that stays a
+  whole window more than a period over the target is a stall's backlog, dropped at once to the
+  target. A fill high for one wake is no backlog: an output that catches up after a late wake, as
+  WASAPI shared and the timer clock do, pulls more than one callback's blocks at a wake, past the
+  headroom, and drains what the input delivered in the meantime at once. The slot drops none of
+  it, conceals nothing and counts no move for it. On a move to another output, the slot primes and
+  settles again, silent for a third of a second, under the new callback that `OutputMoved` brings.
+  On the output's clock the trough never moves and holds the target exactly, 3 ms for a
   128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
 - The fill before a pull is not how long a sample waited: a pull just after a delivery finds more
