@@ -840,8 +840,11 @@ ring into the jitter buffer at the top of each block.
   12.33 ms under a 480-frame callback. `latency_frames`, which the guide clock subtracts and the
   echo canceller follows, is that wait and what the OS reports for the input's hardware, and it
   moves only when the target does. `stats()` gives the wait as `playoutDelayMs`, zero until the
-  slot first plays. `concealed` counts pulls the ring could not fill, `resyncs` each move of the
-  delay and each dropped backlog, and the rest stay 0.
+  slot first plays, and zero from a move to a callback its ring cannot hold until the next move.
+  `concealed` counts pulls the ring could not fill, `resyncs` each move of the delay, each dropped
+  backlog and each move to a callback the ring cannot hold, and the rest stay 0. While the slot is
+  silent under such a callback, `latency_frames` keeps the hardware's share and the wait its target
+  sets; nothing plays, so the guide clock and the canceller have nothing to follow.
 - The echo canceller works on a capture slot whose mic is on the output's clock, as one on the
   same interface is: it finds the path to the frame and takes 20 dB or more out, as on any slot.
   A mic on its own clock moves the echo's delay a few samples a second between the slot's moves,
