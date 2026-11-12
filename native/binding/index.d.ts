@@ -229,6 +229,7 @@ export interface SlotParamsInput {
   voice: VoiceInput
   echoCancel: SwitchInput
   cleanup: CleanupInput
+  howlGuard: SwitchInput
   guideOffsetMs: number
 }
 
@@ -246,6 +247,7 @@ export interface SlotStatsInfo {
   /** Null while the canceller is off or has yet to find and learn the room's echo. */
   echo: EchoInfo | null
   playoutDelayMs: number
+  howlCatches: number
 }
 
 export interface StemGainsInput {

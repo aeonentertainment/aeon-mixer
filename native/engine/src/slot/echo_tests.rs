@@ -12,7 +12,9 @@ use crate::backing::{Backing, Planar, Stems, Transport};
 use crate::command::{Command, event_ring};
 use crate::driver::OfflineDriver;
 use crate::graph::Graph;
-use crate::params::{EchoCancelParams, EffectParams, params_channel};
+use crate::params::{
+    CorrectorParams, EchoCancelParams, EffectParams, HowlGuardParams, VoiceParams, params_channel,
+};
 
 const SECOND: usize = RATE as usize;
 
@@ -25,6 +27,8 @@ struct Room {
     played: Consumer<f32>,
     heard: Vec<f32>,
     path: Vec<(usize, f32)>,
+    /// Biquad coefficients and state: a resonance the room adds on the way, or none.
+    resonance: Option<([f32; 5], [f32; 4])>,
     singer: Vec<f32>,
     floor: Vec<f32>,
     mic: Producer<f32>,
@@ -38,6 +42,14 @@ struct Room {
 impl Source for Room {
     fn pull(&mut self, out: &mut [f32]) {
         while let Ok(sample) = self.played.pop() {
+            let sample = match &mut self.resonance {
+                Some((c, z)) => {
+                    let y = c[0] * sample + c[1] * z[0] + c[2] * z[1] - c[3] * z[2] - c[4] * z[3];
+                    *z = [sample, z[0], y, z[2]];
+                    y
+                }
+                None => sample,
+            };
             self.heard.push(sample);
         }
         for sample in out.iter_mut() {
@@ -68,6 +80,8 @@ struct Run {
     mic: Vec<f32>,
     out: Vec<f32>,
     report: Arc<EchoReport>,
+    /// The frame at the end of the block the howl guard first ducked in.
+    first_catch: Option<usize>,
 }
 
 struct Scene {
@@ -75,9 +89,11 @@ struct Scene {
     far: Vec<f32>,
     singer: Vec<f32>,
     path: Vec<(usize, f32)>,
+    resonance: Option<[f32; 5]>,
     shift_at: usize,
     shift: usize,
     echo_cancel: bool,
+    howl_guard: bool,
     /// The mic slot's other effects.
     effects: EffectParams,
     mic_gain: f32,
@@ -96,9 +112,11 @@ impl Scene {
             far,
             singer: vec![0.0; frames],
             path,
+            resonance: None,
             shift_at: usize::MAX,
             shift: 0,
             echo_cancel: true,
+            howl_guard: false,
             effects: EffectParams::default(),
             mic_gain: 1.0,
             seek: None,
@@ -115,6 +133,7 @@ impl Scene {
             played: played_out,
             heard: Vec::with_capacity(frames + BLOCK),
             path: self.path,
+            resonance: self.resonance.map(|c| (c, [0.0; 4])),
             singer: self.singer,
             floor: at_db(pink_noise(SECOND, 99), -60.0),
             mic: mic_in,
@@ -146,6 +165,7 @@ impl Scene {
             p.slots[0].gain = self.mic_gain;
             p.slots[0].effects = EffectParams {
                 echo_cancel: EchoCancelParams { enabled: self.echo_cancel },
+                howl_guard: HowlGuardParams { enabled: self.howl_guard },
                 ..self.effects
             };
             p.slots[1].pan = 1.0;
@@ -172,12 +192,16 @@ impl Scene {
         }));
         let mut out = Vec::with_capacity(frames);
         let mut interleaved = [0.0; 2 * BLOCK];
+        let mut first_catch = None;
         while out.len() + BLOCK <= frames {
             assert_no_alloc(|| driver.pump_into(&mut interleaved));
             out.extend(interleaved.iter().step_by(2));
+            if first_catch.is_none() && report.howl_catches() > 0 {
+                first_catch = Some(out.len());
+            }
         }
         let mic = std::iter::from_fn(|| mic_out.pop().ok()).collect();
-        Run { mic, out, report }
+        Run { mic, out, report, first_catch }
     }
 }
 
@@ -311,6 +335,79 @@ fn a_source_that_moves_its_delay_keeps_its_echo_cancelled() {
     assert!(after >= before - 3.0, "{after:.1} dB after the move, {before:.1} dB before");
 }
 
+/// The RBJ peaking filter, a room's resonance on the way back to the mic.
+fn peak(hz: f32, q: f32, gain_db: f32) -> [f32; 5] {
+    let a = 10f32.powf(gain_db / 40.0);
+    let w = std::f32::consts::TAU * hz / RATE as f32;
+    let alpha = w.sin() / (2.0 * q);
+    let a0 = 1.0 + alpha / a;
+    [
+        (1.0 + alpha * a) / a0,
+        -2.0 * w.cos() / a0,
+        (1.0 - alpha * a) / a0,
+        -2.0 * w.cos() / a0,
+        (1.0 - alpha / a) / a0,
+    ]
+}
+
+/// A phone 80 ms round trip from the speakers with a room that rings at 1 kHz: 12 dB under unity
+/// everywhere but there, where the loop is 3 dB over and runs away 37 dB a second. The room
+/// hears the slot at half, since it is one side of the mono mix.
+fn ringing_scene(frames: usize) -> Scene {
+    let mut scene = Scene::new(at_db(pink_noise(frames, 7), -40.0), vec![(80 * 48, 0.5)]);
+    scene.resonance = Some(peak(1000.0, 8.0, 15.0));
+    let singer = at_db(talker(frames, 180.0, 9), -26.0);
+    scene.singer.copy_from_slice(&singer);
+    scene.echo_cancel = false;
+    scene
+}
+
+/// The level, in dBFS, of the 1 kHz howl in `signal` over each 50 ms.
+fn howl_levels(signal: &[f32]) -> Vec<f32> {
+    let step = std::f32::consts::TAU * 1000.0 / RATE as f32;
+    signal
+        .as_chunks::<{ SECOND / 20 }>()
+        .0
+        .iter()
+        .map(|chunk| {
+            let (re, im) = chunk.iter().enumerate().fold((0.0, 0.0), |(re, im), (i, s)| {
+                (re + s * (step * i as f32).cos(), im + s * (step * i as f32).sin())
+            });
+            db(2.0 * (re * re + im * im).sqrt() / chunk.len() as f32)
+        })
+        .collect()
+}
+
+// The loop is the fixture's to prove: without the guard it runs to the clipper. With it, the
+// guard catches the howl while it is still quiet and the room never hears it loud.
+// Tolerances: caught within half a second of the howl passing -40 dBFS, and the howl never
+// above -20 dBFS in ten seconds. `aec:measure` has no howl to compare.
+#[test]
+fn a_phone_that_starts_to_howl_is_caught() {
+    let frames = 10 * SECOND;
+    let unguarded = howl_levels(&ringing_scene(frames).run().out);
+    assert!(unguarded.iter().any(|db| *db > -6.0), "the loop never ran away: {unguarded:?}");
+
+    let mut scene = ringing_scene(frames);
+    scene.howl_guard = true;
+    let run = scene.run();
+    let guarded = howl_levels(&run.out);
+    let rose = guarded.iter().position(|db| *db > -40.0).expect("the howl started");
+    let unguarded_rose = unguarded.iter().position(|db| *db > -40.0).expect("started");
+    let loudest = guarded.iter().copied().fold(f32::MIN, f32::max);
+    let catches = run.report.howl_catches();
+    let caught_ms = run.first_catch.expect("caught") * 1000 / SECOND;
+    let caught_db = unguarded[caught_ms / 50];
+    println!(
+        "the howl passed -40 dBFS at {} ms and was caught at {caught_ms} ms, at {caught_db:.1} \
+         dBFS; at most {loudest:.1} dBFS guarded; {catches} catches in 10 s",
+        rose * 50
+    );
+    assert_eq!(rose, unguarded_rose, "the same loop up to the catch");
+    assert!(caught_ms - rose * 50 <= 500, "caught {} ms after it rose", caught_ms - rose * 50);
+    assert!(loudest < -20.0, "the howl reached {loudest:.1} dBFS");
+}
+
 /// The frame in `[from, from + 100 ms)` where `signal` is loudest.
 fn loudest_from(signal: &[f32], from: usize) -> usize {
     (from..from + SECOND / 10)
@@ -373,6 +470,7 @@ fn room_for(path: Vec<(usize, f32)>, frames: usize) -> (Room, Producer<f32>, Con
         played: played_out,
         heard: Vec::with_capacity(frames + BLOCK),
         path,
+        resonance: None,
         singer: Vec::new(),
         floor: at_db(pink_noise(SECOND, 99), -60.0),
         mic: mic_in,
@@ -487,4 +585,39 @@ fn a_canceller_turned_off_after_learning_is_bit_for_bit_again() {
     }
     assert!(learned, "the canceller learned the room before it went off");
     assert_eq!(report.findings(), None);
+}
+
+// The guard sits ahead of the corrector and the voice, so what they do to the singer reaches it
+// only through the room. With correction at full strength and the voice two formant semitones
+// bright, the 3 dB loop above never runs away: the corrector's moving pitch and the voice's
+// formant filter break its coherence. So this loop is 6 dB over unity at 1 kHz, runs to the
+// clipper unguarded, and guarded is caught before it is ever louder than -20 dBFS.
+#[test]
+fn the_guard_catches_a_howl_with_the_corrector_and_the_voice_on() {
+    let effects = EffectParams {
+        corrector: CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 },
+        voice: VoiceParams { enabled: true, formant_semitones: 2.0 },
+        ..EffectParams::default()
+    };
+    let frames = 10 * SECOND;
+    let louder = vec![(80 * 48, 0.7)];
+    let mut unguarded = ringing_scene(frames);
+    unguarded.path = louder.clone();
+    unguarded.effects = effects;
+    let unguarded = howl_levels(&unguarded.run().out);
+    let loud = unguarded.iter().position(|db| *db > -20.0).expect("the loop ran away");
+    assert!(unguarded.iter().any(|db| *db > -6.0), "the loop never reached the clipper");
+    let mut scene = ringing_scene(frames);
+    scene.path = louder;
+    scene.effects = effects;
+    scene.howl_guard = true;
+    let run = scene.run();
+    let caught_ms = run.first_catch.expect("caught") * 1000 / SECOND;
+    let loudest = howl_levels(&run.out).into_iter().fold(f32::MIN, f32::max);
+    println!(
+        "unguarded, louder than -20 dBFS at {} ms; caught at {caught_ms} ms, at most {loudest:.1} dBFS",
+        loud * 50
+    );
+    assert!(caught_ms < loud * 50, "caught at {caught_ms} ms");
+    assert!(loudest < -20.0, "reached {loudest:.1} dBFS");
 }

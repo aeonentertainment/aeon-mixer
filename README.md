@@ -52,8 +52,9 @@ await engine.close();
   takes Opus over UDP from a phone or mediasoup, `l16` takes raw PCM over loopback from a house
   mic, and `push` takes PCM the host hands to `mixer.push`. Each slot has gain, pan, mute, solo,
   reverb, a pitch reading, a melody guide and pitch correction toward it, whose delay `stats()`
-  reports. A slot can also take the room's echo of the mix out of its input, adding no delay,
-  and `stats()` reports what the canceller found.
+  reports. A slot can also take the room's echo of the mix out of its input and duck itself when
+  its loop through the speakers starts to howl; both add no delay, and `stats()` reports what
+  they found.
 - **The backing** is any format Symphonia decodes, resampled to 48 kHz. The armed key and speed
   are rendered before `start` resolves. Live, it supports seek, pause, resume, a key change and
   stem gains, and `start`, `seek` and `resume` report the position the lyric clock follows.

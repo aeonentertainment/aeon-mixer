@@ -17,6 +17,7 @@ const SILENT_PUSH_STATS = {
   correctorMaxDelayMs: 0,
   echo: null,
   playoutDelayMs: 0,
+  howlCatches: 0,
 };
 
 /** Interleaved stereo at one level, which folds to that level. */
@@ -176,6 +177,11 @@ test("cleanup turns a room nobody sings over down by the gate's 18 dB less its 6
 // it come on with the canceller, would gate it 12 dB down
 test("turning on the echo canceller leaves cleanup off", async () => {
   expect(await roomTailDb([{ kind: "echo-cancel", enabled: true }])).toBeCloseTo(-50, 0);
+});
+
+// Broadband noise is no howl, so the guard passes it at its own level
+test("turning on the howl guard leaves cleanup off", async () => {
+  expect(await roomTailDb([{ kind: "howl-guard", enabled: true }])).toBeCloseTo(-50, 0);
 });
 
 test("level events read the slot's RMS and peak within a tenth of a decibel", async () => {

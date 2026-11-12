@@ -22,6 +22,7 @@ pub struct SlotStatsInfo {
     /// Null while the canceller is off or has yet to find and learn the room's echo.
     pub echo: Either<EchoInfo, Null>,
     pub playout_delay_ms: f64,
+    pub howl_catches: u32,
 }
 
 impl SlotStatsInfo {
@@ -41,6 +42,7 @@ impl SlotStatsInfo {
             corrector_max_delay_ms: ms(max_frames),
             echo: echo.findings().map_or(Either::B(Null), |findings| Either::A(findings.into())),
             playout_delay_ms: f64::from(stats.playout_delay_ms),
+            howl_catches: echo.howl_catches(),
         }
     }
 }

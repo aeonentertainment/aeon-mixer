@@ -58,6 +58,7 @@ function defaultSlotParams(): SlotParamsInput {
     voice: { enabled: false, formantSemitones: 0 },
     echoCancel: { enabled: false },
     cleanup: { enabled: false },
+    howlGuard: { enabled: false },
     guideOffsetMs: 0,
   };
 }
@@ -159,6 +160,9 @@ export class Mixer {
           break;
         case "cleanup":
           next.cleanup = { enabled: effect.enabled };
+          break;
+        case "howl-guard":
+          next.howlGuard = { enabled: effect.enabled };
           break;
       }
     }
@@ -394,10 +398,10 @@ export class Mixer {
 
 function defaultEffects(): Pick<
   SlotParamsInput,
-  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel"
+  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel" | "howlGuard"
 > {
-  const { corrector, reverb, voice, cleanup, echoCancel } = defaultSlotParams();
-  return { corrector, reverb, voice, cleanup, echoCancel };
+  const { corrector, reverb, voice, cleanup, echoCancel, howlGuard } = defaultSlotParams();
+  return { corrector, reverb, voice, cleanup, echoCancel, howlGuard };
 }
 
 function toGuideInput(guide: MelodyGuide): GuideInput {

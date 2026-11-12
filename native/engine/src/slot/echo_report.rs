@@ -2,14 +2,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub use kernels::EchoFindings;
 
-/// What a slot's echo canceller has found, published by the audio thread once a block for the
-/// control thread's `stats()`, while it has found anything.
+/// What a slot's echo stages have found, published by the audio thread once a block for the
+/// control thread's `stats()`: the canceller's findings while it has them, and how often the
+/// howl guard has ducked.
 #[derive(Debug, Default)]
 pub struct EchoReport {
     found: AtomicBool,
     path_frames: AtomicU32,
     bleed_db: AtomicU32,
     removed_db: AtomicU32,
+    howl_catches: AtomicU32,
 }
 
 impl EchoReport {
@@ -22,6 +24,10 @@ impl EchoReport {
         self.found.store(findings.is_some(), Ordering::Relaxed);
     }
 
+    pub fn publish_howl_catches(&self, catches: u32) {
+        self.howl_catches.store(catches, Ordering::Relaxed);
+    }
+
     /// One read may mix two blocks' fields; each is a one-second average, so it does not matter.
     pub fn findings(&self) -> Option<EchoFindings> {
         self.found.load(Ordering::Relaxed).then(|| EchoFindings {
@@ -29,5 +35,9 @@ impl EchoReport {
             bleed_db: f32::from_bits(self.bleed_db.load(Ordering::Relaxed)),
             removed_db: f32::from_bits(self.removed_db.load(Ordering::Relaxed)),
         })
+    }
+
+    pub fn howl_catches(&self) -> u32 {
+        self.howl_catches.load(Ordering::Relaxed)
     }
 }

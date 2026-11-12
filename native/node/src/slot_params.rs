@@ -2,8 +2,8 @@
 //! slot of the snapshot; the snapshot is published whole.
 
 use engine::params::{
-    CleanupParams, CorrectorParams, EchoCancelParams, EffectParams, ReverbParams, SlotParams,
-    VoiceParams,
+    CleanupParams, CorrectorParams, EchoCancelParams, EffectParams, HowlGuardParams, ReverbParams,
+    SlotParams, VoiceParams,
 };
 use napi_derive::napi;
 
@@ -20,6 +20,7 @@ pub struct SlotParamsInput {
     pub voice: VoiceInput,
     pub echo_cancel: SwitchInput,
     pub cleanup: CleanupInput,
+    pub howl_guard: SwitchInput,
     pub guide_offset_ms: f64,
 }
 
@@ -78,6 +79,7 @@ impl From<SlotParamsInput> for SlotParams {
                 },
                 echo_cancel: EchoCancelParams { enabled: input.echo_cancel.enabled },
                 cleanup: CleanupParams { enabled: input.cleanup.enabled },
+                howl_guard: HowlGuardParams { enabled: input.howl_guard.enabled },
             },
             guide_offset_ms: input.guide_offset_ms as f32,
         }

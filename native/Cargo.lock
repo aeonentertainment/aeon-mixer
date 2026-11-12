@@ -315,6 +315,7 @@ name = "measure-echo"
 version = "0.0.0"
 dependencies = [
  "cpu-time",
+ "devices",
  "engine",
  "kernels",
  "realfft",
