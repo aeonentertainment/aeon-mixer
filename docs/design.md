@@ -314,7 +314,7 @@ pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
     MasterLevel { rms_db: f32, peak_db: f32 },
-    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32 },
+    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, error_semitones: f32 },
     Position { frames: u64 },
     BackingEnded,
     Underrun,
@@ -492,9 +492,23 @@ export interface Mixer {
   setBackingKey(semitones: number): Promise<void>;
   setStemGain(kind: StemKind, gain: number): void;
   on(event: "level", listener: (slot: number, rmsDb: number, peakDb: number) => void): () => void;
+  /**
+   * Every 10 ms, on the guide's clock (section 3). `targetMidi` is the guide note the corrector
+   * pulls toward, after the backing's key shift: null with correction off, with no guide, or
+   * between notes, where it pulls toward the key. `errorSemitones` is the class it pulls toward
+   * less the reading, in the singer's own octave, so positive is flat: 0 with correction off or
+   * while unvoiced.
+   */
   on(
     event: "pitch",
-    listener: (slot: number, positionMs: number, hz: number, confidence: number) => void,
+    listener: (
+      slot: number,
+      positionMs: number,
+      hz: number,
+      confidence: number,
+      targetMidi: number | null,
+      errorSemitones: number,
+    ) => void,
   ): () => void;
   on(event: "position", listener: (positionMs: number) => void): () => void;
   on(event: "renderProgress", listener: (fraction: number) => void): () => void;
@@ -804,7 +818,10 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 - The guide follower is the Rust port of what the GStreamer element did: it splits a block at
   every note edge so the target changes on the sample the guide names, and posts a reading
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
-- At strength zero the corrector is bypassed with no delay and still reads pitch.
+- At strength zero the corrector is bypassed with no delay and still reads pitch. Its readings
+  then carry no target and no error, since nothing pulls.
+- A reading carries the note the follower set for the run it closes and the kernel's error at
+  that reading, so the target and the error a host shows are the ones the shifter acts on.
 - The slot drives two stages from `slot::effects`, each in place on its mono block.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
