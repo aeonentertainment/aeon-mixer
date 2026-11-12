@@ -51,13 +51,13 @@ into Node.
 Everything that crosses to or from the audio thread crosses one of five ways. Every ring has one
 producer and one consumer.
 
-| Crossing   | Mechanism                              | Direction                                                         | Carries                                                                                                                   |
-| ---------- | -------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Parameters | triple buffer of a fixed-size `Params` | control to audio                                                  | gains, pans, mute, solo, effect knobs, stem gains, guide offsets                                                          |
-| Commands   | SPSC ring of `Command`                 | control to audio                                                  | `Swap`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt` with an id; `SetGuide`, `ResetSlot`, `OutputMoved` without |
-| Events     | SPSC ring of `Event`                   | audio to control                                                  | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`                                    |
-| Retired    | SPSC ring of `Retired`                 | audio to control                                                  | graphs and guides the audio thread no longer holds, dropped on the control thread                                         |
-| Audio      | SPSC rings of stereo f32 frames        | control to audio for push voices, audio to network for the return | PCM; the audio thread pushes or pulls one block at a time                                                                 |
+| Crossing   | Mechanism                              | Direction                                                         | Carries                                                                                                    |
+| ---------- | -------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Parameters | triple buffer of a fixed-size `Params` | control to audio                                                  | gains, pans, mute, solo, effect knobs, stem gains, guide offsets                                           |
+| Commands   | SPSC ring of `Command`                 | control to audio                                                  | `Swap`, `Start`, `Seek`, `Pause`, `Resume`, `SetKey`, `StopAt` with an id; `SetGuide`, `ResetSlot` without |
+| Events     | SPSC ring of `Event`                   | audio to control                                                  | `Ack{id, position}`, `Level`, `Pitch`, `Position`, `BackingEnded`, `Underrun`, `Fault`                     |
+| Retired    | SPSC ring of `Retired`                 | audio to control                                                  | graphs and guides the audio thread no longer holds, dropped on the control thread                          |
+| Audio      | SPSC rings of stereo f32 frames        | control to audio for push voices, audio to network for the return | PCM; the audio thread pushes or pulls one block at a time                                                  |
 
 Rules that follow:
 
@@ -81,7 +81,10 @@ Rules that follow:
   one.
 - Moving to another output is not a crossing. The device follower (8.3) holds the audio thread
   only while no stream runs: it stops the old stream, which hands the audio thread back, calls
-  `Movable::moved` on it, and starts the new stream with it.
+  `Movable::moved` on it, and starts the new stream with it. As each stream's `start` returns, the
+  follower writes the stream's granted period into the `AtomicU32` that `Movable::callback_frames`
+  gave it before the first open. The audio thread reads it once a block and hands a change to every
+  graph it holds, so the new callback needs no command and no round trip through the binding.
 - A panic inside render is caught at the callback boundary. Every block from there is silence,
   the audio thread pushes `Fault` again each block until the event ring has room for it, and the
   engine refuses further commands until the host closes it.
@@ -225,7 +228,8 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   lists it, and otherwise on the OS default. When that changes, because the default moved or the
   open output went away, the engine stops the old stream and starts the new one with the same
   audio thread, so the live mixer and its song carry on after a gap. The playhead holds through
-  the gap, every slot starts its stream again on the new clock, the first 5 ms fade in, and
+  the gap, every slot starts its stream again on the new clock, a capture slot under the new
+  output's callback, the first 5 ms fade in, and
   `outputChanged` fires with the new `output`. Decision
   [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
 - **Faults.** A caught panic, or a lost output with nothing to move to within a second, emits
@@ -311,7 +315,7 @@ pub struct TimerDriver;
 /// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
 /// test's render. `moved` is called between streams, never on the audio thread: the next block
 /// starts every slot's stream again and fades in over 5 ms.
-pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); }
+pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); fn callback_frames(&self) -> Arc<AtomicU32>; }   // callback_frames: where the follower writes each stream's StreamInfo.period_frames as its start returns
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
 pub struct OfflineDriver;
@@ -343,7 +347,6 @@ pub enum Command {
     StopAt { id: u32, at_frame: u64, fade_frames: u32 },
     SetGuide { slot: u8, guide: Option<Box<Guide>> },
     ResetSlot { slot: u8 },
-    OutputMoved { callback_frames: u32 },   // after a move: the new output's callback, for every graph and each one swapped in later
 }
 #[derive(Clone, Copy)]
 pub enum Event {
@@ -382,7 +385,7 @@ pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder
 pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; chosen(codec) lets each stream choose; push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
 pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
 pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
-pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, hardware_frames, output_frames) -> Result before it goes live: the input's granted period, what the OS reports for its hardware, and the output's normal callback, StreamInfo.period_frames; OutputMoved brings a moved output's
+pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, hardware_frames, output_frames) -> Result before it goes live: the input's granted period, what the OS reports for its hardware, and the output's normal callback, StreamInfo.period_frames; after a move the audio thread hands it the new one from Movable::callback_frames
 pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push slot, a capture slot's wait from input to mix (8.4)
 
 // transport/src/
@@ -676,7 +679,8 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   reopens it. A reopen that stays silent doubles the wait for the next, up to 6.4 s, until a
   callback comes. A stall never faults the engine.
 - A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
-  stream with it on the same `Stats`. The gap is from the wake to the new stream running.
+  stream with it on the same `Stats`. As every stream's `start` returns, the first one's too, the
+  follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell. The gap is from the wake to the new stream running.
 - With nothing to play on, or an output that refuses to open, it waits for the next wake and
   tries again every 100 ms for up to a second, then fails the stats, which faults the engine.
 - The binding reads `Current` for `engine.output`, and its events thread sends `outputChanged`
@@ -812,7 +816,11 @@ ring into the jitter buffer at the top of each block.
   WASAPI shared and the timer clock do, pulls more than one callback's blocks at a wake, past the
   headroom, and drains what the input delivered in the meantime at once. The slot drops none of
   it, conceals nothing and counts no move for it. On a move to another output, the slot primes and
-  settles again, silent for a third of a second, under the new callback that `OutputMoved` brings.
+  settles again, silent for a third of a second, under the new callback, which the audio thread
+  reads from the follower's cell at its next block. The new stream may render before its `start`
+  returns and the cell is written, but nothing plays under the old headroom: a slot that re-primes
+  is silent through one whole settling window, 0.34 s, before it plays a sample, and a change of
+  callback while it is silent starts it over under the new one.
   On the output's clock the trough never moves and holds the target exactly, 3 ms for a
   128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.

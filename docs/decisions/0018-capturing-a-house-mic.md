@@ -89,9 +89,13 @@ short, so a 480-frame input under a 480-frame callback, slipping a wake at a tim
 times in its first half hour at 200 ppm instead of once.
 
 The voice learns the output's normal callback, `StreamInfo.period_frames`, when its input opens.
-A move to another output brings the new one through `OutputMoved`, to the live graph and to each
-graph swapped in later, and the slot primes and settles again under it, silent for a third of a
-second, as the jitter buffer re-anchors on a move. Kept at the old callback, a 128-frame mic moved
+A move to another output brings the new one as the follower starts the new stream: it writes the
+stream's granted period into a cell the audio thread reads once a block, which hands it to the live
+graph and to each one swapped in later. The slot primes and settles again under it, silent for a
+third of a second, as the jitter buffer re-anchors on a move. Nothing plays under the old
+headroom: the stream may render before the cell is written, but the slot is silent then and starts
+over when the callback changes. A command from the binding on `outputChanged` would have arrived a
+5 ms drain and a turn of the event loop later, and been lost to a full command ring. Kept at the old callback, a 128-frame mic moved
 from 128-frame to 480-frame callbacks never settled again. The ring is a
 fixed 4096 frames, so a period or a callback over 1024 frames is refused there.
 
