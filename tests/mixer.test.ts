@@ -19,6 +19,10 @@ function right(interleaved: Float32Array): number[] {
   return Array.from(interleaved.filter((_, i) => i % 2 === 1));
 }
 
+function firstSound(samples: number[]) {
+  return samples.findIndex((sample) => sample !== 0);
+}
+
 function onceLevel(mixer: Mixer): Promise<[slot: number, rmsDb: number, peakDb: number]> {
   return new Promise((resolve) => {
     const off = mixer.on("level", (slot, rmsDb, peakDb) => {
@@ -204,6 +208,59 @@ test("pitch events read a sung tone's frequency on the slot that sang it", async
   await engine.close();
 });
 
+/**
+ * The first voiced reading of a slot singing 30 cents above A3, 0.7 of a semitone under the
+ * guide's B flat 3, with correction `enabled` or not.
+ */
+async function firstVoicedReading(enabled: boolean) {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  // With no backing the guide's clock holds still; the offset parks it inside the B flat
+  mixer.setSlotGuide(0, { notes: [{ midi: 58, startMs: 0, endMs: 1000 }], keyMask: 0 }, 500);
+  mixer.setSlotEffects(0, [{ kind: "pitch-correction", enabled, strength: 1, retuneMs: 0 }]);
+  const hz = 220 * 2 ** (30 / 1200);
+  let frame = 0;
+  // Six harmonics, so the detector reads it as it reads a voice
+  const voiceBlock = () => {
+    const block = new Float32Array(2 * BLOCK);
+    for (let i = 0; i < BLOCK; i += 1, frame += 1) {
+      let sample = 0;
+      for (let h = 1; h <= 6; h += 1)
+        sample += Math.sin((2 * Math.PI * hz * h * frame) / 48000) / h;
+      block[2 * i] = 0.25 * sample;
+      block[2 * i + 1] = 0.25 * sample;
+    }
+    return block;
+  };
+  const reading = new Promise<[targetMidi: number | null, errorSemitones: number]>((resolve) => {
+    const off = mixer.on("pitch", (_slot, _positionMs, _hz, confidence, targetMidi, error) => {
+      if (confidence < 0.9) return;
+      off();
+      resolve([targetMidi, error]);
+    });
+  });
+  await startLive(engine, mixer);
+  for (let i = 0; i < Math.ceil(9600 / BLOCK); i += 1) {
+    mixer.push(0, voiceBlock());
+    engine.pump(1);
+  }
+  const shown = await reading;
+  await destroyLive(engine, mixer);
+  await engine.close();
+  return shown;
+}
+
+test("a corrected slot's pitch events name the guide note and how far flat the voice is", async () => {
+  const [targetMidi, errorSemitones] = await firstVoicedReading(true);
+  expect(targetMidi).toBe(58);
+  // 10 cents, the corrector tests' tolerance for the detector's error
+  expect(Math.abs(errorSemitones - 0.7)).toBeLessThan(0.1);
+});
+
+test("with correction off a pitch event names no target and no error", async () => {
+  expect(await firstVoicedReading(false)).toEqual([null, 0]);
+});
+
 test("destroy swaps silence in, resolves once the graph is back, and the mixer refuses after", async () => {
   const engine = await openEngine({ output: { offline: true } });
   const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
@@ -302,6 +359,9 @@ test("ranges are checked before anything crosses", async () => {
     mixer.setSlotEffects(0, [{ kind: "reverb", enabled: true, roomSize: 0.5, mix: -0.1 }]),
   ).toThrow(RangeError);
   expect(() =>
+    mixer.setSlotEffects(0, [{ kind: "voice", enabled: true, formantSemitones: 13 }]),
+  ).toThrow(RangeError);
+  expect(() =>
     mixer.setSlotGuide(0, { notes: [{ midi: 128, startMs: 0, endMs: 1 }], keyMask: 0 }),
   ).toThrow(RangeError);
   expect(() =>
@@ -314,5 +374,41 @@ test("ranges are checked before anything crosses", async () => {
   await expect(mixer.seek(1000)).rejects.toThrow(/backing/);
   await expect(mixer.setBackingKey(2)).rejects.toThrow(/backing/);
   expect(() => mixer.setStemGain("instrumental", 0.5)).toThrow(/backing/);
+  await engine.close();
+});
+
+// A voice reaches the slot through the API: brighter changes the sound, and its first sample comes
+// out on the same frame as the dry voice's, since a formant move adds no delay
+test("a voice changes the sound and not when it plays", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const render = async (effects: Parameters<Mixer["setSlotEffects"]>[1]) => {
+    const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+    mixer.setSlot(0, { pan: -1 });
+    mixer.setSlotEffects(0, effects);
+    await startLive(engine, mixer);
+    let frame = 0;
+    const out: number[] = [];
+    for (let block = 0; block < 60; block += 1) {
+      const pcm = new Float32Array(2 * BLOCK);
+      for (let i = 0; i < BLOCK; i += 1, frame += 1) {
+        let sample = 0;
+        if (frame >= 1000) {
+          const t = (frame - 1000) / 48000;
+          for (let h = 1; h <= 12; h += 1) sample += Math.cos(2 * Math.PI * 147 * h * t) / h;
+        }
+        pcm[2 * i] = 0.2 * sample;
+        pcm[2 * i + 1] = 0.2 * sample;
+      }
+      mixer.push(0, pcm);
+      out.push(...left(engine.pump(1)));
+    }
+    await destroyLive(engine, mixer);
+    return out;
+  };
+  const dry = await render([]);
+  const brighter = await render([{ kind: "voice", enabled: true, formantSemitones: 2 }]);
+  expect(firstSound(dry)).toBeGreaterThan(0);
+  expect(firstSound(brighter)).toBe(firstSound(dry));
+  expect(brighter.some((sample, i) => Math.abs(sample - (dry[i] ?? 0)) > 1e-3)).toBe(true);
   await engine.close();
 });

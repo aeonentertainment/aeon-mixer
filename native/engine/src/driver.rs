@@ -22,6 +22,15 @@ pub trait Driver {
     fn start(self: Box<Self>, render: Render) -> Result<Running, DriverError>;
 }
 
+/// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
+/// test's render. The follower holds it only while no stream runs, so moving it is not a crossing.
+pub trait Movable: Send + 'static {
+    /// One block, as `Render` does.
+    fn render(&mut self, out: Stereo<'_>);
+    /// Called between streams, never on the audio thread: one clock stopped and another starts.
+    fn moved(&mut self);
+}
+
 pub struct Running {
     pub info: StreamInfo,
     stop: Option<Box<dyn FnOnce() + Send>>,

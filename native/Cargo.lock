@@ -138,6 +138,7 @@ dependencies = [
  "objc2-core-audio-types",
  "objc2-core-foundation",
  "windows",
+ "windows-core",
 ]
 
 [[package]]
@@ -306,6 +307,18 @@ dependencies = [
  "opus",
  "rustfft",
  "serde_json",
+]
+
+[[package]]
+name = "measure-latency"
+version = "0.0.0"
+dependencies = [
+ "assert_no_alloc",
+ "devices",
+ "engine",
+ "opus",
+ "rtrb",
+ "rustfft",
 ]
 
 [[package]]

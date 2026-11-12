@@ -5,6 +5,8 @@
 use engine::command::Event;
 use napi_derive::napi;
 
+use crate::engine::OutputInfo;
+
 #[napi(discriminant = "kind", discriminant_case = "camelCase")]
 pub enum NativeEvent {
     Ack {
@@ -25,6 +27,8 @@ pub enum NativeEvent {
         position_ms: f64,
         hz: f64,
         confidence: f64,
+        target_midi: Option<i32>,
+        error_semitones: f64,
     },
     Position {
         frames: f64,
@@ -43,6 +47,12 @@ pub enum NativeEvent {
     RenderFinished {
         job: u32,
     },
+    /// The engine moved to another output: where it plays now, and how long the room heard
+    /// nothing.
+    OutputChanged {
+        output: OutputInfo,
+        gap_ms: f64,
+    },
 }
 
 impl From<Event> for NativeEvent {
@@ -59,12 +69,16 @@ impl From<Event> for NativeEvent {
             Event::MasterLevel { rms_db, peak_db } => {
                 Self::MasterLevel { rms_db: f64::from(rms_db), peak_db: f64::from(peak_db) }
             }
-            Event::Pitch { slot, position_ms, hz, confidence } => Self::Pitch {
-                slot: u32::from(slot),
-                position_ms,
-                hz: f64::from(hz),
-                confidence: f64::from(confidence),
-            },
+            Event::Pitch { slot, position_ms, hz, confidence, target_midi, error_semitones } => {
+                Self::Pitch {
+                    slot: u32::from(slot),
+                    position_ms,
+                    hz: f64::from(hz),
+                    confidence: f64::from(confidence),
+                    target_midi: target_midi.map(i32::from),
+                    error_semitones: f64::from(error_semitones),
+                }
+            }
             Event::Position { frames } => Self::Position { frames: frames as f64 },
             Event::BackingEnded => Self::BackingEnded,
             Event::Underrun => Self::Underrun,

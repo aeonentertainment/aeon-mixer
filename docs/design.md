@@ -128,10 +128,14 @@ What the engine reports so the rest of the device can follow:
 The topology is fixed. Adding a feature means adding a stage to a chain, a stem to the backing
 path or an output to the master, never a general graph.
 
-**A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, reverb,
-gain and pan into the stereo bus. The meter sits after the corrector and before the reverb and
-gain, so the level words tell the singer about their singing, not the room, and mute never
-changes them. The corrector costs a singer who asks for it a delay that moves with the voice,
+**A slot**, in order: source, echo cancel when compiled in, pitch corrector, meter, voice, reverb,
+gain and pan into the stereo bus. The meter sits after the corrector and before the voice, reverb
+and gain, so the level words tell the singer about their singing, not the effect or the room, and
+mute never changes them. Pitch readings come from the corrector, ahead of the voice, so the
+display's trail and the score judge the singing. The voice moves formants only and adds no sample.
+It comes after the corrector, which reads the singer's own voice, and before the reverb, so the
+room hears the voice the singer chose. Decision [0014](decisions/0014-the-first-voices.md) has the
+reasons. The corrector costs a singer who asks for it a delay that moves with the voice,
 from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
 stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
 the voice over bit for bit with no delay and still reads pitch. The source is a
@@ -223,7 +227,6 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 ```
 src/                    TypeScript public API, the only thing Aeon Karaoke imports
 tests/                  TypeScript tests through the binding, on the offline driver
-tools/                  measurement scripts a person runs: measure-sink, measure-latency
 native/
   Cargo.toml            the workspace
   engine/               pure core: no device, socket or Node
@@ -245,6 +248,7 @@ native/
   devices/              Driver implementations: coreaudio, wasapi, alsa, the timer clock;
                         the measure-sink and measure-clock binaries
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
+  tools/measure-latency/  the mic path's latency: the engine's share offline, the output's on hardware
   tools/replay/         a slot's recording through the real chain on the offline driver
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
@@ -295,7 +299,9 @@ pub struct Params { pub slots: [SlotParams; MAX_SLOTS], pub stems: StemGains }
 #[derive(Clone, Copy)]
 pub struct SlotParams { pub gain: f32, pub pan: f32, pub mute: bool, pub solo: bool, pub effects: EffectParams, pub guide_offset_ms: f32 }
 #[derive(Clone, Copy)]
-pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams }
+pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams }
+#[derive(Clone, Copy)]
+pub struct VoiceParams { pub enabled: bool, pub formant_semitones: f32 }   // -12 to 12; off is the voice itself
 
 // engine/src/command.rs
 pub enum Command {
@@ -314,7 +320,7 @@ pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
     MasterLevel { rms_db: f32, peak_db: f32 },
-    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32 },
+    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, error_semitones: f32 },
     Position { frames: u64 },
     BackingEnded,
     Underrun,
@@ -444,7 +450,8 @@ export interface SlotSettings {
 }
 export type SlotEffect =
   | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
-  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number };
+  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
+  | { kind: "voice"; enabled: boolean; formantSemitones: number };
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
   keyMask: number; // the key's pitch classes as bits, C in bit 0
@@ -492,9 +499,23 @@ export interface Mixer {
   setBackingKey(semitones: number): Promise<void>;
   setStemGain(kind: StemKind, gain: number): void;
   on(event: "level", listener: (slot: number, rmsDb: number, peakDb: number) => void): () => void;
+  /**
+   * Every 10 ms, on the guide's clock (section 3). `targetMidi` is the guide note the corrector
+   * pulls toward, after the backing's key shift: null with correction off, with no guide, or
+   * between notes, where it pulls toward the key. `errorSemitones` is the class it pulls toward
+   * less the reading, in the singer's own octave, so positive is flat: 0 with correction off or
+   * while unvoiced.
+   */
   on(
     event: "pitch",
-    listener: (slot: number, positionMs: number, hz: number, confidence: number) => void,
+    listener: (
+      slot: number,
+      positionMs: number,
+      hz: number,
+      confidence: number,
+      targetMidi: number | null,
+      errorSemitones: number,
+    ) => void,
   ): () => void;
   on(event: "position", listener: (positionMs: number) => void): () => void;
   on(event: "renderProgress", listener: (fraction: number) => void): () => void;
@@ -804,17 +825,29 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 - The guide follower is the Rust port of what the GStreamer element did: it splits a block at
   every note edge so the target changes on the sample the guide names, and posts a reading
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
-- At strength zero the corrector is bypassed with no delay and still reads pitch.
-- The slot drives two stages from `slot::effects`, each in place on its mono block.
+- At strength zero the corrector is bypassed with no delay and still reads pitch. Its readings
+  then carry no target and no error, since nothing pulls.
+- A reading carries the note the follower set for the run it closes and the kernel's error at
+  that reading, so the target and the error a host shows are the ones the shifter acts on.
+- The slot drives three stages from `slot::effects`, each in place on its mono block.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
   calls `on_reading` per reading for the slot to push as `Event::Pitch`.
-  `Reverb::process(params, block)` takes the reverb knobs.
+  `Voice::process(params, block)` runs the voice shifter at the voice's formant move and no
+  transposition, so it adds no sample. `Reverb::process(params, block)` takes the reverb knobs.
+- A voice is a formant move in semitones from the singer's own. Voice names and their settings
+  are presets and live with the host. Off, or on at 0, the stage hands the voice over bit for
+  bit.
+- A voice that moves pitch will come through the corrector's shifter, which takes the
+  transposition into its own ratio, so a voice and correction cost one delay and not two, and
+  `correctorDelayMs` reports it. Its knob joins the contract with that work, not before.
 
 Done when: the corrector through its shim pulls harmonic tones from 82 to 880 Hz onto the asked
 pitch class within the tolerances the C++ tests use; the stretcher moves a tone by the asked
 semitones; the follower changes target within one block of each edge of a known guide; the
-pitch event cadence is 10 ms.
+pitch event cadence is 10 ms; each first voice in decision 0014 moves a known vowel's formants
+within the tolerances its test names and leaves its pitch, an off voice is bit-identical to none,
+and a click and a tone through a voice leave on the sample they entered.
 
 ### 8.7 Return branch: `engine/src/return_ring.rs`, the push in `engine/src/master.rs`, `transport/src/{packetizer,send}.rs`
 
@@ -850,11 +883,17 @@ section 7.2 with typed events and validation of ranges before anything crosses.
 Done when: every method and event in 7.2 exists, `vp check` passes with no `any`, and the
 TypeScript suite exercises them on the offline engine.
 
-### 8.9 Tools: `tools/`
+### 8.9 Tools: `native/tools/`
 
-Scripts a person runs on real hardware. `measure-sink` is in `devices`. `measure-latency`
-plays a click through a slot and records it at the output to give the mic-path number. Their
+Tools live in the Rust workspace, because what they measure is the engine. `measure-sink` is in
+`devices`. `measure-latency` gives the mic-path number in two parts: the engine's share of each
+ingest kind on the offline driver, which opens nothing and which a test holds, and the output's
+share on real hardware, which a person runs with `device --open-device`. Decision
+[0006](decisions/0006-measuring-latency.md) has how it works and what its figures cannot say. Their
 output is the evidence a PR quotes.
+
+A new ingest kind is a variant of `Ingest`, and a new stage on the mic path, such as correction or
+echo cancelling, is a new row in the offline table with its own guard.
 
 `native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
 chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
@@ -885,7 +924,7 @@ GStreamer and the `aeonpitch` element are deleted in a later PR.
   allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
   so the engine does not.
 - DSP tests feed known signals and assert within tolerances named in the test.
-- Timing claims carry a number from `tools/` or `measure-sink`, and the number goes in the PR
+- Timing claims carry a number from `measure-latency` or `measure-sink`, and the number goes in the PR
   and, when it decides something, in `docs/decisions`.
 - CI builds and tests the workspace on macOS, Windows and Linux. Device backends compile behind
   a feature so a runner without hardware still builds them.

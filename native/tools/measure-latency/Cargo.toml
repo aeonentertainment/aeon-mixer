@@ -1,0 +1,21 @@
+[package]
+name = "measure-latency"
+description = "The mic path's latency: the engine's share on the offline driver, and the output's share on real hardware."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Opens real audio devices. Off by default so the offline mode builds and runs with no audio stack.
+hardware = ["dep:devices", "devices/hardware"]
+
+[dependencies]
+devices = { workspace = true, optional = true }
+engine = { workspace = true }
+opus = "0.4.0"
+rtrb = "0.4.1"
+rustfft = "6.4.1"
+
+[dev-dependencies]
+assert_no_alloc = "1.1"

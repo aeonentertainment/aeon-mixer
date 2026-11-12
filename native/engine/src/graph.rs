@@ -123,10 +123,10 @@ mod tests {
     use super::*;
     use crate::backing::test_support::SECOND;
     use crate::backing::{Planar, Stems};
-    use crate::block::BLOCK;
+    use crate::block::{BLOCK, RATE};
     use crate::command::{Event, EventConsumer, event_ring};
     use crate::master::KNEE;
-    use crate::params::ReverbParams;
+    use crate::params::{ReverbParams, VoiceParams};
     use crate::slot::meter::{FLOOR_DB, WINDOW_FRAMES};
     use crate::slot::source::Source;
     use crate::slot::source::fixtures::{Constant, Sine};
@@ -355,5 +355,30 @@ mod tests {
         let levels = bench.levels();
         let Event::Level { peak_db, .. } = levels[2] else { panic!("{:?}", levels[2]) };
         assert_eq!(peak_db, FLOOR_DB, "the meter heard the reverb");
+    }
+
+    // The pitch readings and the slot's level come from ahead of the voice, so the trail, the score
+    // and the level words judge the singing: a voice changes the sound and none of them
+    #[test]
+    fn a_voice_changes_the_sound_and_not_the_readings_or_the_level() {
+        let events = |voice: VoiceParams| {
+            let mut bench =
+                Bench::new(Graph::new(vec![Slot::new(Box::new(Sine::new(220.0, 0.5)))]));
+            bench.params.slots[0].effects.voice = voice;
+            let mut out = Vec::new();
+            for _ in 0..(RATE as usize / 2).div_ceil(BLOCK) {
+                bench.render();
+                out.extend(bench.left);
+            }
+            let slot_events = std::iter::from_fn(|| bench.drain.pop())
+                .filter(|e| matches!(e, Event::Pitch { .. } | Event::Level { .. }));
+            (slot_events.collect::<Vec<Event>>(), out)
+        };
+        let (plain, dry) = events(VoiceParams::default());
+        let (voiced, wet) = events(VoiceParams { enabled: true, formant_semitones: -2.0 });
+        assert!(plain.iter().any(|e| matches!(e, Event::Pitch { .. })), "no readings");
+        assert!(plain.iter().any(|e| matches!(e, Event::Level { .. })), "no level");
+        assert_eq!(plain, voiced);
+        assert_ne!(dry, wet, "the voice changed nothing");
     }
 }

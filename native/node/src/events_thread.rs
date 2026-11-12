@@ -1,6 +1,6 @@
 //! The events thread of docs/design.md section 2: every 5 ms it drains the event ring, drops
-//! what the retired ring holds, reads the device's stats and the render jobs' progress, and
-//! calls one threadsafe function with the batch. It is the one consumer of both rings, so the
+//! what the retired ring holds, reads the device's stats, the follower's moves and the render
+//! jobs' progress, and calls one threadsafe function with the batch. It is the one consumer of both rings, so the
 //! audio thread never shares an index with anyone else.
 
 use std::sync::Arc;
@@ -9,12 +9,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use devices::Stats;
+use devices::{Current, Stats};
 use engine::command::{EventConsumer, Retired, RetiredConsumer};
 use napi::Status;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 
 use crate::backing::{SharedRenderJob, lock};
+use crate::engine::OutputInfo;
 use crate::event::NativeEvent;
 
 pub const DRAIN_INTERVAL: Duration = Duration::from_millis(5);
@@ -35,12 +36,13 @@ struct RenderWatch {
 }
 
 impl EventsThread {
-    /// `stats` is the device stream's record, read for underruns and failure; the offline clock
-    /// has none.
+    /// `stats` is the device stream's record, read for underruns and failure, and `current` the
+    /// follower's, read for moves; the offline clock has neither.
     pub fn spawn(
         events: EventConsumer,
         retired: RetiredConsumer,
         stats: Option<Arc<Stats>>,
+        current: Option<Current>,
         deliver: Deliver,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
@@ -51,6 +53,8 @@ impl EventsThread {
             stats,
             underruns_seen: 0,
             failed_seen: false,
+            current,
+            moves_seen: 0,
             new_watches,
             renders: Vec::new(),
         };
@@ -93,6 +97,8 @@ struct Drain {
     stats: Option<Arc<Stats>>,
     underruns_seen: u64,
     failed_seen: bool,
+    current: Option<Current>,
+    moves_seen: u32,
     new_watches: Receiver<RenderWatch>,
     renders: Vec<RenderWatch>,
 }
@@ -120,6 +126,15 @@ impl Drain {
                 self.failed_seen = true;
                 batch.push(NativeEvent::Fault);
             }
+        }
+        if let Some(playing) = self.current.as_ref().map(Current::get)
+            && playing.moves != self.moves_seen
+        {
+            self.moves_seen = playing.moves;
+            batch.push(NativeEvent::OutputChanged {
+                gap_ms: playing.gap.as_secs_f64() * 1000.0,
+                output: OutputInfo::new(playing.info, Some(playing.output)),
+            });
         }
         self.renders.extend(self.new_watches.try_iter());
         self.renders.retain_mut(|watch| {

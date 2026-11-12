@@ -16,7 +16,8 @@ import { finiteIn, integerIn, pcm } from "./validate.ts";
 
 /** What a mixer needs from its engine. Internal to the package. */
 export interface MixerHost extends RenderHost {
-  readonly output: OutputInfo;
+  /** The output playing now; it changes when the engine moves. */
+  output(): OutputInfo;
   /**
    * Sends a command carrying an id and resolves on its ack with the backing position. `onTimeout`
    * hears the rejection when no ack comes in time.
@@ -54,6 +55,7 @@ function defaultSlotParams(): SlotParamsInput {
     solo: false,
     corrector: { enabled: false, strength: 0, retuneMs: 0 },
     reverb: { enabled: false, roomSize: 0, mix: 0 },
+    voice: { enabled: false, formantSemitones: 0 },
     guideOffsetMs: 0,
   };
 }
@@ -142,6 +144,12 @@ export class Mixer {
             enabled: effect.enabled,
             roomSize: finiteIn("roomSize", effect.roomSize, 0, 1),
             mix: finiteIn("mix", effect.mix, 0, 1),
+          };
+          break;
+        case "voice":
+          next.voice = {
+            enabled: effect.enabled,
+            formantSemitones: finiteIn("formantSemitones", effect.formantSemitones, -12, 12),
           };
           break;
       }
@@ -250,7 +258,7 @@ export class Mixer {
         ? undefined
         : this.#command(() => this.#host.native.stopAt(stopAtFrames, msToFrames(STOP_FADE_MS)));
     await Promise.all([swapped, started, stopping]);
-    const { latencyMs } = this.#host.output;
+    const { latencyMs } = this.#host.output();
     return {
       startedAt: Date.now() + latencyMs,
       backingOffsetMs: latencyMs,
@@ -376,9 +384,9 @@ export class Mixer {
   }
 }
 
-function defaultEffects(): Pick<SlotParamsInput, "corrector" | "reverb"> {
-  const { corrector, reverb } = defaultSlotParams();
-  return { corrector, reverb };
+function defaultEffects(): Pick<SlotParamsInput, "corrector" | "reverb" | "voice"> {
+  const { corrector, reverb, voice } = defaultSlotParams();
+  return { corrector, reverb, voice };
 }
 
 function toGuideInput(guide: MelodyGuide): GuideInput {

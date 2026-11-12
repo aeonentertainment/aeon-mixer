@@ -8,6 +8,8 @@ pub struct Report {
     pub underruns: u64,
     pub realtime: bool,
     pub failed: bool,
+    /// The device went away, and nothing moved the stream since.
+    pub lost: bool,
     pub shortest: Option<Duration>,
     pub longest: Option<Duration>,
     pub(crate) intervals: [u32; BUCKETS],

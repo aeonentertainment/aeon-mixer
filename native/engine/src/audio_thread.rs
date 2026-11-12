@@ -2,17 +2,18 @@
 //! graph, crossfade an outgoing one, and hand what is no longer held back through the retired
 //! ring. A panic inside is caught here; every block after is silence, no further command is
 //! taken, and `Fault` is sent, again each block until the event ring has room for it
-//! (docs/design.md section 2).
+//! (docs/design.md section 2). Moved to another output, it starts every slot's stream again and
+//! fades in (section 5).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::backing::Transport;
-use crate::block::{BLOCK, RATE, Stereo};
+use crate::block::{BLOCK, MAX_SLOTS, RATE, Stereo};
 use crate::command::{
     Command, CommandConsumer, CommandProducer, Event, EventConsumer, EventProducer, Retired,
     RetiredConsumer, RetiredProducer, command_ring, event_ring, retired_ring,
 };
-use crate::driver::Render;
+use crate::driver::{Movable, Render};
 use crate::graph::Graph;
 use crate::params::{ParamsReader, ParamsWriter, params_channel};
 use crate::reactions::{Reactions, ReactionsFeed, reactions};
@@ -39,6 +40,10 @@ pub struct AudioThread {
     reaction_right: [f32; BLOCK],
     faulted: bool,
     fault_sent: bool,
+    /// Set by a move: the next block starts every slot's stream again on the new clock.
+    restart: bool,
+    /// Frames of the fade in after a move that have played; the fade is done at the swap fade.
+    faded_in: u32,
 }
 
 /// The control thread's ends of the four crossings, and the feed for the reaction voices.
@@ -73,6 +78,8 @@ impl AudioThread {
             reaction_right: [0.0; BLOCK],
             faulted: false,
             fault_sent: false,
+            restart: false,
+            faded_in: SWAP_FADE_FRAMES,
         };
         let controls = Controls {
             params: params_writer,
@@ -91,6 +98,7 @@ impl AudioThread {
     /// One block, as the driver calls it. Never panics: a panic below becomes a fault.
     pub fn render(&mut self, mut out: Stereo<'_>) {
         if !self.faulted && catch_unwind(AssertUnwindSafe(|| self.render_block(&mut out))).is_ok() {
+            self.fade_in(&mut out);
             return;
         }
         self.faulted = true;
@@ -101,6 +109,9 @@ impl AudioThread {
     }
 
     fn render_block(&mut self, out: &mut Stereo<'_>) {
+        if std::mem::take(&mut self.restart) {
+            self.restart_slots();
+        }
         self.drain_commands();
         let params = *self.params.latest();
         let Self { reactions, reaction_left, reaction_right, live, events, .. } = self;
@@ -186,6 +197,31 @@ impl AudioThread {
         }
     }
 
+    // Every packet a slot holds was anchored to the clock that stopped, and the gap's packets
+    // waited in its ring; played now, the singer would stay a gap behind for the rest of the song.
+    fn restart_slots(&mut self) {
+        for slot in 0..MAX_SLOTS as u8 {
+            self.live.reset_slot(slot);
+            if let Some(outgoing) = &mut self.outgoing {
+                outgoing.reset_slot(slot);
+            }
+        }
+    }
+
+    // A new output starts from silence, so its first swap fade's worth of frames ramps up.
+    fn fade_in(&mut self, out: &mut Stereo<'_>) {
+        if self.faded_in >= SWAP_FADE_FRAMES {
+            return;
+        }
+        let fade = SWAP_FADE_FRAMES as f32;
+        for (i, (left, right)) in out.left.iter_mut().zip(out.right.iter_mut()).enumerate() {
+            let gain = ((self.faded_in + i as u32 + 1) as f32 / fade).min(1.0);
+            *left *= gain;
+            *right *= gain;
+        }
+        self.faded_in += BLOCK as u32;
+    }
+
     fn steer(&mut self, id: u32, transport: Transport) {
         self.live.steer(id, transport, &mut self.events);
     }
@@ -201,6 +237,17 @@ impl AudioThread {
         if let Err(retired) = self.retired.push(retired) {
             std::mem::forget(retired);
         }
+    }
+}
+
+impl Movable for AudioThread {
+    fn render(&mut self, out: Stereo<'_>) {
+        AudioThread::render(self, out);
+    }
+
+    fn moved(&mut self) {
+        self.restart = true;
+        self.faded_in = 0;
     }
 }
 
@@ -284,6 +331,41 @@ mod tests {
         assert!(right.windows(2).all(|p| (p[1] - p[0]).abs() <= slope + 1e-5));
         assert!(right[SWAP_FADE_FRAMES as usize..].iter().all(|s| *s == 0.0));
         assert!(matches!(controls.retired.pop(), Some(Retired::Graph(_))));
+    }
+
+    #[test]
+    fn a_move_keeps_the_graph_and_fades_the_new_output_in() {
+        let (mut audio, mut controls) = AudioThread::new();
+        controls.commands.push(Command::Swap { id: 1, graph: dc_graph(1.0) }).ok().unwrap();
+        controls.commands.push(Command::Start { id: 2 }).ok().unwrap();
+        let block = |audio: &mut AudioThread| {
+            let (mut left, mut right) = ([0.0; BLOCK], [0.0; BLOCK]);
+            assert_no_alloc(|| audio.render(Stereo { left: &mut left, right: &mut right }));
+            left
+        };
+        let before = 4;
+        for _ in 0..before {
+            block(&mut audio);
+        }
+        assert_eq!(block(&mut audio)[0], CENTRE, "at level before the move");
+
+        Movable::moved(&mut audio);
+        let blocks = (SWAP_FADE_FRAMES as usize).div_ceil(BLOCK) + 1;
+        let left: Vec<f32> = (0..blocks).flat_map(|_| block(&mut audio)).collect();
+        let slope = CENTRE / SWAP_FADE_FRAMES as f32;
+        assert!(left[0] > 0.0 && left[0] <= slope + 1e-6, "the first frame starts near silence");
+        assert!(left.windows(2).all(|p| p[1] - p[0] <= slope + 1e-5 && p[1] >= p[0] - 1e-6));
+        assert!((left[SWAP_FADE_FRAMES as usize - 1] - CENTRE).abs() < 1e-5, "at level again");
+
+        controls.commands.push(Command::Pause { id: 3 }).ok().unwrap();
+        block(&mut audio);
+        let acks: Vec<_> = events(&mut controls)
+            .into_iter()
+            .filter_map(|e| if let Event::Ack { id, .. } = e { Some(id) } else { None })
+            .collect();
+        assert_eq!(acks, vec![1, 2, 3], "the same graph answers after the move");
+        assert!(matches!(controls.retired.pop(), Some(Retired::Graph(_))), "the silent graph");
+        assert!(controls.retired.pop().is_none(), "and nothing else: the live graph stayed");
     }
 
     #[test]

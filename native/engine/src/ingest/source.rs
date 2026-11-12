@@ -1,7 +1,9 @@
 //! The source of an `rtp` or `l16` slot: at the top of each block it drains the slot's packet
 //! ring into the jitter buffer, then pulls the block that is due. Its first pull discards what
 //! the ring already holds: a mixer is armed, and its ports handed to the phones, before it
-//! starts, and a stream anchored on that backlog would play behind real time for good.
+//! starts, and a stream anchored on that backlog would play behind real time for good. A reset
+//! does the same, since what waits in the ring belongs to the stream it forgets, and after a move
+//! to another output it is the whole gap.
 
 use super::jitter::JitterBuffer;
 use super::packet::PacketConsumer;
@@ -36,6 +38,7 @@ impl Source for PacketSource {
 
     fn reset(&mut self) {
         self.jitter.reset();
+        self.pulled = false;
     }
 
     fn latency_frames(&self) -> u32 {
@@ -45,6 +48,8 @@ impl Source for PacketSource {
 
 #[cfg(test)]
 mod tests {
+    use assert_no_alloc::assert_no_alloc;
+
     use super::super::codec::Codec;
     use super::super::fixtures::*;
     use super::super::jitter::JitterBuffer;
@@ -69,12 +74,39 @@ mod tests {
             producer.push(&Packet::new(seq, u32::from(seq) * 240, 7, false, &payload).unwrap());
         }
         let mut out = [0.0; BLOCK];
-        source.pull(&mut out);
+        assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 0, "the backlog is dropped unseen");
         producer.push(&Packet::new(100, 100 * 240, 7, false, &payload).unwrap());
-        source.pull(&mut out);
+        assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 1);
         assert_eq!(source.latency_frames(), DELAY + 960, "anchored on the fresh packet");
+    }
+
+    /// A move to another output stops the clock while packets keep coming. The reset that follows
+    /// drops what waited, so the stream anchors on the next packet and plays at its delay.
+    #[test]
+    fn a_reset_drops_what_waited_in_the_ring() {
+        let (mut producer, consumer) = packet_ring(RING_CAPACITY);
+        let mut source = PacketSource::new(consumer, JitterBuffer::new(DELAY, Codec::L16));
+        let stats = source.jitter().shared_stats();
+        let payload = [0u8; 4 * 240];
+        let packet = |seq: u16| Packet::new(seq, u32::from(seq) * 240, 7, false, &payload).unwrap();
+        let mut out = [0.0; BLOCK];
+        assert_no_alloc(|| source.pull(&mut out));
+        producer.push(&packet(0));
+        assert_no_alloc(|| source.pull(&mut out));
+        assert_eq!(stats.read().pushed, 1, "the stream is playing");
+
+        for seq in 1..40 {
+            producer.push(&packet(seq));
+        }
+        assert_no_alloc(|| source.reset());
+        assert_no_alloc(|| source.pull(&mut out));
+        assert_eq!(stats.read().pushed, 1, "the gap's packets are dropped unseen");
+        producer.push(&packet(40));
+        assert_no_alloc(|| source.pull(&mut out));
+        assert_eq!(stats.read().pushed, 2);
+        assert_eq!(source.latency_frames(), DELAY + 960, "anchored on the packet after the gap");
     }
 
     /// 8.4's done-when: reordering, 30 ms spikes and 5 percent loss on every frame size. The

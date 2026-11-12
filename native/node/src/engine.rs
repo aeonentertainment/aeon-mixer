@@ -5,6 +5,7 @@
 use engine::audio_thread::{AudioThread, Controls};
 use engine::block::MAX_SLOTS;
 use engine::command::{Command, CommandProducer};
+use engine::driver::StreamInfo;
 use engine::params::ParamsWriter;
 use engine::reactions::ReactionsFeed;
 use engine::slot::guide::Guide;
@@ -37,7 +38,7 @@ pub struct OpenOptions {
     // A literal union, so `src/` passes plain strings rather than a const enum it cannot import
     #[napi(ts_type = "'offline' | 'timer' | 'device'")]
     pub clock: ClockKind,
-    /// A device clock's output: an id from `outputs`, or the default output.
+    /// A device clock's output: an id from `outputs` to pin, or none to follow the default output.
     pub device: Option<String>,
     pub period_frames: u32,
     /// The jitter buffer's playout delay for every `rtp` and `l16` slot.
@@ -49,6 +50,26 @@ pub struct OutputInfo {
     pub sample_rate: u32,
     pub period_frames: u32,
     pub latency_ms: f64,
+    /// The output playing now; none on the offline clock.
+    pub device: Option<OutputDevice>,
+}
+
+#[napi(object)]
+pub struct OutputDevice {
+    pub id: String,
+    pub name: String,
+}
+
+impl OutputInfo {
+    pub fn new(info: StreamInfo, device: Option<devices::Output>) -> Self {
+        Self {
+            sample_rate: info.sample_rate,
+            period_frames: info.period_frames,
+            latency_ms: f64::from(info.output_latency_frames) * 1000.0
+                / f64::from(info.sample_rate),
+            device: device.map(|output| OutputDevice { id: output.id, name: output.name }),
+        }
+    }
 }
 
 #[napi]
@@ -76,16 +97,15 @@ impl Engine {
         let network = Network::spawn()?;
         let (audio, controls) = AudioThread::new();
         let Controls { params, commands, events, retired, reactions } = controls;
-        let render = audio.into_render();
         let clock = match options.clock {
             ClockKind::Offline => {
-                Clock::Offline(Box::new(engine::driver::OfflineDriver::new(render)))
+                Clock::Offline(Box::new(engine::driver::OfflineDriver::new(audio.into_render())))
             }
-            ClockKind::Timer => Clock::timer(render)?,
-            ClockKind::Device => Clock::open(options.device, options.period_frames, render)?,
+            ClockKind::Timer => Clock::timer(audio.into_render())?,
+            ClockKind::Device => Clock::open(options.device, options.period_frames, audio)?,
         };
         let deliver = on_events.build_threadsafe_function().build()?;
-        let events = EventsThread::spawn(events, retired, clock.stats(), deliver);
+        let events = EventsThread::spawn(events, retired, clock.stats(), clock.current(), deliver);
         Ok(Self {
             params,
             commands,
@@ -111,15 +131,12 @@ impl Engine {
         Mixer::build(&kinds, rtp_return.as_ref(), self.playout_delay_frames, network)
     }
 
+    /// The output playing now. After a move the events thread sends the same as `outputChanged`.
     #[napi(getter)]
     pub fn output(&self) -> Result<OutputInfo> {
-        let info = self.clock()?.info();
-        Ok(OutputInfo {
-            sample_rate: info.sample_rate,
-            period_frames: info.period_frames,
-            latency_ms: f64::from(info.output_latency_frames) * 1000.0
-                / f64::from(info.sample_rate),
-        })
+        let clock = self.clock()?;
+        let device = clock.playing().map(|playing| playing.output);
+        Ok(OutputInfo::new(clock.info(), device))
     }
 
     /// The outputs this OS offers, the default marked. Empty on the offline and timer clocks.

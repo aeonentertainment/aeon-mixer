@@ -14,8 +14,9 @@ export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
   /**
-   * A device; `timer` for a box with no sound card, whose own thread renders on the OS's clock
-   * and whose mix leaves only on a mixer's `rtpReturn`; `offline` for tests, which pump it.
+   * A device, pinned by `device` or, left out, following the OS default; `timer` for a box with
+   * no sound card, whose own thread renders on the OS's clock and whose mix leaves only on a
+   * mixer's `rtpReturn`; `offline` for tests, which pump it.
    */
   output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   /** Fixed for the engine's life, default 8, at most 16. */
@@ -28,6 +29,8 @@ export interface OutputInfo {
   readonly sampleRate: 48000;
   readonly periodFrames: number;
   readonly latencyMs: number;
+  /** The output playing now, as `outputDevices()` lists it; null on the offline clock. */
+  readonly device: { readonly id: string; readonly name: string } | null;
 }
 
 export interface MixerConfig {
@@ -55,7 +58,12 @@ export interface SlotSettings {
 
 export type SlotEffect =
   | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
-  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number };
+  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
+  /**
+   * A formant move in semitones from the singer's own, -12 to 12, with no change of pitch and no
+   * added delay. Decision 0014 has the first voices' settings.
+   */
+  | { kind: "voice"; enabled: boolean; formantSemitones: number };
 
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
@@ -81,13 +89,29 @@ export interface SlotStats {
 
 export type EngineEvents = {
   fault: (error: Error) => void;
+  /** After every move to another output; `gapMs` is how long the room heard nothing. */
+  outputChanged: (output: OutputInfo, gapMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */
   masterLevel: (rmsDb: number, peakDb: number) => void;
 };
 
 export type MixerEvents = {
   level: (slot: number, rmsDb: number, peakDb: number) => void;
-  pitch: (slot: number, positionMs: number, hz: number, confidence: number) => void;
+  /**
+   * Every 10 ms, on the guide's clock. `targetMidi` is the guide note the corrector pulls toward,
+   * after the backing's key shift: null with correction off, with no guide, or between notes,
+   * where it pulls toward the key. `errorSemitones` is the class it pulls toward less the
+   * reading, in the singer's own octave, so positive is flat: 0 with correction off or while
+   * unvoiced.
+   */
+  pitch: (
+    slot: number,
+    positionMs: number,
+    hz: number,
+    confidence: number,
+    targetMidi: number | null,
+    errorSemitones: number,
+  ) => void;
   position: (positionMs: number) => void;
   renderProgress: (fraction: number) => void;
   backingEnded: () => void;

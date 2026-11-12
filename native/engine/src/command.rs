@@ -44,11 +44,30 @@ impl Command {
 /// Audio to control. `Copy`, so the ring moves plain values.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    Ack { id: u32, position_frames: u64 },
-    Level { slot: u8, rms_db: f32, peak_db: f32 },
-    MasterLevel { rms_db: f32, peak_db: f32 },
-    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32 },
-    Position { frames: u64 },
+    Ack {
+        id: u32,
+        position_frames: u64,
+    },
+    Level {
+        slot: u8,
+        rms_db: f32,
+        peak_db: f32,
+    },
+    MasterLevel {
+        rms_db: f32,
+        peak_db: f32,
+    },
+    Pitch {
+        slot: u8,
+        position_ms: f64,
+        hz: f32,
+        confidence: f32,
+        target_midi: Option<i16>,
+        error_semitones: f32,
+    },
+    Position {
+        frames: u64,
+    },
     BackingEnded,
     Underrun,
     Fault,

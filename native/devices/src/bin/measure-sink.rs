@@ -95,7 +95,7 @@ fn main() -> ExitCode {
     println!("period     {} (asked {})", frames(info.period_frames), args.request.period_frames);
     println!("latency    {}, as the OS reports it", frames(info.output_latency_frames));
     println!("{}", Summary { report: &report, period_frames: info.period_frames, ran });
-    if report.failed { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+    if report.failed || report.lost { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
