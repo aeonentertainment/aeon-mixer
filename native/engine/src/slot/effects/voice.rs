@@ -3,6 +3,9 @@ use kernels::VoiceShifter;
 use crate::block::{BLOCK, RATE};
 use crate::params::VoiceParams;
 
+/// The kernel's range of formant move, either way. Past it, a knob plays as the limit.
+const MOST_FORMANT_SEMITONES: f32 = 12.0;
+
 /// The slot's voice stage: the voice shifter moving the singer's formants, with no transposition,
 /// so it holds nothing back and adds no sample. Off, or on at 0, it hands the voice over bit for
 /// bit. docs/decisions/0014-the-first-voices.md has the voices, and why a pitch voice waits for the
@@ -25,7 +28,11 @@ impl Voice {
 
     /// One run of the slot's voice, in place.
     pub fn process(&mut self, params: &VoiceParams, block: &mut [f32]) {
-        let formant_semitones = if params.enabled { params.formant_semitones } else { 0.0 };
+        let formant_semitones = if params.enabled {
+            params.formant_semitones.clamp(-MOST_FORMANT_SEMITONES, MOST_FORMANT_SEMITONES)
+        } else {
+            0.0
+        };
         self.kernel.set(0.0, 2f32.powf(formant_semitones / 12.0));
         for run in block.chunks_mut(BLOCK) {
             let scratch = &mut self.scratch[..run.len()];
@@ -231,6 +238,17 @@ mod tests {
                     "{formant_semitones} at {hz} Hz: lines up at {best:?}"
                 );
             }
+        }
+    }
+
+    // The API stops a host at 12 either way; a value past that which reaches the stage plays as
+    // the limit. Without the clamp, a huge move up overflowed to an infinite factor, which the
+    // kernel ignores, and played as no voice at all, while a huge move down played as -12.
+    #[test]
+    fn a_knob_past_its_limits_plays_as_the_limit() {
+        let input = vowel(147.0, 9_600);
+        for (past, limit) in [(1e9_f32, 12.0), (f32::INFINITY, 12.0), (-1e9, -12.0)] {
+            assert_eq!(voiced(on(past), &input), voiced(on(limit), &input), "{past}");
         }
     }
 }
