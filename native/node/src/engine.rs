@@ -41,8 +41,9 @@ pub struct OpenOptions {
     /// A device clock's output: an id from `outputs` to pin, or none to follow the default output.
     pub device: Option<String>,
     pub period_frames: u32,
-    /// The jitter buffer's playout delay for every `rtp` and `l16` slot.
-    pub playout_delay_frames: u32,
+    /// Pins the jitter buffer's playout delay for every `rtp` and `l16` slot. Without it, each
+    /// stream chooses its own.
+    pub playout_delay_frames: Option<u32>,
 }
 
 #[napi(object)]
@@ -81,7 +82,7 @@ pub struct Engine {
     events: Option<EventsThread>,
     /// The thread behind every slot's socket, spawned at open so a mixer never fails for it.
     network: Option<Network>,
-    playout_delay_frames: u32,
+    playout_delay_frames: Option<u32>,
     next_id: u32,
 }
 

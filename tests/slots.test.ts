@@ -13,12 +13,14 @@ const SILENT_STATS = {
   pushed: 0,
   lost: 0,
   late: 0,
+  lateAtOpening: 0,
   concealed: 0,
   resyncs: 0,
   jitterMs: 0,
   correctorDelayMs: 0,
   correctorMaxDelayMs: 0,
   echo: null,
+  playoutDelayMs: 0,
 };
 
 async function startLive(engine: OfflineEngine, mixer: Mixer) {
@@ -72,6 +74,7 @@ test("rtp and l16 slots listen on their own ports, push slots on none", async ()
 });
 
 test("a mixed mixer runs silent until packets arrive, reports every slot's counters, and resets", async () => {
+  const PINNED_STATS = { ...SILENT_STATS, playoutDelayMs: 20 };
   const engine = await openEngine({ output: { offline: true }, playoutDelayMs: 20 });
   const mixer = await engine.createMixer({
     slots: [{ kind: "rtp" }, { kind: "push" }, { kind: "l16" }],
@@ -79,7 +82,7 @@ test("a mixed mixer runs silent until packets arrive, reports every slot's count
   mixer.setSlot(0, { gain: 2, pan: 1 });
   mixer.setSlotEffects(2, [{ kind: "reverb", enabled: true, roomSize: 0.5, mix: 0.3 }]);
   expect(mixer.stats()).toEqual({
-    slots: [SILENT_STATS, SILENT_STATS, SILENT_STATS],
+    slots: [PINNED_STATS, SILENT_STATS, PINNED_STATS],
     underruns: 0,
     rtpReturn: null,
   });
@@ -94,7 +97,7 @@ test("a mixed mixer runs silent until packets arrive, reports every slot's count
   mixer.resetSlot(0);
   mixer.resetSlot(2);
   expect(engine.pump(1).every((sample) => sample === 0)).toBe(true);
-  expect(mixer.stats().slots).toEqual([SILENT_STATS, SILENT_STATS, SILENT_STATS]);
+  expect(mixer.stats().slots).toEqual([PINNED_STATS, SILENT_STATS, PINNED_STATS]);
   await destroyLive(engine, mixer);
   await engine.close();
 });
@@ -122,6 +125,14 @@ test("a slot reports the corrector's delay while correction is on and nothing on
   engine.pump(8);
   expect(corrector()).toEqual({ correctorDelayMs: 0, correctorMaxDelayMs: 0 });
   await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("a slot left to choose its own delay reports the one it opens at", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "rtp" }, { kind: "push" }] });
+  expect(mixer.stats().slots.map((slot) => slot.playoutDelayMs)).toEqual([15, 0]);
+  await mixer.destroy();
   await engine.close();
 });
 

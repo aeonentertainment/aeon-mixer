@@ -5,6 +5,19 @@ const BLOCK = 128;
 /** The swap fade is 5 ms, under two blocks; the third block is clean. */
 const FADE_BLOCKS = 3;
 const CENTRE = Math.SQRT1_2;
+const SILENT_PUSH_STATS = {
+  pushed: 0,
+  lost: 0,
+  late: 0,
+  lateAtOpening: 0,
+  concealed: 0,
+  resyncs: 0,
+  jitterMs: 0,
+  correctorDelayMs: 0,
+  correctorMaxDelayMs: 0,
+  echo: null,
+  playoutDelayMs: 0,
+};
 
 /** Interleaved stereo at one level, which folds to that level. */
 function constant(level: number, blocks = 1) {
@@ -66,30 +79,7 @@ test("a push slot plays what the host pushes, through its gain and the pan law",
   // A slot's ring holds 100 ms; the rest is the host's to hand in again, and the count says so
   expect(mixer.push(1, constant(1, 400))).toBe(4800);
   expect(mixer.stats()).toEqual({
-    slots: [
-      {
-        pushed: 0,
-        lost: 0,
-        late: 0,
-        concealed: 0,
-        resyncs: 0,
-        jitterMs: 0,
-        correctorDelayMs: 0,
-        correctorMaxDelayMs: 0,
-        echo: null,
-      },
-      {
-        pushed: 0,
-        lost: 0,
-        late: 0,
-        concealed: 0,
-        resyncs: 0,
-        jitterMs: 0,
-        correctorDelayMs: 0,
-        correctorMaxDelayMs: 0,
-        echo: null,
-      },
-    ],
+    slots: [SILENT_PUSH_STATS, SILENT_PUSH_STATS],
     underruns: 0,
     rtpReturn: null,
   });

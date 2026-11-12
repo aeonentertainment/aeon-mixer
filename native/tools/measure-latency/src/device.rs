@@ -18,7 +18,7 @@ use crate::opening::Opening;
 use crate::programme::Programme;
 use crate::reading::{self, Take};
 use crate::report;
-use crate::rig::Rig;
+use crate::rig::{Delay, Rig};
 use crate::tap::tap_render;
 
 /// The path a device run plays through: raw PCM, so the signal reaches the output as it was sent.
@@ -83,8 +83,8 @@ fn open_and_read(
     signal: &[f32],
 ) -> Result<Opening, String> {
     let epoch = Instant::now();
-    let rig =
-        Rig::new(THROUGH, args.playout_frames, signal, 0).map_err(|error| error.to_string())?;
+    let rig = Rig::new(THROUGH, Delay::Pinned(args.playout_frames), signal, 0)
+        .map_err(|error| error.to_string())?;
     let Rig { render, controls, .. } = rig;
     let frames = signal.len();
     let (render, mut rendered) = tap_render(render, frames, epoch);

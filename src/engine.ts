@@ -64,25 +64,25 @@ export class Engine {
 
   constructor(options: OpenEngineOptions) {
     this.#slots = integerIn("slots", options.slots ?? 8, 1, 16);
-    // The jitter buffer holds 64 packets ahead of its cursor, 160 ms of the phone's shortest
-    // frame; under 5 ms, two blocks, that frame has no slack and ordinary jitter is all late packets
-    const playoutDelayFrames = msToFrames(
-      finiteIn("playoutDelayMs", options.playoutDelayMs ?? 15, 5, 100),
-    );
+    // A pinned delay can never rise, so under 5 ms, two blocks, ordinary jitter would be all late
+    // packets for good. A slot left to choose goes as low as 3.67 ms, because it rises when packets
+    // come late. 100 ms stays inside the 64 packets the buffer holds, 160 ms of the shortest frame
+    const pinned =
+      options.playoutDelayMs === undefined
+        ? {}
+        : {
+            playoutDelayFrames: msToFrames(
+              finiteIn("playoutDelayMs", options.playoutDelayMs, 5, 100),
+            ),
+          };
     const deliver = (batch: NativeEvent[]) => {
       this.#deliver(batch);
     };
     if ("offline" in options.output) {
-      this.#native = new NativeEngine(
-        { clock: "offline", periodFrames: 128, playoutDelayFrames },
-        deliver,
-      );
+      this.#native = new NativeEngine({ clock: "offline", periodFrames: 128, ...pinned }, deliver);
       this.pump = (blocks) => this.#native.pump(integerIn("blocks", blocks, 1, 1 << 20));
     } else if ("timer" in options.output) {
-      this.#native = new NativeEngine(
-        { clock: "timer", periodFrames: 128, playoutDelayFrames },
-        deliver,
-      );
+      this.#native = new NativeEngine({ clock: "timer", periodFrames: 128, ...pinned }, deliver);
     } else {
       const { device, periodFrames = 128 } = options.output;
       if (periodFrames !== 64 && periodFrames !== 128) {
@@ -92,7 +92,7 @@ export class Engine {
         {
           clock: "device",
           periodFrames,
-          playoutDelayFrames,
+          ...pinned,
           ...(device === undefined ? {} : { device }),
         },
         deliver,
