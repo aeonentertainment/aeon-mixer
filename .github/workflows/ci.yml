@@ -58,6 +58,14 @@ jobs:
         working-directory: native
       - run: cargo build -p devices --features hardware --bin measure-sink
         working-directory: native
+      # measure-latency's device mode, linted and linked the same way and never run
+      - run: cargo clippy -p measure-latency --all-targets --features hardware -- -D warnings
+        working-directory: native
+      - run: cargo build -p measure-latency --features hardware
+        working-directory: native
+      # The engine's share of the mic path, in the log for any PR to quote. Opens no device
+      - run: cargo run -p measure-latency
+        working-directory: native
       - run: vp run build:native
       - run: vp check
       - run: vp test
