@@ -785,11 +785,14 @@ ring into the jitter buffer at the top of each block.
   until `measure-latency` (8.9) gives the push path a number.
 - A `capture` slot is a mic on this machine, with no socket and no jitter buffer. `createMixer`
   starts its input through `devices::capture` (8.3) at the output's period, or as near as the
-  device allows, and rejects if it cannot; `destroy` stops it. The capture thread's sink pushes
-  each delivery into an SPSC ring of 4096 frames, and the slot pulls a block from it. Its first
-  pull drops what arrived while armed. It plays silence until the ring holds its target and an
-  input period, then for one more window of 128 blocks while it reads the trough, and drops the
-  excess at once, so its first sample waits as long as every one after it: a third of a second
+  device allows, and rejects if it cannot, or if the input's period or the output's callback is
+  over 1024 frames; `destroy` stops it. The capture thread's sink pushes each delivery into an SPSC
+  ring of 4096 frames, fixed so the audio thread never sizes it, and the slot pulls a block from
+  it. Its headroom is what the fill holds over the trough just after a delivery: an input period,
+  and the blocks an output callback pulls back to back after the first, three more under a
+  480-frame callback, since the input delivers nothing between them. Its first pull drops what
+  arrived while armed. It plays silence until the ring holds its target and its headroom, then for
+  one more window of 128 blocks while it reads the trough, and drops the excess at once, so its first sample waits as long as every one after it: a third of a second
   of silence when a song starts. An offline engine opens no input, so it refuses a capture slot;
   the timer clock opens one, since a box that plays nothing may still have a mic. ALSA opens a
   `hw:` device once, so on Linux an input feeds one mixer at a time, armed or live.
@@ -800,13 +803,14 @@ ring into the jitter buffer at the top of each block.
   cannot fill plays what it holds and silence after; when the ring held something, the phase of
   two clocks or a late wake caught it out, and the target rises by what was missing and 16 frames,
   at most one input period over where it opened. An empty ring is an input that stopped, and moves
-  no target. A fill more than a period and a block over the target is a stall's backlog, dropped
-  at once down to a period over it. On the output's clock the trough never moves and holds the
+  no target. A fill more than its headroom and a block over the target is a stall's backlog,
+  dropped at once down to its headroom over it. On the output's clock the trough never moves and holds the
   target exactly, 3 ms for a 128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
 - The fill before a pull is not how long a sample waited: a pull just after a delivery finds more
   in the ring than one just before it, and its samples waited as much less. The wait holds still:
-  the trough, an input period, less a part of the step the two periods make, `gcd(period, 128)`.
+  the trough and its headroom, less a part of the step the input's period and the output's wakes
+  make, the greatest common divisor of the period and the callback in whole blocks.
   The slot reports the middle of that step, within half a step of the truth: 4.33 ms for a
   128-frame input at its opening target. `latency_frames`, which the guide clock subtracts and the
   echo canceller follows, is that wait and what the OS reports for the input's hardware, and it

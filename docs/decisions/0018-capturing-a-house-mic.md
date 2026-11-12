@@ -80,6 +80,13 @@ period, less a part of the step the two periods make, the greatest common diviso
 and the block. The slot reports the middle of that step. The tests check it against the real wait
 on 64-, 128- and 480-frame inputs on either clock: within a step, and still for a minute at a time.
 
+An output callback longer than a block pulls its blocks back to back: a 480-frame callback, WASAPI
+shared's on the laptop in 0003, takes three or four at a wake, and the input delivers nothing
+between them. So the fill before the first of them holds up to three blocks more than a
+block-a-wake output would leave, all of it healthy. The slot counts those blocks in its headroom,
+for priming, for what it calls a backlog, and for the wait. Counting the input period alone, it
+dropped that healthy audio as backlog and then ran short: 282 gaps in 6 s under a 128-frame input.
+
 ## Numbers
 
 From the tests in `engine/src/ingest/capture.rs`, an hour at 200 ppm either way with wakes up to
@@ -129,6 +136,10 @@ between slips, which would hold the echo's delay to a sample.
 - No timestamps. The capture thread's `at` could date the fill below a period and spread a slower
   input's correction ahead of its slip, taking about half a period off its mean. That wants a clock
   on the audio thread or a loop on the capture thread, and waits for a measurement that asks for it.
+- No input period or output callback over 1024 frames, 21 ms. The ring is a fixed 4096 frames, so
+  the audio thread never sizes it, and at 1024 of each with the target at its ceiling the healthy
+  fill still fits. A device that grants more is refused when the input opens. Every backend
+  measured in 0003 grants 480 or less.
 - No sharing of one input between slots or between an armed mixer and a live one. On CoreAudio and
   WASAPI two slots may open one device; ALSA's `hw:` opens once.
 
