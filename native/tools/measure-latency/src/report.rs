@@ -177,6 +177,7 @@ fn distinct<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<&'a String> {
 
 fn distinct_periods(openings: &[Opening]) -> Vec<u32> {
     let mut periods: Vec<u32> = openings.iter().map(|opening| opening.output_period).collect();
+    periods.sort_unstable();
     periods.dedup();
     periods
 }
