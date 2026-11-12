@@ -1,8 +1,8 @@
 # 0007: Each stream chooses its own playout delay
 
 **Status:** accepted, 2026-11-06, on simulation and the offline driver. A real phone on real Wi-Fi
-has not run it; [the run](#the-run-a-person-owes) is at the end, and the code stays held until
-someone has done it.
+has not run it. The run it owes is in #116, under #72, and its numbers come back here as the reason
+for the constants.
 
 ## Decision
 
@@ -16,14 +16,17 @@ A slot's delay belongs to its stream, and the engine chooses it while the stream
   until the latest of those packets would keep a millisecond plus a quarter of the spread over the
   block. It never goes under 3.67 ms: a block a packet can wait to be drained, and a millisecond.
 - After the fall, three late notes out of 20 raise it to cover them, at most back to where it opened.
-- A move waits for 21 ms of the slot under -30 dBFS. Falling decodes and drops what it skips, so the
-  decoder stays whole. Rising fills with silence.
+- A move waits for 21 ms of the slot under -30 dBFS, and happens at the head of what waits to play,
+  right after that quiet. Falling decodes ahead what is in hand and drops the head only when it is
+  quiet too, so an onset already decoded is never cut and the decoder stays whole. Rising puts
+  silence at the head.
 - A host that sets `playoutDelayMs` pins the delay, exactly as today. Leaving it out used to mean a
-  fixed 15 ms and now means each slot chooses: a change to published behaviour, decided with the
-  developer on #56. The package is before 1.0, where a minor release may change behaviour, so this
-  note is the record, and the release that carries #72 says so in its notes.
+  fixed 15 ms and now means each slot chooses, so the default moves. The package is before 1.0, where
+  a minor release may change behaviour, so this ships in the next minor and its notes say so. Aeon
+  Karaoke pins 15 ms until aeonentertainment/aeon-karaoke#391.
 - `stats()` adds `playoutDelayMs` and `lateAtOpening`, the late packets that would also have been
-  late had the delay stayed where it opened.
+  late had the delay stayed where it opened. The buffer counts those against a held stream that
+  makes its own skew corrections at the opening delay, since a shorter delay corrects sooner.
 
 ## What changed from the issue
 
@@ -147,7 +150,7 @@ costs 2 ms more on `clean5` for 0.3 fewer events a minute.
 
 **The floor.** 3.67 ms is a block a packet can wait, 2.67 ms, and a millisecond for what a measured link
 with no jitter still has: the network thread's wake and the device's callback. Their real size is
-unmeasured, so this number is the first thing the run below can change.
+unmeasured, so this number is the first thing the run in #116 can change.
 
 **Worse mid-song.** A fixed delay on a link that worsens has no way out, and the same stall that is
 fine at 15 ms is late every time at 3.67. Three late half seconds out of 20 is about nine times what a
@@ -172,7 +175,7 @@ song. I looked for evidence and found none either way. I did find these:
 - A fall happens once per stream, and intros mean it usually lands before the first note.
 
 So the rule that stays is narrower: no move while a slot is sounding, and no more of them than a song
-needs. If a singer can hear it anyway, the run below is where we find out, and pinning the delay
+needs. If a singer can hear it anyway, the run in #116 is where we find out, and pinning the delay
 restores the old behaviour with one option.
 
 I rejected stretching the voice to move without a jump. NetEq does it and it would remove the gate, but
@@ -213,29 +216,6 @@ narrows the range, because the fall measures from the earliest packet.
 | rtp 5 ms low-delay   |     15.02 to 17.67 | 22.52 to 25.17 |         3.69 to 4.00 | 11.19 to 11.50 |
 | rtp 2.5 ms low-delay |     15.02 to 17.67 | 20.02 to 22.67 |         3.69 to 3.83 |   8.69 to 8.83 |
 | l16 7.3 ms           |     15.02 to 17.67 | 22.31 to 24.96 |         3.69 to 3.71 | 10.98 to 11.00 |
-
-## The run a person owes
-
-Real Wi-Fi needs a person, a phone and a room. Because the slot counts `lateAtOpening` as it goes, one
-song gives both sides of the comparison on the same packets and the same radio, so there is nothing to
-run twice and no second song whose Wi-Fi differed.
-
-1. In Aeon Karaoke, on a branch: drop `playoutDelayMs: AEON_PLAYOUT_DELAY_MS` from `AeonEngineHost.ts`
-   so slots choose, and add `playoutDelayMs` and `lateAtOpening` to the slots in
-   `AeonMixingEngine.sampleStats`, so they reach the stats log. Use this package's build.
-2. Start the device service with `MIXER_ENGINE=aeon STATS_LOG_DIR=/tmp/aeon-stats`.
-3. Sing a whole song from a phone on a clean 5 GHz network. Then another with someone streaming video
-   on the same access point.
-4. Read each song's last sample, from the newest file in that directory:
-
-   ```sh
-   jq -c 'select(.mixer) | .mixer.slots[] | select(.channelId != null)
-     | {pushed, lost, late, lateAtOpening, playoutDelayMs, avgJitterMs}' FILE | tail -1
-   ```
-
-It passes if the delay is under 15 on the clean network, if `(late - lateAtOpening) / pushed` is at most
-0.001 on both, and if the singer did not hear it move. Put the numbers, the phone and the access point
-here. They replace the simulation as the reason for the constants in `delay_chooser.rs`.
 
 ## Not measured
 

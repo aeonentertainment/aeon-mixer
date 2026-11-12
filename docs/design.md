@@ -748,7 +748,8 @@ ring into the jitter buffer at the top of each block.
   of the spread over the block to spare, and never under 3.67 ms: a block a packet can wait to be
   drained, and a millisecond. After that fall, three late notes out of the last 20 move it later
   to cover them, at most back to where it opened. A move waits for the slot to be under -30 dBFS
-  for 21 ms and counts as a resync. A delay means how long the stream's earliest packets wait, and
+  for 21 ms, happens at the head of what waits to play, drops only samples that are quiet too, and
+  counts as a resync. A delay means how long the stream's earliest packets wait, and
   `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
   reasons and the numbers.
 - Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
