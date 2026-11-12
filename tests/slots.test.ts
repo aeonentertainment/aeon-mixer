@@ -18,6 +18,7 @@ const SILENT_STATS = {
   jitterMs: 0,
   correctorDelayMs: 0,
   correctorMaxDelayMs: 0,
+  echo: null,
 };
 
 async function startLive(engine: OfflineEngine, mixer: Mixer) {

@@ -64,6 +64,8 @@ export type SlotEffect =
    * added delay. Decision 0014 has the first voices' settings.
    */
   | { kind: "voice"; enabled: boolean; formantSemitones: number }
+  /** Takes the room's echo of the mix out of the slot's input, with no added delay. */
+  | { kind: "echo-cancel"; enabled: boolean }
   /**
    * A high-pass and gate ahead of the corrector and a compressor after the meter. None reads
    * ahead or buffers; decision 0012 has their numbers and costs.
@@ -90,6 +92,13 @@ export interface SlotStats {
   correctorDelayMs: number;
   /** The most that delay can reach; 0 with correction off. It holds still, so a budget adds this. */
   correctorMaxDelayMs: number;
+  /**
+   * What the echo canceller found: `pathMs` from the mix being rendered to its echo reaching the
+   * slot, `bleedDb` how far under the mix that echo arrives, `removedDb` how much quieter the slot
+   * came out than it went in, both over the last second. Null while it is off, or until it has
+   * found the echo and learned it.
+   */
+  echo: { pathMs: number; bleedDb: number; removedDb: number } | null;
 }
 
 export type EngineEvents = {

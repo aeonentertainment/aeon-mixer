@@ -9,6 +9,7 @@ use engine::block::MAX_SLOTS;
 use engine::graph::Graph;
 use engine::slot::Slot;
 use engine::slot::corrector_delay::CorrectorDelay;
+use engine::slot::echo_report::EchoReport;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use transport::Network;
@@ -24,6 +25,8 @@ pub struct Mixer {
     slots: Vec<Ingest>,
     /// Slot for slot with `slots`: what each corrector last published.
     corrector_delays: Vec<Arc<CorrectorDelay>>,
+    /// And what each slot's echo stages last published.
+    echo_reports: Vec<Arc<EchoReport>>,
     rtp_return: Option<RtpReturn>,
 }
 
@@ -48,10 +51,11 @@ impl Mixer {
             .into_iter()
             .unzip();
         let corrector_delays = slots.iter().map(Slot::corrector_delay).collect();
+        let echo_reports = slots.iter().map(Slot::echo_report).collect();
         let mut graph = Box::new(Graph::new(slots));
         let rtp_return =
             rtp_return.map(|input| RtpReturn::open(input, &mut graph, network)).transpose()?;
-        Ok(Self { graph: Some(graph), slots: ingests, corrector_delays, rtp_return })
+        Ok(Self { graph: Some(graph), slots: ingests, corrector_delays, echo_reports, rtp_return })
     }
 
     /// The graph, once: `swap` moves it to the audio thread.
@@ -103,13 +107,15 @@ impl Mixer {
         self.slot(index)?.record(path.as_deref())
     }
 
-    /// Every slot's ingest counters and corrector delay, as the audio thread last published them.
+    /// Every slot's ingest counters, corrector delay and echo findings, as the audio thread last
+    /// published them.
     #[napi]
     pub fn stats(&self) -> Vec<SlotStatsInfo> {
         self.slots
             .iter()
             .zip(&self.corrector_delays)
-            .map(|(slot, delay)| SlotStatsInfo::new(slot.stats(), delay.frames()))
+            .zip(&self.echo_reports)
+            .map(|((slot, delay), echo)| SlotStatsInfo::new(slot.stats(), delay.frames(), echo))
             .collect()
     }
 
@@ -125,6 +131,7 @@ impl Mixer {
     pub fn release(&mut self) {
         self.slots.clear();
         self.corrector_delays.clear();
+        self.echo_reports.clear();
         self.rtp_return = None;
         self.graph = None;
     }

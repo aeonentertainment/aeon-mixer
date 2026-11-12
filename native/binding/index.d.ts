@@ -86,7 +86,10 @@ export declare class Mixer {
    * recording it for null.
    */
   recordSlot(index: number, path?: string | undefined | null): void
-  /** Every slot's ingest counters and corrector delay, as the audio thread last published them. */
+  /**
+   * Every slot's ingest counters, corrector delay and echo findings, as the audio thread last
+   * published them.
+   */
   stats(): Array<SlotStatsInfo>
   /** The return stream's counters, or null for a mixer without one. */
   returnStats(): RtpReturnStats | null
@@ -124,6 +127,16 @@ export interface CorrectorInput {
   enabled: boolean
   strength: number
   retuneMs: number
+}
+
+/** What a slot's echo canceller has found, as JavaScript reads it. */
+export interface EchoInfo {
+  /** From the master being rendered to its echo reaching the slot. */
+  pathMs: number
+  /** How far under the master the echo arrives, over the last second. */
+  bleedDb: number
+  /** How much quieter the slot came out than it went in, over the last second. */
+  removedDb: number
 }
 
 export interface GuideInput {
@@ -211,6 +224,7 @@ export interface SlotParamsInput {
   corrector: CorrectorInput
   reverb: ReverbInput
   voice: VoiceInput
+  echoCancel: SwitchInput
   cleanup: CleanupInput
   guideOffsetMs: number
 }
@@ -225,11 +239,18 @@ export interface SlotStatsInfo {
   jitterMs: number
   correctorDelayMs: number
   correctorMaxDelayMs: number
+  /** Null while the canceller is off or has yet to find and learn the room's echo. */
+  echo: EchoInfo | null
 }
 
 export interface StemGainsInput {
   instrumental: number
   guide: number
+}
+
+/** An effect with no knob but on and off. */
+export interface SwitchInput {
+  enabled: boolean
 }
 
 export interface VoiceInput {

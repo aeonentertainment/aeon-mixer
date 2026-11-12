@@ -30,6 +30,7 @@ pub struct EffectParams {
     pub corrector: CorrectorParams,
     pub reverb: ReverbParams,
     pub voice: VoiceParams,
+    pub echo_cancel: EchoCancelParams,
     pub cleanup: CleanupParams,
 }
 
@@ -59,6 +60,13 @@ pub struct ReverbParams {
 pub struct VoiceParams {
     pub enabled: bool,
     pub formant_semitones: f32,
+}
+
+/// The master as the reference, taken out of the slot's input. Off, the slot is bit for bit
+/// what it was; on, it adds no delay (docs/design.md section 4).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EchoCancelParams {
+    pub enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

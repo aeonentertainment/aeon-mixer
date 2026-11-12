@@ -1,5 +1,8 @@
 //! The end of the graph: the bus through a soft clipper with no lookahead, then the master
 //! meter, then the device and, when the mixer has one, the return ring (docs/design.md 8.7).
+//! What goes to the device also goes into the echo history, every slot's canceller's reference.
+
+use kernels::EchoHistory;
 
 use crate::block::Stereo;
 use crate::command::{Event, EventProducer};
@@ -13,11 +16,12 @@ pub const KNEE: f32 = 0.75;
 pub struct Master {
     meter: Meter,
     return_ring: Option<ReturnProducer>,
+    history: EchoHistory,
 }
 
 impl Master {
     pub fn new() -> Self {
-        Self { meter: Meter::new(), return_ring: None }
+        Self { meter: Meter::new(), return_ring: None, history: EchoHistory::new() }
     }
 
     /// Sends every block from here on down the return branch as well as to the device.
@@ -38,6 +42,12 @@ impl Master {
         if let Some(ring) = &mut self.return_ring {
             ring.push(out);
         }
+        self.history.push(out.left, out.right);
+    }
+
+    /// What this graph has sent to the device, reactions included, up to the last block.
+    pub fn history(&self) -> &EchoHistory {
+        &self.history
     }
 }
 

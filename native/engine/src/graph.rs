@@ -11,6 +11,7 @@ use crate::return_ring::ReturnProducer;
 use crate::slot::Slot;
 use crate::slot::cue::Cue;
 use crate::slot::guide::Guide;
+use crate::slot::shared::Shared;
 
 pub struct Graph {
     slots: Vec<Slot>,
@@ -48,9 +49,9 @@ impl Graph {
     ) {
         out.silence();
         let any_solo = params.slots[..self.slots.len()].iter().any(|slot| slot.solo);
-        let cue = self.cue();
+        let shared = Shared { any_solo, cue: self.cue(), history: self.master.history() };
         for (index, (slot, slot_params)) in self.slots.iter_mut().zip(&params.slots).enumerate() {
-            slot.render(index as u8, slot_params, any_solo, cue, &mut out, events);
+            slot.render(index as u8, slot_params, shared, &mut out, events);
         }
         if let Some(backing) = &mut self.backing {
             backing.render(&params.stems, &mut out, events);

@@ -266,6 +266,7 @@ version = "0.0.0"
 dependencies = [
  "assert_no_alloc",
  "cc",
+ "realfft",
 ]
 
 [[package]]
@@ -307,6 +308,16 @@ dependencies = [
  "opus",
  "rustfft",
  "serde_json",
+]
+
+[[package]]
+name = "measure-echo"
+version = "0.0.0"
+dependencies = [
+ "cpu-time",
+ "engine",
+ "kernels",
+ "realfft",
 ]
 
 [[package]]
