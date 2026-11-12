@@ -81,7 +81,10 @@ Rules that follow:
   one.
 - Moving to another output is not a crossing. The device follower (8.3) holds the audio thread
   only while no stream runs: it stops the old stream, which hands the audio thread back, calls
-  `Movable::moved` on it, and starts the new stream with it.
+  `Movable::moved` on it, and starts the new stream with it. As each stream's `start` returns, the
+  follower writes the stream's granted period into the `AtomicU32` that `Movable::callback_frames`
+  gave it before the first open. The audio thread reads it once a block and hands a change to every
+  graph it holds, so the new callback needs no command and no round trip through the binding.
 - A panic inside render is caught at the callback boundary. Every block from there is silence,
   the audio thread pushes `Fault` again each block until the event ring has room for it, and the
   engine refuses further commands until the host closes it.
@@ -218,12 +221,15 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   the retired ring and is dropped. Slot ports close within the network thread's next tick after
   that, since that thread owns the sockets and `destroy` only queues their removal. Nothing
   waits for it: the ports are ephemeral and no caller binds one again.
-- **Close.** `close` destroys any live mixer, stops the driver, joins the threads.
+- **Close.** `close` destroys any live mixer, stops the driver, joins the threads, and releases
+  every mixer still held, armed or live on a faulted engine, so no capture input outlives the
+  engine.
 - **Move.** The engine plays on the output the host pinned with `output.device` while the OS
   lists it, and otherwise on the OS default. When that changes, because the default moved or the
   open output went away, the engine stops the old stream and starts the new one with the same
   audio thread, so the live mixer and its song carry on after a gap. The playhead holds through
-  the gap, every slot starts its stream again on the new clock, the first 5 ms fade in, and
+  the gap, every slot starts its stream again on the new clock, a capture slot under the new
+  output's callback, the first 5 ms fade in, and
   `outputChanged` fires with the new `output`. Decision
   [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
 - **Faults.** A caught panic, or a lost output with nothing to move to within a second, emits
@@ -309,7 +315,7 @@ pub struct TimerDriver;
 /// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
 /// test's render. `moved` is called between streams, never on the audio thread: the next block
 /// starts every slot's stream again and fades in over 5 ms.
-pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); }
+pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); fn callback_frames(&self) -> Arc<AtomicU32>; }   // callback_frames: where the follower writes each stream's StreamInfo.period_frames as its start returns
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
 pub struct OfflineDriver;
@@ -379,8 +385,8 @@ pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder
 pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; chosen(codec) lets each stream choose; push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
 pub struct PacketSource;   // the Source of an rtp or l16 slot: new(PacketConsumer, JitterBuffer)
 pub struct PushVoice;      // the Source of a push slot: an SPSC f32 stereo ring its PushProducer fills; silence when empty
-pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, upstream_frames) before it goes live
-pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push or capture slot
+pub struct CaptureVoice;   // the Source of a capture slot: capture_voice() -> (CaptureProducer, CaptureVoice), an SPSC f32 mono ring a device's capture thread fills; for_input(period_frames, hardware_frames, output_frames) -> Result before it goes live: the input's granted period, what the OS reports for its hardware, and the output's normal callback, StreamInfo.period_frames; after a move the audio thread hands it the new one from Movable::callback_frames
+pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_at_opening: u32, pub concealed: u32, pub resyncs: u32, pub jitter_ms: f32, pub playout_delay_ms: f32 }   // late_at_opening: of late, those that would be late had the delay stayed where it opened; playout_delay_ms: zero for a push slot, a capture slot's wait from input to mix (8.4)
 
 // transport/src/
 /// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
@@ -673,7 +679,8 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   reopens it. A reopen that stays silent doubles the wait for the next, up to 6.4 s, until a
   callback comes. A stall never faults the engine.
 - A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
-  stream with it on the same `Stats`. The gap is from the wake to the new stream running.
+  stream with it on the same `Stats`. As every stream's `start` returns, the first one's too, the
+  follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell. The gap is from the wake to the new stream running.
 - With nothing to play on, or an output that refuses to open, it waits for the next wake and
   tries again every 100 ms for up to a second, then fails the stats, which faults the engine.
 - The binding reads `Current` for `engine.output`, and its events thread sends `outputChanged`
@@ -785,25 +792,55 @@ ring into the jitter buffer at the top of each block.
   until `measure-latency` (8.9) gives the push path a number.
 - A `capture` slot is a mic on this machine, with no socket and no jitter buffer. `createMixer`
   starts its input through `devices::capture` (8.3) at the output's period, or as near as the
-  device allows, and rejects if it cannot; `destroy` stops it. The capture thread's sink pushes
-  each delivery into an SPSC ring of 4096 frames, and the slot pulls a block from it. Its first
-  pull drops what arrived while armed, then it plays silence until the ring holds its target and
-  an input period. An offline engine opens no input, so it refuses a capture slot. ALSA opens a
+  device allows, and rejects if it cannot, or if the input's period or the output's callback is
+  over 1024 frames; `destroy` stops it. The capture thread's sink pushes each delivery into an SPSC
+  ring of 4096 frames, fixed so the audio thread never sizes it, and the slot pulls a block from
+  it. Its headroom is what the fill holds over the trough just after a delivery: an input period,
+  and the blocks an output callback pulls back to back after the first, three more under a
+  480-frame callback, since the input delivers nothing between them. Its first pull drops what
+  arrived while armed. It plays silence until the ring holds its target and its headroom, then for
+  one more window of 128 blocks while it reads the trough, and drops the excess at once, so its first sample waits as long as every one after it: a third of a second
+  of silence when a song starts. An offline engine opens no input, so it refuses a capture slot;
+  the timer clock opens one, since a box that plays nothing may still have a mic. ALSA opens a
   `hw:` device once, so on Linux an input feeds one mixer at a time, armed or live.
 - The ring's fill drifts when the input runs on another clock than the output. The slot holds the
   lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
   16 frames for the wakes of two threads. A trough off target moves the delay one sample a block,
   each move spliced across the block by linear interpolation, so nothing steps. A pull the ring
-  cannot fill plays what it holds and silence after; when the ring held something, the phase of
-  two clocks or a late wake caught it out, and the target rises by what was missing and 16 frames,
-  at most one input period over where it opened. An empty ring is an input that stopped, and moves
-  no target. A fill more than a period and a block over the target is a stall's backlog, dropped
-  at once down to a period over it. On the output's clock the trough never moves and holds the
-  target exactly, 3 ms for a 128-frame input. Decision
+  cannot fill plays what it holds and silence after. When full pulls come back within eight, the
+  most a 1024-frame callback takes, the phase of two clocks or a late wake ran the ring short, and the target rises by all
+  those pulls lacked and 16 frames, at most one input period over where it opened. A longer run is
+  an input that stopped, and raises it only by what its first pull lacked. A trough that stays a
+  whole window more than a period over the target is a stall's backlog, dropped at once to the
+  target. A fill high for one wake is no backlog: an output that catches up after a late wake, as
+  WASAPI shared and the timer clock do, pulls more than one callback's blocks at a wake, past the
+  headroom, and drains what the input delivered in the meantime at once. The slot drops none of
+  it, conceals nothing and counts no move for it. On a move to another output, the slot primes and
+  settles again, silent for a third of a second, under the new callback, which the audio thread
+  reads from the follower's cell at its next block. The new stream may render before its `start`
+  returns and the cell is written, but nothing plays under the old headroom: a slot that re-primes
+  is silent through one whole settling window, 0.34 s, before it plays a sample, and a change of
+  callback while it is silent starts it over under the new one.
+  On the output's clock the trough never moves and holds the target exactly, 3 ms for a
+  128-frame input. Decision
   [0018](decisions/0018-capturing-a-house-mic.md) has the reasons and the numbers.
-- A capture slot's `latency_frames` is the input's period, what the OS reports for its hardware,
-  and how long the block's first sample waited in the ring. Its `concealed` counts pulls the ring
-  could not fill, `resyncs` each move of the delay and each dropped backlog, and the rest stay 0.
+- The fill before a pull is not how long a sample waited: a pull just after a delivery finds more
+  in the ring than one just before it, and its samples waited as much less. The wait holds still:
+  the trough and its headroom, less where in the input's period the pulls fall, which the fill
+  cannot see. Under an output that takes a block a wake the pulls fall on a step of
+  `gcd(period, 128)`. Under a longer callback, one that takes three blocks on some wakes and four
+  on others at 480 frames, the step is the whole input period. The slot reports the middle of that
+  step, within half a step of the truth: 4.33 ms for a 128-frame input at its opening target, and
+  12.33 ms under a 480-frame callback. `latency_frames`, which the guide clock subtracts and the
+  echo canceller follows, is that wait and what the OS reports for the input's hardware, and it
+  moves only when the target does. `stats()` gives the wait as `playoutDelayMs`, zero until the
+  slot first plays. `concealed` counts pulls the ring could not fill, `resyncs` each move of the
+  delay and each dropped backlog, and the rest stay 0.
+- The echo canceller works on a capture slot whose mic is on the output's clock, as one on the
+  same interface is: it finds the path to the frame and takes 20 dB or more out, as on any slot.
+  A mic on its own clock moves the echo's delay a few samples a second between the slot's moves,
+  which the canceller cannot follow, so it takes out about 10 dB at first and less as the path
+  walks. Decision 0018 has the numbers.
 - A slot can be recorded, so a problem heard in a real room can be replayed offline (8.9). With
   `recordSlot` on, the slot's receiver hands every datagram it reads, RTCP and all, to a `Tap`
   with the moment it read it, after the packet is in the ring. The tap copies it into a ring of
