@@ -87,6 +87,8 @@ impl Slot {
                     position_ms: reading.position_ms,
                     hz: reading.hz,
                     confidence: reading.confidence,
+                    target_midi: reading.target_midi,
+                    error_semitones: reading.error_semitones,
                 });
             },
         );
@@ -322,6 +324,124 @@ mod tests {
         // The shifter's floor, and at most an eighth over one period of the voice
         let bound = 64 + (1.125 * f64::from(RATE) / a3_sharp) as u32;
         assert!(most > 0 && most <= bound, "delay reached {most} frames, bound {bound}");
+    }
+
+    /// What a tuning panel reads from one `Event::Pitch`: where, the target, and the error.
+    #[derive(Debug)]
+    struct Shown {
+        position_ms: f64,
+        target_midi: Option<i16>,
+        error_semitones: f32,
+    }
+
+    /// `input` through a one-slot graph following `guide` on the offline driver, hard left, under
+    /// the allocation guard. The backing plays silence from frame 0, so the guide's clock is the
+    /// output's. Returns the left channel and what every pitch event showed.
+    fn on_the_offline_driver(
+        input: &[f32],
+        guide: Guide,
+        corrector: CorrectorParams,
+    ) -> (Vec<f32>, Vec<Shown>) {
+        let mut slot = Slot::new(Box::new(Clip { samples: input.to_vec(), at: 0 }));
+        slot.set_guide(Some(Box::new(guide)));
+        let mut graph = Graph::new(vec![slot]);
+        let (mut events, mut drain) = event_ring();
+        let mut backing = Planar::default();
+        backing.pad_to(2 * input.len());
+        graph.set_backing(Backing::new(Stems::new(backing, None), 0));
+        graph.steer(1, Transport::Start, &mut events);
+        let mut params = Params::default();
+        params.slots[0].pan = -1.0;
+        params.slots[0].effects.corrector = corrector;
+        let mut driver = OfflineDriver::new(Box::new(move |out: Stereo<'_>| {
+            graph.render(&params, out, &mut events);
+        }));
+
+        let mut left = Vec::with_capacity(input.len());
+        let mut interleaved = [0.0; 2 * BLOCK];
+        while left.len() < input.len() {
+            assert_no_alloc(|| driver.pump_into(&mut interleaved));
+            left.extend(interleaved.iter().step_by(2));
+        }
+        let shown = std::iter::from_fn(|| drain.pop())
+            .filter_map(|event| match event {
+                Event::Pitch { position_ms, target_midi, error_semitones, .. } => {
+                    Some(Shown { position_ms, target_midi, error_semitones })
+                }
+                _ => None,
+            })
+            .collect();
+        (left, shown)
+    }
+
+    /// C major's classes, with C in bit 0.
+    const C_MAJOR: u16 = 0b1010_1011_0101;
+    const B_FLAT_3: u8 = 58;
+    /// The guide's B flat sounds from half a second to one second.
+    const NOTE_MS: std::ops::Range<f64> = 500.0..1000.0;
+    /// A reading's window reaches 21 ms either side of its centre, and the target it carries is
+    /// the one set as it closed: this far from an edge, a reading has heard one target only.
+    const EDGE_MARGIN_MS: f64 = 50.0;
+    /// The corrector's own tests allow 5 cents for the detector's error.
+    const ERROR_TOLERANCE: f32 = 0.05;
+
+    fn b_flat_in_c_major() -> Guide {
+        let frame = |ms: f64| (ms * f64::from(RATE) / 1000.0) as u64;
+        Guide {
+            notes: vec![Note {
+                midi: B_FLAT_3,
+                start_frame: frame(NOTE_MS.start),
+                end_frame: frame(NOTE_MS.end),
+            }],
+            key_mask: C_MAJOR,
+        }
+    }
+
+    /// 30 cents above A3: in C major's key the nearest class is A, 0.3 below, and against the
+    /// guide's B flat the voice is 0.7 flat.
+    fn a3_sharp(seconds: f64) -> Vec<f32> {
+        let hz = 220.0 * 2f64.powf(30.0 / 1200.0);
+        (0..(seconds * f64::from(RATE)) as usize).map(|frame| voice(hz, frame)).collect()
+    }
+
+    // The tuning panel's reading: during the note it names the note and how far flat the voice
+    // is; around it, no note, and the distance to the key's nearest class
+    #[test]
+    fn a_reading_shows_the_guide_note_and_the_error_from_it() {
+        let (_, shown) = on_the_offline_driver(&a3_sharp(1.5), b_flat_in_c_major(), CORRECTING);
+        let settled = shown.iter().filter(|s| s.position_ms > EDGE_MARGIN_MS);
+        let away_from_edges = settled.filter(|s| {
+            (s.position_ms - NOTE_MS.start).abs() > EDGE_MARGIN_MS
+                && (s.position_ms - NOTE_MS.end).abs() > EDGE_MARGIN_MS
+        });
+        let (mut in_note, mut in_key) = (0, 0);
+        for reading in away_from_edges {
+            let (target, error) = if NOTE_MS.contains(&reading.position_ms) {
+                in_note += 1;
+                (Some(i16::from(B_FLAT_3)), 0.7)
+            } else {
+                in_key += 1;
+                (None, -0.3)
+            };
+            assert_eq!(reading.target_midi, target, "{reading:?}");
+            assert!((reading.error_semitones - error).abs() < ERROR_TOLERANCE, "{reading:?}");
+        }
+        assert!(in_note >= 35 && in_key >= 75, "{in_note} readings in the note, {in_key} in key");
+    }
+
+    // Off, nothing pulls: no target, no error, and the voice is what the source handed over
+    #[test]
+    fn correction_off_shows_no_target_and_leaves_the_voice_alone() {
+        let input = a3_sharp(1.5);
+        let off = CorrectorParams { enabled: false, ..CORRECTING };
+        let (left, shown) = on_the_offline_driver(&input, b_flat_in_c_major(), off);
+        assert_eq!(shown.len(), 150, "readings every 10 ms");
+        for reading in shown {
+            assert_eq!((reading.target_midi, reading.error_semitones), (None, 0.0), "{reading:?}");
+        }
+        for (frame, (out, sample)) in left.iter().zip(&input).enumerate() {
+            assert_eq!(out.to_bits(), sample.to_bits(), "frame {frame} changed");
+        }
     }
 
     #[test]

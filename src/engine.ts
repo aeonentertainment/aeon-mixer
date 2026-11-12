@@ -234,6 +234,8 @@ export class Engine {
             event.positionMs,
             event.hz,
             event.confidence,
+            event.targetMidi ?? null,
+            event.errorSemitones,
           );
           break;
         case "position":
