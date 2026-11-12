@@ -499,7 +499,7 @@ mod tests {
             });
             output.extend_from_slice(&left);
         }
-        for (period, window) in output.chunks_exact(4_800).enumerate() {
+        for (period, window) in output.as_chunks::<4_800>().0.iter().enumerate() {
             let loudest =
                 (0..window.len()).max_by(|a, b| window[*a].abs().total_cmp(&window[*b].abs()));
             assert_eq!(loudest, Some(1_234), "click {period} moved");
