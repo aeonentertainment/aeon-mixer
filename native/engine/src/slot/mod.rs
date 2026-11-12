@@ -16,7 +16,7 @@ use crate::command::{Event, EventProducer};
 use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
 use cue::Cue;
-use effects::{Corrector, Reverb};
+use effects::{Corrector, Reverb, Voice};
 use guide::Guide;
 use meter::Meter;
 use source::Source;
@@ -27,6 +27,7 @@ pub struct Slot {
     corrector: Corrector,
     corrector_delay: Arc<CorrectorDelay>,
     reverb: Reverb,
+    voice: Voice,
     meter: Meter,
     /// Left and right gains the last block ended on; `None` before the first block, which starts
     /// on its target instead of ramping up from silence.
@@ -42,6 +43,7 @@ impl Slot {
             corrector: Corrector::new(),
             corrector_delay: Arc::default(),
             reverb: Reverb::new(),
+            voice: Voice::new(),
             meter: Meter::new(),
             gains: None,
             input: [0.0; BLOCK],
@@ -59,9 +61,9 @@ impl Slot {
         Arc::clone(&self.corrector_delay)
     }
 
-    /// Pulls one block, corrects it toward the guide at `cue`, meters it, adds reverb, and adds it
-    /// to `out` at the ramped gain. `any_solo` is whether any slot in the graph is soloed, which
-    /// silences this one unless it is too.
+    /// Pulls one block, corrects it toward the guide at `cue`, meters it, voices it, adds reverb,
+    /// and adds it to `out` at the ramped gain. `any_solo` is whether any slot in the graph is
+    /// soloed, which silences this one unless it is too.
     pub fn render(
         &mut self,
         index: u8,
@@ -93,7 +95,7 @@ impl Slot {
             },
         );
         self.corrector_delay.publish(self.corrector.latency_frames());
-        // The meter reads the corrected voice before the reverb, so the level is the singing
+        // The meter reads the corrected voice ahead of the voice and the reverb: it is the singing
         for sample in self.input {
             if let Some(reading) = self.meter.push_frame(sample * sample, sample.abs()) {
                 events.push(Event::Level {
@@ -103,6 +105,7 @@ impl Slot {
                 });
             }
         }
+        self.voice.process(&params.effects.voice, &mut self.input);
         self.reverb.process(&params.effects.reverb, &mut self.input);
 
         let target = target_gains(params, any_solo);
@@ -127,10 +130,11 @@ impl Slot {
         self.guide.as_deref()
     }
 
-    /// A new singer: the source forgets its stream and the corrector what it heard.
+    /// A new singer: the source forgets its stream, the corrector and the voice what they heard.
     pub fn reset(&mut self) {
         self.source.reset();
         self.corrector.reset();
+        self.voice.reset();
     }
 }
 

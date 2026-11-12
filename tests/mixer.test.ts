@@ -19,6 +19,10 @@ function right(interleaved: Float32Array): number[] {
   return Array.from(interleaved.filter((_, i) => i % 2 === 1));
 }
 
+function firstSound(samples: number[]) {
+  return samples.findIndex((sample) => sample !== 0);
+}
+
 function onceLevel(mixer: Mixer): Promise<[slot: number, rmsDb: number, peakDb: number]> {
   return new Promise((resolve) => {
     const off = mixer.on("level", (slot, rmsDb, peakDb) => {
@@ -355,6 +359,9 @@ test("ranges are checked before anything crosses", async () => {
     mixer.setSlotEffects(0, [{ kind: "reverb", enabled: true, roomSize: 0.5, mix: -0.1 }]),
   ).toThrow(RangeError);
   expect(() =>
+    mixer.setSlotEffects(0, [{ kind: "voice", enabled: true, formantSemitones: 13 }]),
+  ).toThrow(RangeError);
+  expect(() =>
     mixer.setSlotGuide(0, { notes: [{ midi: 128, startMs: 0, endMs: 1 }], keyMask: 0 }),
   ).toThrow(RangeError);
   expect(() =>
@@ -367,5 +374,41 @@ test("ranges are checked before anything crosses", async () => {
   await expect(mixer.seek(1000)).rejects.toThrow(/backing/);
   await expect(mixer.setBackingKey(2)).rejects.toThrow(/backing/);
   expect(() => mixer.setStemGain("instrumental", 0.5)).toThrow(/backing/);
+  await engine.close();
+});
+
+// A voice reaches the slot through the API: brighter changes the sound, and its first sample comes
+// out on the same frame as the dry voice's, since a formant move adds no delay
+test("a voice changes the sound and not when it plays", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const render = async (effects: Parameters<Mixer["setSlotEffects"]>[1]) => {
+    const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+    mixer.setSlot(0, { pan: -1 });
+    mixer.setSlotEffects(0, effects);
+    await startLive(engine, mixer);
+    let frame = 0;
+    const out: number[] = [];
+    for (let block = 0; block < 60; block += 1) {
+      const pcm = new Float32Array(2 * BLOCK);
+      for (let i = 0; i < BLOCK; i += 1, frame += 1) {
+        let sample = 0;
+        if (frame >= 1000) {
+          const t = (frame - 1000) / 48000;
+          for (let h = 1; h <= 12; h += 1) sample += Math.cos(2 * Math.PI * 147 * h * t) / h;
+        }
+        pcm[2 * i] = 0.2 * sample;
+        pcm[2 * i + 1] = 0.2 * sample;
+      }
+      mixer.push(0, pcm);
+      out.push(...left(engine.pump(1)));
+    }
+    await destroyLive(engine, mixer);
+    return out;
+  };
+  const dry = await render([]);
+  const brighter = await render([{ kind: "voice", enabled: true, formantSemitones: 2 }]);
+  expect(firstSound(dry)).toBeGreaterThan(0);
+  expect(firstSound(brighter)).toBe(firstSound(dry));
+  expect(brighter.some((sample, i) => Math.abs(sample - (dry[i] ?? 0)) > 1e-3)).toBe(true);
   await engine.close();
 });

@@ -29,6 +29,7 @@ pub struct SlotParams {
 pub struct EffectParams {
     pub corrector: CorrectorParams,
     pub reverb: ReverbParams,
+    pub voice: VoiceParams,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -43,6 +44,14 @@ pub struct ReverbParams {
     pub enabled: bool,
     pub room_size: f32,
     pub mix: f32,
+}
+
+/// A voice: a formant move in semitones from the singer's own, -12 to 12. Decision 0014 has the
+/// presets a host builds from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VoiceParams {
+    pub enabled: bool,
+    pub formant_semitones: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
