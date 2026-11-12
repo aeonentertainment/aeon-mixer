@@ -16,19 +16,22 @@ use crate::command::{Event, EventProducer};
 use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
 use cue::Cue;
-use effects::{Corrector, Reverb, Voice};
+use effects::{Compressor, Corrector, Gate, HighPass, Reverb, Voice};
 use guide::Guide;
 use meter::Meter;
 use source::Source;
 
 pub struct Slot {
     source: Box<dyn Source>,
+    high_pass: HighPass,
+    gate: Gate,
     guide: Option<Box<Guide>>,
     corrector: Corrector,
     corrector_delay: Arc<CorrectorDelay>,
     reverb: Reverb,
     voice: Voice,
     meter: Meter,
+    compressor: Compressor,
     /// Left and right gains the last block ended on; `None` before the first block, which starts
     /// on its target instead of ramping up from silence.
     gains: Option<[f32; 2]>,
@@ -39,12 +42,15 @@ impl Slot {
     pub fn new(source: Box<dyn Source>) -> Self {
         Self {
             source,
+            high_pass: HighPass::new(),
+            gate: Gate::new(),
             guide: None,
             corrector: Corrector::new(),
             corrector_delay: Arc::default(),
             reverb: Reverb::new(),
             voice: Voice::new(),
             meter: Meter::new(),
+            compressor: Compressor::new(),
             gains: None,
             input: [0.0; BLOCK],
         }
@@ -61,9 +67,9 @@ impl Slot {
         Arc::clone(&self.corrector_delay)
     }
 
-    /// Pulls one block, corrects it toward the guide at `cue`, meters it, voices it, adds reverb,
-    /// and adds it to `out` at the ramped gain. `any_solo` is whether any slot in the graph is
-    /// soloed, which silences this one unless it is too.
+    /// Pulls one block, cleans it, corrects it toward the guide at `cue`, meters it, compresses
+    /// it, voices it, adds reverb, and adds it to `out` at the ramped gain. `any_solo` is whether
+    /// any slot in the graph is soloed, which silences this one unless it is too.
     pub fn render(
         &mut self,
         index: u8,
@@ -74,6 +80,8 @@ impl Slot {
         events: &mut EventProducer,
     ) {
         self.source.pull(&mut self.input);
+        self.high_pass.process(&params.effects.cleanup, &mut self.input);
+        self.gate.process(&params.effects.cleanup, &mut self.input);
         let guide_offset =
             (f64::from(params.guide_offset_ms) * f64::from(RATE) / 1000.0).round() as i64;
         let frame = cue.frame - i64::from(self.source.latency_frames()) + guide_offset;
@@ -95,7 +103,8 @@ impl Slot {
             },
         );
         self.corrector_delay.publish(self.corrector.latency_frames());
-        // The meter reads the corrected voice ahead of the voice and the reverb: it is the singing
+        // The meter reads the corrected voice ahead of the compressor, the voice and the reverb:
+        // it is the singing
         for sample in self.input {
             if let Some(reading) = self.meter.push_frame(sample * sample, sample.abs()) {
                 events.push(Event::Level {
@@ -105,6 +114,7 @@ impl Slot {
                 });
             }
         }
+        self.compressor.process(&params.effects.cleanup, &mut self.input);
         self.voice.process(&params.effects.voice, &mut self.input);
         self.reverb.process(&params.effects.reverb, &mut self.input);
 
@@ -130,11 +140,14 @@ impl Slot {
         self.guide.as_deref()
     }
 
-    /// A new singer: the source forgets its stream, the corrector and the voice what they heard.
+    /// A new singer: the source forgets its stream, the corrector and the voice what they heard,
+    /// and the gate and compressor the level of the phone before.
     pub fn reset(&mut self) {
         self.source.reset();
         self.corrector.reset();
         self.voice.reset();
+        self.gate = Gate::new();
+        self.compressor = Compressor::new();
     }
 }
 
@@ -162,7 +175,7 @@ mod tests {
     use crate::ingest::fixtures::L16Sender;
     use crate::ingest::packet::RING_CAPACITY;
     use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
-    use crate::params::{CorrectorParams, EffectParams, Params};
+    use crate::params::{CleanupParams, CorrectorParams, EffectParams, Params};
     use crate::slot::guide::Note;
 
     const CORRECTING: CorrectorParams =
@@ -445,6 +458,52 @@ mod tests {
         }
         for (frame, (out, sample)) in left.iter().zip(&input).enumerate() {
             assert_eq!(out.to_bits(), sample.to_bits(), "frame {frame} changed");
+        }
+    }
+
+    /// A click every 100 ms over silence.
+    struct Clicks {
+        at: usize,
+    }
+
+    impl Source for Clicks {
+        fn pull(&mut self, out: &mut [f32]) {
+            for sample in out {
+                *sample = if self.at % 4_800 == 1_234 { 0.5 } else { 0.0 };
+                self.at += 1;
+            }
+        }
+    }
+
+    // The done-when: with the high-pass, gate and compressor on, every click comes out loudest on
+    // the frame it went in, so the stages add no samples to the mic path
+    #[test]
+    fn cleaning_the_voice_adds_no_samples() {
+        let params = SlotParams {
+            pan: -1.0,
+            effects: EffectParams {
+                cleanup: CleanupParams { enabled: true },
+                ..EffectParams::default()
+            },
+            ..SlotParams::default()
+        };
+        let mut slot = Slot::new(Box::new(Clicks { at: 0 }));
+        let (mut events, _drain) = event_ring();
+        let mut output = Vec::with_capacity(RATE as usize);
+        for _ in 0..RATE as usize / BLOCK {
+            let mut left = [0.0; BLOCK];
+            let mut right = [0.0; BLOCK];
+            assert_no_alloc(|| {
+                let mut out = Stereo { left: &mut left, right: &mut right };
+                slot.render(0, &params, false, Cue::default(), &mut out, &mut events);
+            });
+            output.extend_from_slice(&left);
+        }
+        for (period, window) in output.chunks_exact(4_800).enumerate() {
+            let loudest =
+                (0..window.len()).max_by(|a, b| window[*a].abs().total_cmp(&window[*b].abs()));
+            assert_eq!(loudest, Some(1_234), "click {period} moved");
+            assert!(window[..1_234].iter().all(|s| s.abs() < 1e-6), "click {period} came early");
         }
     }
 

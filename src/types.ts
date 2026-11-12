@@ -63,7 +63,12 @@ export type SlotEffect =
    * A formant move in semitones from the singer's own, -12 to 12, with no change of pitch and no
    * added delay. Decision 0014 has the first voices' settings.
    */
-  | { kind: "voice"; enabled: boolean; formantSemitones: number };
+  | { kind: "voice"; enabled: boolean; formantSemitones: number }
+  /**
+   * A high-pass and gate ahead of the corrector and a compressor after the meter. None reads
+   * ahead or buffers; decision 0012 has their numbers and costs.
+   */
+  | { kind: "cleanup"; enabled: boolean };
 
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;

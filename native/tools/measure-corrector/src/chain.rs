@@ -27,8 +27,17 @@ use crate::take::MEASURE_GAIN;
 pub use crate::take::Take;
 
 pub fn run(setup: Setup) -> Take {
-    let Setup { input, frames, corrector, reverb, guide, guide_offset_ms, extra_voices, mix } =
-        setup;
+    let Setup {
+        input,
+        frames,
+        corrector,
+        reverb,
+        cleanup,
+        guide,
+        guide_offset_ms,
+        extra_voices,
+        mix,
+    } = setup;
     let (source, mut ingest): (Box<dyn Source>, Option<Ingest>) = match input {
         Input::Samples(samples) => (Box::new(ClipSource::new(samples)), None),
         Input::Packets(arrivals) => {
@@ -65,7 +74,7 @@ pub fn run(setup: Setup) -> Take {
         gain,
         pan,
         guide_offset_ms,
-        effects: engine::params::EffectParams { corrector, reverb, ..Default::default() },
+        effects: engine::params::EffectParams { corrector, reverb, cleanup, ..Default::default() },
         ..SlotParams::default()
     };
     let mut params = Params::default();

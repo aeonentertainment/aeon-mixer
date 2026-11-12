@@ -3,6 +3,7 @@
 //! voice's movement.
 
 use engine::block::RATE;
+use engine::params::CleanupParams;
 use engine::slot::guide::Guide;
 use serde_json::{Map, Value, json};
 
@@ -28,15 +29,21 @@ const IN_TUNE_CENTS: (f64, f64) = (-10.0, 15.0);
 /// hear, and together they say how far a row's median moves on the hop's phase alone.
 const START_OFFSETS: [usize; 5] = [0, 37, 74, 111, 200];
 
-/// One run of `clip` through `condition` and `variant`.
+/// One run of `clip` through `condition` and `variant`, with the slot's cleanup as `cleanup` asks.
 pub struct Rendered {
     pub prepared_lag_frames: i64,
     pub take: Take,
 }
 
-pub fn render(clip: &SungClip, condition: Condition, guide: Guide, variant: &Variant) -> Rendered {
+pub fn render(
+    clip: &SungClip,
+    condition: Condition,
+    guide: Guide,
+    variant: &Variant,
+    cleanup: CleanupParams,
+) -> Rendered {
     let Prepared { input, lag_frames, guide_offset_ms } = condition.prepare(&clip.samples);
-    render_prepared(clip, input, lag_frames, guide_offset_ms, guide, variant)
+    render_prepared(clip, input, lag_frames, guide_offset_ms, guide, variant, cleanup)
 }
 
 fn render_prepared(
@@ -46,12 +53,14 @@ fn render_prepared(
     guide_offset_ms: f32,
     guide: Guide,
     variant: &Variant,
+    cleanup: CleanupParams,
 ) -> Rendered {
     let tail = RATE as usize / 2;
     let frames = clip.samples.len() + lag_frames.max(0) as usize + tail;
     let mut setup = Setup::new(input, frames, variant.params());
     setup.guide = Some(guide);
     setup.guide_offset_ms = guide_offset_ms;
+    setup.cleanup = cleanup;
     Rendered { prepared_lag_frames: lag_frames, take: run(setup) }
 }
 
@@ -190,11 +199,15 @@ fn started_later(clip: &SungClip, frames: usize) -> SungClip {
 
 /// The intonation row's lowest and highest over the start offsets, direct: what a change has to
 /// beat before it means anything. A 25-note clip moves by several cents on this alone.
-fn start_offset_spread(clip: &SungClip, variant: &Variant) -> Result<(f64, f64), String> {
+fn start_offset_spread(
+    clip: &SungClip,
+    variant: &Variant,
+    cleanup: CleanupParams,
+) -> Result<(f64, f64), String> {
     let mut medians = Vec::with_capacity(START_OFFSETS.len());
     for frames in START_OFFSETS {
         let later = started_later(clip, frames);
-        let rendered = render(&later, Condition::Direct, variant.guide(&later)?, variant);
+        let rendered = render(&later, Condition::Direct, variant.guide(&later)?, variant, cleanup);
         let points = contour::read(&rendered.take.voice(), 0);
         medians.push(score_intonation(&points, &later.notes).median_cents);
     }
@@ -226,20 +239,21 @@ pub fn clip_rows(
     clip: &SungClip,
     conditions: &[Condition],
     variants: &[Variant],
+    cleanup: CleanupParams,
 ) -> Result<Value, String> {
     let dry = contour::read(&clip.samples, 0);
     let mut row = Map::new();
     for condition in conditions {
         let mut by_variant = Map::new();
         for variant in variants {
-            let rendered = render(clip, *condition, variant.guide(clip)?, variant);
+            let rendered = render(clip, *condition, variant.guide(clip)?, variant, cleanup);
             let output = rendered.take.voice();
             let points = contour::read(&output, rendered.prepared_lag_frames);
             let score = score_intonation(&points, &clip.notes);
             let expression = expression_of(clip, &rendered, &dry);
             let second = clip.second_notes.as_ref().map(|notes| score_intonation(&points, notes));
             let spread = match condition {
-                Condition::Direct => Some(start_offset_spread(clip, variant)?),
+                Condition::Direct => Some(start_offset_spread(clip, variant, cleanup)?),
                 _ => None,
             };
             by_variant.insert(
@@ -279,7 +293,7 @@ pub fn clip_rows(
         entry.insert("variants".to_owned(), Value::Object(by_variant));
         if let Some(truth) = &clip.truth {
             let off = Variant::off();
-            let rendered = render(clip, *condition, off.guide(clip)?, &off);
+            let rendered = render(clip, *condition, off.guide(clip)?, &off, cleanup);
             entry.insert(
                 "detector".to_owned(),
                 detector_json(score_detector(&rendered.take.readings, truth)),
@@ -337,7 +351,13 @@ mod tests {
     fn median_through(clip: &SungClip, condition: Condition, label: &str) -> IntonationScore {
         let variant =
             Variant::standard().into_iter().find(|variant| variant.label == label).unwrap();
-        let rendered = render(clip, condition, variant.guide(clip).unwrap(), &variant);
+        let rendered = render(
+            clip,
+            condition,
+            variant.guide(clip).unwrap(),
+            &variant,
+            CleanupParams::default(),
+        );
         let points = contour::read(&rendered.take.voice(), rendered.prepared_lag_frames);
         score_intonation(&points, &clip.notes)
     }
@@ -379,7 +399,8 @@ mod tests {
         let clip = sung(&NOTES, 0.0);
         let wifi = Condition::Opus { impairment: Impairment::WIFI, dtx: true };
         let off = Variant::off();
-        let rendered = render(&clip, wifi, off.guide(&clip).unwrap(), &off);
+        let rendered =
+            render(&clip, wifi, off.guide(&clip).unwrap(), &off, CleanupParams::default());
         let stats = rendered.take.stats.expect("a packet source reports");
         assert!(stats.lost > 0, "{stats:?}");
         assert_eq!(stats.resyncs, 0, "nothing reset the stream: {stats:?}");

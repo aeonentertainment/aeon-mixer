@@ -42,6 +42,7 @@ mod vocadito;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use engine::params::CleanupParams;
 use engine::slot::guide::{Guide, Note};
 use serde_json::{Map, Value, json};
 
@@ -56,7 +57,7 @@ const USAGE: &str = "\
 usage:
   measure-corrector run --vocadito DIR [--golden DIR] [--clips 2,6,10,19] [--variant L:MODE:S:R]...
                         [--phone WAV --phone-guide JSON]... [--song WAV --song-guide JSON]...
-                        [--no-cpu] [--out RESULT.json]
+                        [--cleanup] [--no-cpu] [--out RESULT.json]
   measure-corrector table RESULT.json
   measure-corrector diff BEFORE.json AFTER.json [--tolerance N]
   measure-corrector listen --vocadito DIR --golden DIR --out CLIPS --key-out KEYDIR [--seed N]
@@ -71,6 +72,8 @@ usage:
                    each with its own --phone-guide, in the same order
   --song WAV       a dry studio vocal, the answer key's song, with the guide made from it in
                    --song-guide. Repeats; the golden vocal is one when --golden is given
+  --cleanup        the clip and CPU rows run with the slot's high-pass, gate and compressor on;
+                   the answer key keeps it off, since it measures the corrector alone
   --tolerance N    leave out numbers that moved by N or less (default 0)";
 
 /// The clips `auto-tune.md`'s rows read.
@@ -202,6 +205,7 @@ fn run_rows(flags: &Flags) -> Result<Value, String> {
         variants.push(Variant::parse(text)?);
     }
     let conditions = Condition::standard();
+    let cleanup = CleanupParams { enabled: flags.has("--cleanup") };
 
     let golden_vocal = match &golden {
         Some(dir) => Some(audio::decode_mono(&dir.join("vocals.mp3"))?),
@@ -220,7 +224,10 @@ fn run_rows(flags: &Flags) -> Result<Value, String> {
     for number in clip_numbers {
         let clip = vocadito::load(&vocadito_dir, number)?;
         eprintln!("{} ({:.0} s)", clip.name, clip.seconds());
-        clips.insert(clip.name.clone(), sung_rows::clip_rows(&clip, &conditions, &variants)?);
+        clips.insert(
+            clip.name.clone(),
+            sung_rows::clip_rows(&clip, &conditions, &variants, cleanup)?,
+        );
         if let Some(truth) = &clip.truth {
             windows.insert(clip.name.clone(), sung_rows::window_rows(&clip, truth));
         }
@@ -239,7 +246,10 @@ fn run_rows(flags: &Flags) -> Result<Value, String> {
             .copied()
             .filter(|condition| matches!(condition, Condition::Opus { .. }))
             .collect();
-        clips.insert(clip.name.clone(), sung_rows::clip_rows(&clip, &through_a_phone, &variants)?);
+        clips.insert(
+            clip.name.clone(),
+            sung_rows::clip_rows(&clip, &through_a_phone, &variants, cleanup)?,
+        );
         phone_alignment.insert(clip.name.clone(), json!(offset));
     }
 
@@ -248,10 +258,11 @@ fn run_rows(flags: &Flags) -> Result<Value, String> {
     } else {
         eprintln!("cpu");
         let vocal = golden_vocal.as_deref().or(first_clip_samples.as_deref());
-        vocal.map_or(Value::Null, cpu::rows)
+        vocal.map_or(Value::Null, |vocal| cpu::rows(vocal, cleanup))
     };
 
     Ok(json!({
+        "cleanup": cleanup.enabled,
         "latency": latency,
         "sync": sync,
         "cpu": cpu,
@@ -313,7 +324,7 @@ fn fresh_seed() -> u64 {
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let command = args.next().ok_or(USAGE)?;
-    let flags = Flags::parse(args, &["--no-cpu"])?;
+    let flags = Flags::parse(args, &["--cleanup", "--no-cpu"])?;
     match command.as_str() {
         "run" => {
             let result = run_rows(&flags)?;
@@ -399,6 +410,9 @@ mod tests {
     use crate::sung_clip::MeantNote;
 
     // The whole point of a diff: on one machine, two runs of every row but CPU are the same number
+    /// With the cleanup on, so its stages are held to the same rule.
+    const ON: CleanupParams = CleanupParams { enabled: true };
+
     #[test]
     fn a_run_is_deterministic() {
         let clip = || SungClip {
@@ -414,8 +428,8 @@ mod tests {
             Condition::Noise { snr_db: 20.0 },
             Condition::Opus { impairment: rtp::Impairment::WIFI, dtx: true },
         ];
-        let once = sung_rows::clip_rows(&clip(), &conditions, &Variant::standard()).unwrap();
-        let again = sung_rows::clip_rows(&clip(), &conditions, &Variant::standard()).unwrap();
+        let once = sung_rows::clip_rows(&clip(), &conditions, &Variant::standard(), ON).unwrap();
+        let again = sung_rows::clip_rows(&clip(), &conditions, &Variant::standard(), ON).unwrap();
         assert_eq!(once, again);
         // And deterministic does not mean stuck: the conditions and variants differ from each other
         let direct = &once["direct"]["variants"];

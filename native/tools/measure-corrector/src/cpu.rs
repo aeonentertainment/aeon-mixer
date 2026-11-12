@@ -4,7 +4,7 @@
 
 use cpu_time::ThreadTime;
 use engine::block::RATE;
-use engine::params::CorrectorParams;
+use engine::params::{CleanupParams, CorrectorParams};
 use engine::slot::guide::Guide;
 use kernels::{EVERY_PITCH_CLASS, PitchCorrector};
 use serde_json::{Value, json};
@@ -50,10 +50,11 @@ fn core_alone(voice: &[f32], strength: f32) -> f64 {
 }
 
 /// `voices` copies of `voice` through slots, all into one graph.
-fn slots(voice: &[f32], voices: usize, params: CorrectorParams) -> f64 {
+fn slots(voice: &[f32], voices: usize, params: CorrectorParams, cleanup: CleanupParams) -> f64 {
     let mut setup = Setup::new(Input::Samples(voice.to_vec()), voice.len(), params);
     setup.guide = Some(Guide { notes: Vec::new(), key_mask: EVERY_PITCH_CLASS });
     setup.extra_voices = vec![voice.to_vec(); voices - 1];
+    setup.cleanup = cleanup;
     percent_of_core(run(setup).cpu_seconds, voice.len())
 }
 
@@ -62,14 +63,15 @@ fn repeated(mut measure: impl FnMut() -> f64) -> Value {
     json!({ "median": median(&runs), "min": runs.iter().copied().fold(f64::INFINITY, f64::min) })
 }
 
-pub fn rows(vocal: &[f32]) -> Value {
+/// The slot rows run with the cleanup as `cleanup` asks; the core rows are the kernel alone.
+pub fn rows(vocal: &[f32], cleanup: CleanupParams) -> Value {
     let voice = bench_voice();
     json!({
         "build": if cfg!(debug_assertions) { "debug, not a number to quote" } else { "release" },
         "core_correcting": repeated(|| core_alone(&voice, 1.0)),
         "core_bypassed": repeated(|| core_alone(&voice, 0.0)),
-        "slot_correcting": repeated(|| slots(vocal, 1, ON)),
-        "slot_bypassed": repeated(|| slots(vocal, 1, OFF)),
-        "four_slots_correcting": repeated(|| slots(vocal, 4, ON)),
+        "slot_correcting": repeated(|| slots(vocal, 1, ON, cleanup)),
+        "slot_bypassed": repeated(|| slots(vocal, 1, OFF, cleanup)),
+        "four_slots_correcting": repeated(|| slots(vocal, 4, ON, cleanup)),
     })
 }

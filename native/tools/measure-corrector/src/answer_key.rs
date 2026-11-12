@@ -10,6 +10,7 @@
 //!    it right. What is left against the key is the error, and the degrader's own round trip,
 //!    bent and bent back, is the floor no row can go under.
 
+use engine::params::CleanupParams;
 use serde_json::{Value, json};
 
 use crate::artefacts;
@@ -28,6 +29,9 @@ use crate::sung_rows::render;
 use crate::take_delay::TakeDelay;
 use crate::variant::Variant;
 use crate::vibrato;
+
+/// The answer key measures the corrector alone, so the slot's cleanup stays off for it.
+const OFF: CleanupParams = CleanupParams { enabled: false };
 
 /// Past a note's first moments before reading its centre, as the intonation row does.
 const CENTRE_LEAD_MS: f64 = 30.0;
@@ -93,10 +97,11 @@ pub fn rows(clip: &SungClip, variants: &[Variant]) -> Result<Value, String> {
     let mut by_variant = serde_json::Map::new();
     for variant in variants {
         let left_take =
-            render(&key_clip, Condition::Direct, variant.guide(&key_clip)?, variant).take;
+            render(&key_clip, Condition::Direct, variant.guide(&key_clip)?, variant, OFF).take;
         let left = Heard::take(&left_take);
         let restored_take =
-            render(&broken_clip, Condition::Direct, variant.guide(&broken_clip)?, variant).take;
+            render(&broken_clip, Condition::Direct, variant.guide(&broken_clip)?, variant, OFF)
+                .take;
         let restored = Heard::take(&restored_take);
         by_variant.insert(
             variant.label.clone(),
