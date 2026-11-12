@@ -17,7 +17,7 @@ constexpr double kWindowSeconds = 2048.0 / 48000;
 constexpr double kCrossfadeSeconds = 0.020;
 /** A reading this sure is a voice to correct: YIN's dip under its threshold. */
 constexpr float kVoicedConfidence = 0.9f;
-/** E2, the bottom of a bass's range. A lower voice would need jumps that break the 15 ms budget, so it passes uncorrected. */
+/** E2, the bottom of a bass's range. A lower voice would need jumps past the 13.5 ms ceiling, so it passes uncorrected. */
 constexpr float kLowestCorrectedHz = 82.0f;
 /** Readings a held correction survives without a voice, so one dropped frame mid-note does not let go. */
 constexpr int kUnvoicedHold = 3;
@@ -107,6 +107,7 @@ struct PitchCorrector::State {
     } else if (++unvoiced > kUnvoicedHold) {
       voiced = false;
     }
+    shifter.setVoiced(voiced);
     retarget();
   }
 };

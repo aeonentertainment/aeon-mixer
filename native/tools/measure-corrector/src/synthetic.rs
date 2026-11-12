@@ -112,12 +112,27 @@ pub fn on_the_fence(depth: f64, strength: f32, retune_ms: f32) -> (f64, f64) {
     (band_rms(&dry, 100.0, 3.0, 12.0), band_rms(&wet, 100.0, 3.0, 12.0))
 }
 
-/// The bound row: a voice held 30 cents sharp of `hz`, corrected in full, so the shifter reads
-/// behind and drifts away from the voice until it jumps back. What it lands at, and the most it
-/// trailed by, in frames and milliseconds.
+/// The bound row: a voice held 30 cents off `hz`, corrected in full. Sharp, the shifter reads
+/// behind and drifts away from the voice until it jumps ahead; flat, it closes on the voice until
+/// it jumps back. Each sets the delay's top by a different jump, so the row takes both: the
+/// furthest either lands from the note, in cents, and the most either trailed by, in frames and
+/// milliseconds.
 pub fn across_the_range(hz: f64) -> (f64, f64, f64) {
+    // Flat of E2 is under the lowest voice the corrector takes, so the bottom row's flat voice
+    // sits a semitone up
+    let flat_from =
+        if hz * 2f64.powf(-30.0 / 1200.0) < 82.0 { hz * 2f64.powf(1.0 / 12.0) } else { hz };
+    let (sharp, flat) = (held_off(hz, 30.0), held_off(flat_from, -30.0));
+    let landed = if sharp.0.abs() >= flat.0.abs() { sharp.0 } else { flat.0 };
+    let most = sharp.1.max(flat.1);
+    (landed, f64::from(most), f64::from(most) * 1000.0 / f64::from(RATE))
+}
+
+/// A voice held `cents_off` from `hz`, corrected in full: the median it lands at after the first
+/// second, in cents from `hz`, and the most the shifter trailed by, in frames.
+fn held_off(hz: f64, cents_off: f64) -> (f64, u32) {
     let frames = RATE as usize * 2;
-    let voice = harmonic_voice(frames, |_| hz * 2f64.powf(30.0 / 1200.0));
+    let voice = harmonic_voice(frames, |_| hz * 2f64.powf(cents_off / 1200.0));
     let params = CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
     let mut setup = Setup::new(Input::Samples(voice), frames, params);
     setup.guide = Some(Guide { notes: Vec::new(), key_mask: EVERY_PITCH_CLASS });
@@ -129,9 +144,7 @@ pub fn across_the_range(hz: f64) -> (f64, f64, f64) {
         .filter(|point| point.voiced())
         .map(|point| cents(f64::from(point.hz), hz))
         .collect();
-    let most = take.delays.iter().copied().max().unwrap_or(0);
-    let delay_ms = f64::from(most) * 1000.0 / f64::from(RATE);
-    (median(&landed), f64::from(most), delay_ms)
+    (median(&landed), take.delays.iter().copied().max().unwrap_or(0))
 }
 
 pub fn rows() -> Value {
@@ -201,12 +214,13 @@ mod tests {
         assert!(natural < dry, "natural settings moved {natural} cents from {dry}");
     }
 
-    // The bound row's own bound: 1.2 ms plus 1.125 periods of the voice
+    // The bound row's own bound: one period of the lower voice, the one held flat, and the
+    // shifter's floor a quarter tone up with two samples to spare, 0.2 ms
     #[test]
     fn a_held_voice_trails_by_at_most_the_bound_and_lands() {
         for hz in [82.5, 110.0, 220.0, 440.0] {
             let (landed, _, delay_ms) = across_the_range(hz);
-            let bound = 1.23 + 1125.0 / hz;
+            let bound = 0.21 + 1000.0 / (hz * 2f64.powf(-30.0 / 1200.0));
             assert!(delay_ms <= bound + 0.1, "{hz} Hz trailed {delay_ms} ms, bound {bound}");
             assert!(landed.abs() < 5.0, "{hz} Hz landed {landed} cents off");
         }

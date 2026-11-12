@@ -6,9 +6,10 @@ use crate::pitch::{Pitch, PitchClassMask};
 /// Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 10 ms the
 /// detector reads the input; the distance to the nearest class in the target, scaled by the
 /// strength and eased in over the retune time, becomes a transposition a time-domain shifter
-/// applies. The output trails the input by 1.2 ms plus at most 1.125 periods of the voice. At
-/// strength 0 the output is the input itself with no delay, and turning the strength up from or
-/// down to 0 crossfades over 20 ms; the detector reads either way.
+/// applies. The output trails the input by at most one period of the voice and 0.25 ms, 1.3 ms
+/// when shifting six semitones up. At strength 0 the output is the input itself with no delay,
+/// and turning the strength up from or down to 0 crossfades over 20 ms; the detector reads either
+/// way.
 ///
 /// The audio thread calls `process`, and `set_target` between calls. Nothing allocates after
 /// `new`.
@@ -145,12 +146,58 @@ mod tests {
                     cents.abs() < 10.0,
                     "{input_hz:.1} Hz to MIDI {target} came out {cents:+.1} cents off"
                 );
-                // The shifter's floor plus at most an eighth over one period of the voice
-                let bound = 64 + (1.125 * rate / input_hz) as usize;
+                // The shifter's floor at this ratio, and one period of the voice
+                let ratio = 2f64.powf(shift / 12.0);
+                let bound = (5.0 + ((ratio - 1.0).max(0.0) * 128.0).ceil() + rate / input_hz + 2.0)
+                    as usize;
                 let latency = corrector.latency_samples();
                 assert!(
                     latency > 0 && latency <= bound,
                     "latency {latency} at {input_hz:.1} Hz, bound {bound}"
+                );
+            }
+        }
+    }
+
+    // The shifter trails by one period of the voice and the room a jump's crossfade needs, and no
+    // more: a voice held 30 cents either side of a note, from 82 to 880 Hz, never trails by more
+    // than 5 samples, what a shift up gains on the input during a 128-sample crossfade, and one
+    // period and two samples. The shifter before #112 held room for six semitones whatever the
+    // shift and let a jump overshoot by an eighth of a period: it trailed the 83.8 Hz voice by 702
+    // samples, against 580 here.
+    #[test]
+    fn a_held_voice_trails_by_at_most_one_period_and_the_crossfades_room() {
+        let rate = f64::from(RATE);
+        for target in [40, 45, 57, 69, 81] {
+            for cents in [30.0, -30.0] {
+                let input_hz = midi_hz(f64::from(target) + cents / 100.0);
+                if input_hz < 82.0 {
+                    continue;
+                }
+                let mut corrector = PitchCorrector::new(RATE);
+                corrector.set_target(EVERY_PITCH_CLASS, 1.0, 0.0);
+                let input = harmonic_tone(input_hz, 2.0);
+                let mut output = vec![0.0; input.len()];
+                let mut most = 0;
+                assert_no_alloc(|| {
+                    for (input, output) in input.chunks(128).zip(output.chunks_mut(128)) {
+                        corrector.process(input, output);
+                        most = most.max(corrector.latency_samples());
+                    }
+                });
+
+                let ratio = 2f64.powf(-cents / 1200.0);
+                let crossfade_room = ((ratio - 1.0).max(0.0) * 128.0).ceil();
+                let bound = 5.0 + crossfade_room + rate / input_hz + 2.0;
+                assert!(
+                    most as f64 <= bound,
+                    "{input_hz:.1} Hz trailed by {most} samples, bound {bound:.1}"
+                );
+                let cents_out =
+                    cents_between(median_pitch(&output, 1.0, 2.0), midi_hz(target.into()));
+                assert!(
+                    cents_out.abs() < 5.0,
+                    "{input_hz:.1} Hz came out {cents_out:+.1} cents off"
                 );
             }
         }

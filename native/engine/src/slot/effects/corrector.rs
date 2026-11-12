@@ -20,10 +20,10 @@ pub struct Corrector {
 }
 
 impl Corrector {
-    /// The most `latency_frames` can read, 15 ms: the shifter's floor and 1.125 periods of the
-    /// lowest voice it corrects, 82 Hz. It does not move with the voice, so it is what a latency
-    /// budget counts.
-    pub const MAX_LATENCY_FRAMES: u32 = 720;
+    /// The most `latency_frames` can read, 13.5 ms: the shifter's floor six semitones up, 59
+    /// frames, and one period of the lowest voice it corrects, 82 Hz, with two frames to spare. It
+    /// does not move with the voice, so it is what a latency budget counts.
+    pub const MAX_LATENCY_FRAMES: u32 = 648;
 
     pub fn new() -> Self {
         Self { kernel: PitchCorrector::new(RATE), scratch: [0.0; BLOCK] }
