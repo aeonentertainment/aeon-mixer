@@ -138,6 +138,7 @@ struct PitchShifter::State {
   }
 
   void startJump(double by) {
+    waitUntil = 0;
     fadeFrom = read;
     read += by;
     fadeLeft = int(fadeIn.size());
@@ -163,7 +164,6 @@ struct PitchShifter::State {
       waitUntil = delay + 2;
       return;
     }
-    waitUntil = 0;
     startJump(jump.lag);
   }
 };
