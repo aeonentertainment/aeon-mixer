@@ -39,7 +39,9 @@ So the tool does three things.
 1. **It takes the input's buffering out by construction.** A capture thread wakes after its frames
    came off the hardware and never before. A line under all of an input's wakes dates each frame to
    the earliest moment the OS could have delivered it, so the input's period drops out of the
-   figure. A test moves the input from 64 to 960 frames and the figure holds to 100 µs.
+   figure. Its slope is the edge of the wakes' lower convex hull at their mean, the estimate Moon,
+   Skelly and Towsley give for a clock's skew from one-way delays, so wakes that grow later over a
+   run cannot tilt it and date the early frames before they arrived. A test moves the input from 64 to 960 frames and the figure holds to 100 µs.
 2. **It prints what is left as a bound.** The ADC and the driver hold a frame before any wake can
    happen. That share stays in, so the figure is `output at most`. Next to it sits the same figure
    less what the OS reports for the input, labelled as trusting the OS.
