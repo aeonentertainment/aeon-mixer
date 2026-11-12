@@ -102,8 +102,8 @@ pub fn run(options: Options) -> Result<(), String> {
     );
 
     let started = Instant::now();
-    let mut levels: Vec<(f32, f32)> = Vec::new();
-    let mut caught: Option<(f32, f32)> = None;
+    let mut levels = Vec::new();
+    let mut caught = None;
     let mut gain_db = START_DB;
     loop {
         std::thread::sleep(Duration::from_millis(50));
