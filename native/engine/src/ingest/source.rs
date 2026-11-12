@@ -48,6 +48,8 @@ impl Source for PacketSource {
 
 #[cfg(test)]
 mod tests {
+    use assert_no_alloc::assert_no_alloc;
+
     use super::super::codec::Codec;
     use super::super::fixtures::*;
     use super::super::jitter::JitterBuffer;
@@ -72,10 +74,10 @@ mod tests {
             producer.push(&Packet::new(seq, u32::from(seq) * 240, 7, false, &payload).unwrap());
         }
         let mut out = [0.0; BLOCK];
-        source.pull(&mut out);
+        assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 0, "the backlog is dropped unseen");
         producer.push(&Packet::new(100, 100 * 240, 7, false, &payload).unwrap());
-        source.pull(&mut out);
+        assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 1);
         assert_eq!(source.latency_frames(), DELAY + 960, "anchored on the fresh packet");
     }
@@ -90,19 +92,19 @@ mod tests {
         let payload = [0u8; 4 * 240];
         let packet = |seq: u16| Packet::new(seq, u32::from(seq) * 240, 7, false, &payload).unwrap();
         let mut out = [0.0; BLOCK];
-        source.pull(&mut out);
+        assert_no_alloc(|| source.pull(&mut out));
         producer.push(&packet(0));
-        source.pull(&mut out);
+        assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 1, "the stream is playing");
 
         for seq in 1..40 {
             producer.push(&packet(seq));
         }
-        source.reset();
-        source.pull(&mut out);
+        assert_no_alloc(|| source.reset());
+        assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 1, "the gap's packets are dropped unseen");
         producer.push(&packet(40));
-        source.pull(&mut out);
+        assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 2);
         assert_eq!(source.latency_frames(), DELAY + 960, "anchored on the packet after the gap");
     }
