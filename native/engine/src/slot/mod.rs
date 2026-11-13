@@ -8,6 +8,8 @@ pub mod echo_report;
 mod echo_tests;
 pub mod effects;
 pub mod guide;
+#[cfg(test)]
+mod guide_clock_tests;
 pub mod meter;
 pub mod shared;
 pub mod source;
@@ -19,6 +21,7 @@ use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{Event, EventProducer};
 use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
+use cue::Cue;
 use echo_report::EchoReport;
 use effects::{Compressor, Corrector, EchoCanceller, Gate, HighPass, HowlGuard, Reverb, Voice};
 use guide::Guide;
@@ -43,6 +46,10 @@ pub struct Slot {
     voice: Voice,
     meter: Meter,
     compressor: Compressor,
+    /// While the playhead holds, the cue's frame and the slot's frame on the guide clock when the
+    /// hold began. A source's latency can move every block, as a push ring's depth does, and the
+    /// held clock must not move with it.
+    held: Option<(i64, i64)>,
     /// Left and right gains the last block ended on; `None` before the first block, which starts
     /// on its target instead of ramping up from silence.
     gains: Option<[f32; 2]>,
@@ -66,6 +73,7 @@ impl Slot {
             voice: Voice::new(),
             meter: Meter::new(),
             compressor: Compressor::new(),
+            held: None,
             gains: None,
             input: [0.0; BLOCK],
         }
@@ -120,11 +128,21 @@ impl Slot {
         let guide_offset =
             (f64::from(params.guide_offset_ms) * f64::from(RATE) / 1000.0).round() as i64;
         let frame = shared.cue.frame - i64::from(self.source.latency_frames()) + guide_offset;
+        let frame = match self.held {
+            _ if shared.cue.advancing => {
+                self.held = None;
+                frame
+            }
+            Some((cue, held)) if cue == shared.cue.frame => held,
+            _ => {
+                self.held = Some((shared.cue.frame, frame));
+                frame
+            }
+        };
         self.corrector.process(
             &params.effects.corrector,
             self.guide.as_deref(),
-            frame,
-            shared.cue.semitones,
+            Cue { frame, ..shared.cue },
             &mut self.input,
             |reading| {
                 events.push(Event::Pitch {
@@ -195,6 +213,7 @@ impl Slot {
     pub fn reset(&mut self) {
         self.source.reset();
         self.corrector.reset();
+        self.held = None;
         if self.source.keeps_its_sender() {
             return;
         }
@@ -206,6 +225,7 @@ impl Slot {
     pub fn restart(&mut self) {
         self.source.restart();
         self.corrector.reset();
+        self.held = None;
         self.forget_the_path();
     }
 
@@ -243,7 +263,6 @@ mod tests {
     use crate::ingest::packet::RING_CAPACITY;
     use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
     use crate::params::{CleanupParams, CorrectorParams, EffectParams, Params};
-    use crate::slot::cue::Cue;
     use crate::slot::guide::Note;
 
     const CORRECTING: CorrectorParams =

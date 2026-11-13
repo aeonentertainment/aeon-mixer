@@ -2,6 +2,7 @@ use kernels::{EVERY_PITCH_CLASS, PitchCorrector};
 
 use crate::block::{BLOCK, RATE};
 use crate::params::CorrectorParams;
+use crate::slot::cue::Cue;
 use crate::slot::effects::{Reading, Target, melody};
 use crate::slot::guide::Guide;
 
@@ -43,28 +44,30 @@ impl Corrector {
         self.kernel.correcting()
     }
 
-    /// One run of the slot's voice, in place, following `guide` when there is one. `frame` is
+    /// One run of the slot's voice, in place, following `guide` when there is one. `cue.frame` is
     /// where its first sample sits on the guide's clock, which docs/design.md section 3 derives
-    /// from the playhead, and `semitones` the backing's key shift, which the guide follows.
-    /// `on_reading` hears every 10 ms reading.
+    /// from the playhead, and `cue.semitones` the backing's key shift, which the guide follows. A
+    /// cue that is not advancing holds every sample on its frame. `on_reading` hears every 10 ms
+    /// reading.
     pub fn process(
         &mut self,
         params: &CorrectorParams,
         guide: Option<&Guide>,
-        frame: i64,
-        semitones: i8,
+        cue: Cue,
         block: &mut [f32],
         mut on_reading: impl FnMut(Reading),
     ) {
         let strength = if params.enabled { params.strength } else { 0.0 };
         let correcting = strength > 0.0;
+        let step = i64::from(cue.advancing);
         let mut done = 0;
         while done < block.len() {
-            let at = frame + done as i64;
+            let at = cue.frame + step * done as i64;
             let (target, next_edge) = match guide {
-                Some(guide) => {
-                    (melody::target_at(guide, at, semitones), melody::next_edge_after(guide, at))
-                }
+                Some(guide) => (
+                    melody::target_at(guide, at, cue.semitones),
+                    melody::next_edge_after(guide, at).filter(|_| cue.advancing),
+                ),
                 None => (CHROMATIC, None),
             };
             self.kernel.set_target(target.mask, strength, params.retune_ms);
@@ -82,7 +85,7 @@ impl Corrector {
 
             if frames == until_reading {
                 let pitch = self.kernel.detected();
-                let centre = at + frames as i64 - self.kernel.reading_lag_samples() as i64;
+                let centre = at + step * frames as i64 - self.kernel.reading_lag_samples() as i64;
                 let position_ms = centre as f64 * 1000.0 / f64::from(RATE);
                 // The kernel read with the target this run set, so the two belong together
                 on_reading(Reading {
@@ -115,6 +118,11 @@ mod tests {
     const ON: CorrectorParams = CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
     const C_MAJOR: u16 = 0b1010_1011_0101;
 
+    /// A playhead playing in the song's own key, at `frame` on the guide's clock.
+    fn playing(frame: i64) -> Cue {
+        Cue { frame, semitones: 0, advancing: true }
+    }
+
     /// Twelve harmonics at `midi`, the buzz of a sung vowel.
     fn tone(midi: f64, frames: usize) -> Vec<f32> {
         let hz = 440.0 * 2f64.powf((midi - 69.0) / 12.0);
@@ -143,7 +151,7 @@ mod tests {
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 let frame = (index * BLOCK) as i64;
-                corrector.process(&ON, Some(&guide), frame, 0, block, |_| {});
+                corrector.process(&ON, Some(&guide), playing(frame), block, |_| {});
                 errors.push((frame as u64, corrector.kernel.error_semitones()));
             }
         });
@@ -169,7 +177,7 @@ mod tests {
         let start = 4_800;
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
-                corrector.process(&ON, None, start + (index * BLOCK) as i64, 0, block, |r| {
+                corrector.process(&ON, None, playing(start + (index * BLOCK) as i64), block, |r| {
                     readings.push(r)
                 });
             }
@@ -203,7 +211,9 @@ mod tests {
             let mut voice = tone(40.04, 96_000);
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 let frame = (index * BLOCK) as i64;
-                assert_no_alloc(|| corrector.process(&ON, Some(&guide), frame, 0, block, |_| {}));
+                assert_no_alloc(|| {
+                    corrector.process(&ON, Some(&guide), playing(frame), block, |_| {})
+                });
                 highest = highest.max(corrector.latency_frames() as u32);
             }
         }
@@ -224,7 +234,8 @@ mod tests {
         let off = CorrectorParams { enabled: false, ..ON };
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
-                corrector.process(&off, None, (index * BLOCK) as i64, 0, block, |_| read += 1);
+                corrector
+                    .process(&off, None, playing((index * BLOCK) as i64), block, |_| read += 1);
             }
         });
         assert_eq!(voice, input);
