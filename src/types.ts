@@ -34,6 +34,16 @@ export interface OutputInfo {
   readonly latencyMs: number;
   /** The output playing now, as `outputDevices()` lists it; null on the offline clock. */
   readonly device: { readonly id: string; readonly name: string } | null;
+  /**
+   * The output the engine should play on, the pinned one or the default, when it would not start,
+   * with what the OS said. The engine stays on `device` until the pin or the default changes.
+   * Null while it plays where it should.
+   */
+  readonly refused: {
+    readonly id: string;
+    readonly name: string;
+    readonly error: string;
+  } | null;
 }
 
 /**

@@ -133,7 +133,7 @@ impl Drain {
             self.moves_seen = playing.moves;
             batch.push(NativeEvent::OutputChanged {
                 gap_ms: playing.gap.as_secs_f64() * 1000.0,
-                output: OutputInfo::new(playing.info, Some(playing.output)),
+                output: OutputInfo::new(playing.info, Some(playing)),
             });
         }
         self.renders.extend(self.new_watches.try_iter());

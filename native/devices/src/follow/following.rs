@@ -9,13 +9,15 @@ use engine::driver::{DriverError, Movable, Running};
 use super::current::Current;
 use super::dock::Dock;
 use super::playing::Playing;
+use super::refused::Refused;
 use super::system::System;
 use crate::output::Output;
 use crate::request::Request;
 use crate::stats::Stats;
 
-/// How long a lost output may wait for one to move to before the engine faults. A command sent in
-/// the gap is answered after it, and the binding gives up on one after a second.
+/// How long a lost output may wait for one to move to before the engine faults: neither the output
+/// the rule picks nor the one it left will start. A command sent in the gap is answered after it,
+/// and the binding gives up on one after a second.
 pub const GIVE_UP: Duration = Duration::from_secs(1);
 
 /// How often an output that refused to open is tried again, inside `GIVE_UP`.
@@ -60,7 +62,7 @@ enum State<M> {
         movable: M,
         since: Instant,
     },
-    /// Faulted: a torn render, or nothing to play on within `GIVE_UP`.
+    /// Faulted: a torn render, or nothing that would start within `GIVE_UP`.
     Gone,
 }
 
@@ -80,8 +82,13 @@ impl<M: Movable, S: System> Following<M, S> {
             target(&outputs, request.device.as_deref()).ok_or(DriverError::NoDevice)?.clone();
         let (running, dock) =
             start(&system, &request, &stats, &output, movable).map_err(|(error, _)| error)?;
-        let current =
-            Current::new(Playing { info: running.info, output, moves: 0, gap: Duration::ZERO });
+        let current = Current::new(Playing {
+            info: running.info,
+            output,
+            moves: 0,
+            gap: Duration::ZERO,
+            refused: None,
+        });
         Ok(Self {
             request,
             system,
@@ -125,7 +132,9 @@ impl<M: Movable, S: System> Following<M, S> {
     }
 
     // Plays where the rule says, or does nothing when it already does: a wake says only that
-    // something changed, so three of them for one change cost one move.
+    // something changed, so three of them for one change cost one move. An output the rule picks
+    // that will not start sends the engine back to the one it left, and is not tried again until
+    // the rule picks another, so a refusal costs one gap, not one on every wake.
     fn reconcile(&mut self, woke_at: Instant) {
         let stalled = self.stalled();
         let lost = self.stats.take_lost() || stalled;
@@ -137,11 +146,18 @@ impl<M: Movable, S: System> Following<M, S> {
             Err(_) => return,
         };
         let target = target(&outputs, self.request.device.as_deref()).cloned();
+        let playing = self.current.get();
+        let refused = playing.refused.as_ref().is_some_and(|refused| {
+            target.as_ref().is_some_and(|target| target.id == refused.output.id)
+        });
+        if playing.refused.is_some() && !refused {
+            self.current.set(Playing { refused: None, ..playing.clone() });
+        }
 
         if let State::Playing { .. } = self.state {
-            let playing = self.current.get().output;
-            let listed = outputs.iter().any(|output| output.id == playing.id);
-            let stays = target.as_ref().is_none_or(|target| target.id == playing.id);
+            let listed = outputs.iter().any(|output| output.id == playing.output.id);
+            let stays =
+                refused || target.as_ref().is_none_or(|target| target.id == playing.output.id);
             if listed && stays && !lost {
                 return;
             }
@@ -158,25 +174,41 @@ impl<M: Movable, S: System> Following<M, S> {
             self.state = State::Waiting { movable, since: woke_at };
         }
 
-        let Some(target) = target else { return };
-        let State::Waiting { movable, since } = mem::replace(&mut self.state, State::Gone) else {
+        let State::Waiting { mut movable, since } = mem::replace(&mut self.state, State::Gone)
+        else {
             return;
         };
-        match start(&self.system, &self.request, &self.stats, &target, movable) {
-            Ok((running, dock)) => {
-                let moves = self.current.get().moves + 1;
-                self.current.set(Playing {
-                    info: running.info,
-                    output: target,
-                    moves,
-                    gap: since.elapsed(),
-                });
-                self.state = State::Playing { running, dock };
-                self.started = Instant::now();
+        // The output it left, while the OS still lists it, is where a refused target sends it
+        let left = outputs.iter().find(|output| output.id == playing.output.id);
+        let candidates = target
+            .iter()
+            .chain(left.filter(|left| target.as_ref().is_none_or(|target| target.id != left.id)));
+        let mut refusal = None;
+        for output in candidates {
+            match start(&self.system, &self.request, &self.stats, output, movable) {
+                Ok((running, dock)) => {
+                    self.current.set(Playing {
+                        info: running.info,
+                        output: output.clone(),
+                        moves: playing.moves + 1,
+                        gap: since.elapsed(),
+                        refused: refusal,
+                    });
+                    self.state = State::Playing { running, dock };
+                    self.started = Instant::now();
+                    return;
+                }
+                Err((error, Some(back))) => {
+                    if target.as_ref() == Some(output) {
+                        refusal =
+                            Some(Refused { output: output.clone(), error: error.to_string() });
+                    }
+                    movable = back;
+                }
+                Err((_, None)) => return self.give_up(),
             }
-            Err((_, Some(movable))) => self.state = State::Waiting { movable, since },
-            Err((_, None)) => self.give_up(),
         }
+        self.state = State::Waiting { movable, since };
     }
 
     // Whether the playing stream has asked for no audio for its whole patience. Its device may

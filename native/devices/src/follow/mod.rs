@@ -7,11 +7,13 @@ mod dock;
 mod follower;
 mod following;
 mod playing;
+mod refused;
 mod system;
 
 pub use current::Current;
 pub use follower::Follower;
 pub use playing::Playing;
+pub use refused::Refused;
 pub use system::System;
 
 #[cfg(test)]

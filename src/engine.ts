@@ -317,12 +317,14 @@ function outputInfo(info: NativeOutputInfo): OutputInfo {
   if (info.sampleRate !== 48000) {
     throw new Error(`the engine runs at 48 kHz; the addon reports ${info.sampleRate}`);
   }
-  const { periodFrames, latencyMs, device } = info;
+  const { periodFrames, latencyMs, device, refused } = info;
   return {
     sampleRate: 48000,
     periodFrames,
     latencyMs,
     device: device === undefined ? null : { id: device.id, name: device.name },
+    refused:
+      refused === undefined ? null : { id: refused.id, name: refused.name, error: refused.error },
   };
 }
 

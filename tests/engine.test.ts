@@ -21,6 +21,7 @@ test("an offline engine pumps silent blocks of 128 stereo frames at 48 kHz", asy
     periodFrames: 128,
     latencyMs: 0,
     device: null,
+    refused: null,
   });
   expect(engine.capabilities).toEqual(
     new Set(["guideVocal", "key", "speed", "seek", "shortVersion", "pause", "level"]),
@@ -99,6 +100,7 @@ test("a timer engine keeps its own clock: it plays and meters with nobody pumpin
     periodFrames: 128,
     latencyMs: 0,
     device: null,
+    refused: null,
   });
   expect(await engine.outputDevices()).toEqual([]);
 

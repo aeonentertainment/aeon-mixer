@@ -201,6 +201,14 @@ export interface OutputInfo {
   latencyMs: number
   /** The output playing now; none on the offline clock. */
   device?: OutputDevice
+  /** The output the rule picks that would not start, while the engine plays on `device`. */
+  refused?: RefusedOutput
+}
+
+export interface RefusedOutput {
+  id: string
+  name: string
+  error: string
 }
 
 export interface ReverbInput {
