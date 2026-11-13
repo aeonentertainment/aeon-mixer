@@ -28,11 +28,11 @@ Echo taken out is from the fifth second to the ninth in `capture_edges.rs`'s liv
 
 | Approach                                                          | Echo out at 100 ppm                              | Added delay                                                                                  | CPU per slot                                      | Why not, or why                                                                                                                                              |
 | ----------------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Nothing, as before                                                | 6.6 to 11.1 dB                                   | none                                                                                         | 39.7 us a block                                   | the path never holds still                                                                                                                                   |
+| Nothing, as before                                                | 6.6 to 11.1 dB                                   | none                                                                                         | 39.3 us a block                                   | the path never holds still                                                                                                                                   |
 | The slot spreads its corrections at the rate it learns            | not by the fifth second                          | none                                                                                         | none                                              | the fill shows the rate only at a step: a 128-frame mic under 128-frame callbacks learns it at its second step, 27 to 54 s in at 100 ppm                     |
 | The slot resamples at the rate it learns                          | not by the fifth second                          | a sinc's half length, 8 to 16 samples, 0.17 to 0.33 ms; zita-ajbridge recommends 32, 0.67 ms | a 16- to 32-tap filter a sample                   | the same wait for the rate, and a cost on the mic path                                                                                                       |
 | The capture thread's timestamps date each delivery                | not built                                        | none                                                                                         | a loop on the capture thread                      | the audio thread may not read a clock, and wakes jitter by a millisecond or so; by estimate, not measured, a fit over 5 s pins the rate only to about 16 ppm |
-| The canceller follows the drift, and the slot reports its splices | 22.6 to 28.6 dB, within 0.9 dB of the same clock | none                                                                                         | 38.7 us a block; 50.7 us in a block with a splice | chosen                                                                                                                                                       |
+| The canceller follows the drift, and the slot reports its splices | 22.6 to 28.6 dB, within 0.9 dB of the same clock | none                                                                                         | 39.8 us a block; 52.0 us in a block with a splice | chosen                                                                                                                                                       |
 
 The loop needs no help from the slot to find the rate: on a pure drift, the kernel test learns 4.84
 frames a second at 100 ppm and 9.61 at 200, within 1%, two seconds after the filter adapts. What
@@ -51,10 +51,16 @@ the sample before it added and its newest taken out, so the canceller slides eac
 
 What is left is the sweep. The slot spreads each splice across its block by linear interpolation, so
 the delay moves from one sample to the next within the block, and the filter sees a block at a time.
-In the kernel test, 32 splices cost the second they fall in 1.7 dB, and the second after is within
-0.3 dB of a mic that never spliced. The same splices as whole-sample jumps cost 0.4 dB, so the sweep
-is most of it. A better interpolator in the slot changed nothing, and correcting the canceller's
-output for the sweep gained 0.3 dB.
+In the kernel test, 32 splices cost the second they fall in 1.7 dB and 128 cost it 4.0, and the
+second after is within 0.3 dB of a mic that never spliced. The same 32 splices as whole-sample
+jumps cost 0.4 dB, so the sweep is most of it. A better interpolator in the slot changed nothing,
+and correcting the canceller's output for the sweep gained 0.3 dB.
+
+The delay finder follows a moved echo too, and slower. While a capture slot corrected 128 frames it
+named lags up to 259 frames from where the splices put the path, more than the 128 the canceller
+takes for the same path, and the filter started over: up to 26.5 dB under the same mic on the
+output's clock, and more than 3 dB under for eight seconds. So a lag the finder names within a
+second of the source's last splice is never a new path.
 
 ## The loop
 
@@ -102,8 +108,8 @@ drift, through the gap a slower input meets, every move of the target and every 
 ## What it costs
 
 - **Delay:** none. The mic path is untouched; the sinc reads the reference, which is never heard.
-- **CPU:** none measurable, 38.7 us a block against 39.7 before on the same M2 Pro; 50.7 us in a
-  block where the source splices. `measure-echo cpu` reports both.
+- **CPU:** 39.8 us a block against 39.3 on main, measured back to back on an M2 Pro, 1.49% of a
+  core per slot; 52.0 us in a block where the source splices. `measure-echo cpu` reports both.
 - **A singer over a mic on the master's clock:** with no drift to follow, the loop's offset wanders
   0.24 samples either way, and the echo taken out while the singer sings over it falls from 16.1 to
   15.6 dB. Before and after them nothing moves past 0.1 dB.
@@ -113,8 +119,10 @@ drift, through the gap a slower input meets, every move of the target and every 
 - **A phone.** A jitter buffer that steps its delay reports it in its latency, as before. A phone on
   its own clock drifts between steps, and the loop follows that drift as it does a house mic's, but
   no test here measures a phone's drift.
-- **A splice in the canceller's own block.** The sweep inside a spliced block stays, 1.7 dB of the
-  second it falls in.
+- **A splice in the canceller's own block.** The sweep inside a spliced block stays. A 480-frame
+  input's 32-frame correction costs its second up to 3.3 dB, every 6.7 s at 100 ppm. A 128-frame
+  input's whole-period correction costs its second 6.2 to 7.1 dB, every 27 s at 100 ppm and 13 s at
+  200; `capture_edges.rs` runs it for 40 s.
 
 ## The run a person owes
 
