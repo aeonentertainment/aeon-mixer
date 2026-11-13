@@ -111,11 +111,18 @@ not run that clock down, so no stretch of silence keeps a search open past it. T
 in these tests named its lag half a second after the master reached the mic. A mic far louder
 than the filter's estimate never counts: a phone picked up off the table, a new input gain, a room
 singing along. With no end, it kept the slot untouched for good. A search that ends without a lag
-starts the filter over, since what it holds is not the room the mic hears, or not at that level:
-an adapted filter under a mic 15 dB over its estimate holds in double talk for good, and took out
+keeps the filter, unless fewer frames were heard than a peak needs to be judged, 85 ms of them:
+then the mic outweighed the estimate throughout, as a room far louder than the filter learned
+does, and the filter starts over. A room 15 dB louder left 3 of 750 frames heard; a note held
+17 dB over the echo for the whole search, 72, and one 9 dB over, 382. An
+adapted filter under a mic 15 dB over its estimate holds in double talk for good, and took out
 1.6 dB from the search's end on. Learning afresh, a phone back 15 dB louder took out 14.6 dB in
 the second ending 4 s after its return, against 12.1 for the same room learned from nothing in
-its second second. A search that ran out starts again only with a new stream. The search reaches 21 ms either way: a block's rounding, and
+its second second. A singer over the return is told apart by the frames it leaves heard: a held
+note 9 or 17 dB over the echo for the whole search kept the room, and took out 17.7 dB from a
+quarter second after the note, against 16.8 before the stop. Starting over on any search without
+a lag threw that room away: 10.1 dB, with no findings for 0.69 s. A search that ran out starts
+again only with a new stream. The search reaches 21 ms either way: a block's rounding, and
 three quarters of a 20 ms packet.
 
 On the offline driver, through Opus and the jitter buffer, a phone whose new stream lands a

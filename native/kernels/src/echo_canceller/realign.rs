@@ -55,9 +55,14 @@ pub enum Search {
     /// The echo arrives this many frames after the estimate: as many as it was read early is
     /// where the old stream had it.
     Found(f64),
-    /// The master reached the mic for `MOST_AUDIBLE` frames and no lag stood out: the filter's
-    /// room is not the one the mic hears, or not at the level it hears it.
+    /// The master reached the mic for `MOST_AUDIBLE` frames, enough of them heard to judge, and no
+    /// lag stood out: a singer over the return, or a room the filter never learned. The filter
+    /// keeps what it holds.
     Lost,
+    /// The master reached the mic for `MOST_AUDIBLE` frames and too few were heard to judge a
+    /// peak at all: the mic outweighed the estimate throughout, as a room far louder than the
+    /// filter learned does.
+    Outweighed,
 }
 
 /// The cross-correlation of the mic with the filter's estimate over `2 * REACH` lags, summed in
@@ -80,6 +85,11 @@ pub struct Realign {
     /// Frames since `begin` that were not silence. `forget` keeps it, so silence between them
     /// never keeps a search open.
     audible: u32,
+    /// Frames heard since `begin`. `forget` keeps it too: a search that heard fewer than
+    /// `LEAST_HEARD` in its `MOST_AUDIBLE` was outweighed. A room 15 dB louder than the filter
+    /// learned left 3 of 750 frames heard; a note held 17 dB over the echo for the whole search,
+    /// 72, and one 9 dB over, 382.
+    heard_since_begin: u32,
     /// Frames of silence in a row.
     silent: u32,
     mic_energy: f32,
@@ -101,6 +111,7 @@ impl Realign {
             last_mic: 0.0,
             heard: 0,
             audible: 0,
+            heard_since_begin: 0,
             silent: 0,
             mic_energy: 0.0,
             estimate_energy: 0.0,
@@ -114,6 +125,7 @@ impl Realign {
         self.estimate = [0.0; WINDOW];
         self.last_mic = 0.0;
         self.audible = 0;
+        self.heard_since_begin = 0;
         self.forget();
         self.looking = true;
     }
@@ -163,6 +175,7 @@ impl Realign {
             return self.verdict(None);
         }
         self.heard += 1;
+        self.heard_since_begin += 1;
         self.mic_energy += emphasised;
         self.estimate_energy += estimated;
         self.fft.forward(&self.mic, &mut self.spectrum);
@@ -178,8 +191,9 @@ impl Realign {
     fn verdict(&mut self, lag: Option<f64>) -> Search {
         let verdict = match lag {
             Some(lag) => Search::Found(lag),
-            None if self.audible >= MOST_AUDIBLE => Search::Lost,
-            None => Search::Looking,
+            None if self.audible < MOST_AUDIBLE => Search::Looking,
+            None if self.heard_since_begin < LEAST_HEARD => Search::Outweighed,
+            None => Search::Lost,
         };
         self.looking = verdict == Search::Looking;
         verdict

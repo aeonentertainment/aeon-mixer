@@ -333,10 +333,10 @@ impl EchoCanceller {
                     self.drift.shift(moved - whole);
                     self.stale = true;
                 }
-                Search::Lost => {
-                    // What the filter holds is not the room the mic hears, or not at its level: a
-                    // room far louder than it learned would hold an adapted filter in double talk
-                    // for good, so it learns the room afresh
+                Search::Lost => self.stale = true,
+                Search::Outweighed => {
+                    // A room far louder than the filter learned would hold an adapted filter in
+                    // double talk for good, so it learns the room afresh
                     self.mdf.reset();
                     self.stale = true;
                 }

@@ -33,6 +33,9 @@ const USUAL_WITHIN_DB: f32 = 3.0;
 /// A phone back with a room far louder than it learned has this long: a search's 2 s, and two
 /// more to learn the room again.
 const LOUDER_RECOVERS_IN: f64 = 4.0;
+/// A singer holding a note into a phone at the mouth, softly and loudly: 9 and 17 dB over the
+/// echo the phone hears.
+const SINGERS_DB: [f32; 2] = [-20.0, -12.0];
 /// The quickest a stream's packets reach the mixer here, 1.3 ms.
 const QUICKEST: usize = BLOCK / 2;
 
@@ -145,12 +148,14 @@ struct Scene {
     /// Until this frame the room's echo is this many dB quieter, as a phone further from the
     /// speakers hears it.
     quieter: Option<(usize, f32)>,
+    /// A singer holds a note into the mic over this stretch, at this level in dBFS.
+    singer: Option<(Range<usize>, f32)>,
     end: usize,
 }
 
 impl Scene {
     fn new(frame: usize, off: Off) -> Self {
-        Self { frame, off, quiet: 0..0, quieter: None, end: END }
+        Self { frame, off, quiet: 0..0, quieter: None, singer: None, end: END }
     }
 }
 
@@ -158,7 +163,11 @@ impl Scene {
 /// backing through a slot with the canceller on. The backing plays hard right and the slot hard
 /// left, so the master's left is the slot alone.
 fn run(scene: Scene) -> Run {
-    let Scene { frame, off, quiet, quieter, end } = scene;
+    let Scene { frame, off, quiet, quieter, singer, end } = scene;
+    let (sung, voice) = singer.map_or((0..0, Vec::new()), |(sung, db)| {
+        let voice = at_db(held_note(sung.len()), db);
+        (sung, voice)
+    });
     let (quieter_until, gain) =
         quieter.map_or((0, 1.0), |(until, db)| (until, 10f32.powf(-db / 20.0)));
     let mut far: Vec<f32> = at_db(talker(end, 110.0, 3), -18.0)
@@ -200,7 +209,8 @@ fn run(scene: Scene) -> Run {
                     .filter_map(|&(lag, gain)| Some(gain * played.get(t.checked_sub(lag)?)?))
                     .sum();
                 let echo = if t < quieter_until { gain * echo } else { echo };
-                *sample = echo + floor[t % floor.len()];
+                let sings = if sung.contains(&t) { voice[t - sung.start] } else { 0.0 };
+                *sample = echo + floor[t % floor.len()] + sings;
             }
             phone.hear(&heard);
             for packet in phone.arrived(at) {
@@ -223,6 +233,20 @@ fn run(scene: Scene) -> Run {
     let handed = std::iter::from_fn(|| handed_out.pop().ok()).collect();
     let paths = std::iter::from_fn(|| paths_out.pop().ok()).collect();
     Run { handed, out, paths }
+}
+
+/// A held, voiced note with no gap: ten harmonics falling as 1/h on 220 Hz with a 5 Hz vibrato of
+/// a quarter tone, as a singer sustains a vowel.
+fn held_note(frames: usize) -> Vec<f32> {
+    let mut phase = 0.0f32;
+    (0..frames)
+        .map(|i| {
+            let t = i as f32 / RATE as f32;
+            let hz = 220.0 * (1.0 + 0.0145 * (std::f32::consts::TAU * 5.0 * t).sin());
+            phase = (phase + hz / RATE as f32) % 1.0;
+            (1..=10).map(|h| (std::f32::consts::TAU * h as f32 * phase).sin() / h as f32).sum()
+        })
+        .collect()
 }
 
 fn level(signal: &[f32], from: f64, to: f64) -> f32 {
@@ -331,4 +355,34 @@ fn a_phone_back_with_its_echo_much_louder_has_it_cancelled_again() {
          return; learning the room from nothing, {learning:.1} in its second second"
     );
     assert!(back >= learning, "{back:.1} dB out, {learning:.1} learning from nothing");
+}
+
+// A phone comes back on the singer's first note, held for two seconds over the backing, softly
+// and loudly. The voice outweighs the estimate on most frames, the search names no lag in its
+// two seconds of audible master, and it ends keeping the room it learned over the song.
+// Tolerances: from a quarter second after the note, once its tail has passed through the slot's
+// 25 ms and the search has ended, a second takes out within 3 dB of the second before the phone
+// stopped; and the slot reports its echo on every block, which a filter started over would not.
+#[test]
+fn a_phone_back_under_a_held_note_keeps_its_room() {
+    let return_at = RETURNS as f64 / SECOND as f64;
+    for db in SINGERS_DB {
+        let scene = Scene {
+            singer: Some((RETURNS..RETURNS + 2 * SECOND, db)),
+            end: RETURNS + 4 * SECOND,
+            ..Scene::new(120, Off::Later(0, 4))
+        };
+        let run = run(scene);
+        let usual = removed(&run, 5.0, 6.0);
+        let after = removed(&run, return_at + 2.25, return_at + 3.25);
+        let echo = level(&run.handed, 5.0, 6.0);
+        let learned = 5 * SECOND / BLOCK;
+        let lost = (learned..run.paths.len()).filter(|&b| run.paths[b].is_none()).count();
+        println!(
+            "singer at {db:.0} dBFS over an echo at {echo:.1}: {usual:.1} dB out before, \
+             {after:.1} in the second after the note; {lost} blocks with no findings"
+        );
+        assert!(after >= usual - USUAL_WITHIN_DB, "{after:.1} dB out, {usual:.1} before");
+        assert_eq!(lost, 0, "the filter started over");
+    }
 }
