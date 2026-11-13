@@ -417,7 +417,7 @@ pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pit
 pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
 pub struct EchoHistory;     // new(), push(left, right) folds a block to mono, read(lag, out): the frames ending `lag` before the next one
 pub struct EchoCanceller;   // new(rate), process(history, own, SourceDelay, block) in place, reset(), findings() -> Option<EchoFindings>; adds no delay
-pub struct SourceDelay;     // { latency_frames: u32, spliced_frames: i64, streams: u32 }: where a slot's source has its delay this block, from Source::delay(); the splices are every frame it has spliced in less those it took out, which move the echo and not the latency, and streams counts the streams it has started, each at its latency however far the last had drifted
+pub struct SourceDelay;     // { latency_frames: u32, spliced_frames: i64, streams: u32 }: where a slot's source has its delay this block, from Source::delay(); the splices are how far the echo has moved beyond what the latency says: every frame the source has spliced in less those it took out, and when a jitter buffer's delay moves, the part of the new delay the echo did not move by, the slack the stream had drifted into; streams counts the streams it has started, each at its latency however far the last had drifted
 pub struct EchoFindings { pub path_frames: u32, pub bleed_db: f32, pub removed_db: f32 }
 pub struct HowlGuard;       // new(rate), process(block) in place, reset(), catches(); adds no delay
 ```
@@ -764,7 +764,10 @@ ring into the jitter buffer at the top of each block.
   drained, and a millisecond. After that fall, three late notes out of the last 20 move it later
   to cover them, at most back to where it opened. A move waits for the slot to be under -30 dBFS
   for 21 ms, happens at the head of what waits to play, drops only samples that are quiet too, and
-  counts as a resync. A delay means how long the stream's earliest packets wait, and
+  counts as a resync. The echo moves by what the move drops or delays, but the new delay also
+  takes up the slack the stream had drifted into, so the part of the new delay the echo did not
+  move by is a splice in the source's `delay()`, and the latency and splices together move by
+  what the echo did. A delay means how long the stream's earliest packets wait, and
   `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
   reasons and the numbers.
 - Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
@@ -774,6 +777,7 @@ ring into the jitter buffer at the top of each block.
   dropped; when even the earliest came a step late, or half the delay's room over a block late
   when that is less, it moves a step later and that step is concealed. Either counts as a resync,
   and either is a splice in the source's `delay()`, since it moves the echo and not the latency.
+  These and the drifted slack a delay move takes up are a jitter buffer's two kinds of splice.
   Each stream it anchors counts in `delay()`'s `streams`, so the echo canceller starts its drift
   over with it.
   Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
