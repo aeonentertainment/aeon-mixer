@@ -82,9 +82,11 @@ Rules that follow:
 - Moving to another output is not a crossing. The device follower (8.3) holds the audio thread
   only while no stream runs: it stops the old stream, which hands the audio thread back, calls
   `Movable::moved` on it, and starts the new stream with it. As each stream's `start` returns, the
-  follower writes the stream's granted period into the `AtomicU32` that `Movable::callback_frames`
-  gave it before the first open. The audio thread reads it once a block and hands a change to every
-  graph it holds, so the new callback needs no command and no round trip through the binding.
+  follower writes the stream's granted period and its output latency into the two `AtomicU32`s that
+  `Movable::callback_frames` and `Movable::output_latency_frames` gave it before the first open. The
+  audio thread reads both once a block and hands a change to every graph it holds, and a graph
+  swapped in takes what it last read, so the new stream needs no command and no round trip through
+  the binding.
 - A panic inside render is caught at the callback boundary. Every block from there is silence,
   the audio thread pushes `Fault` again each block until the event ring has room for it, and the
   engine refuses further commands until the host closes it.
@@ -109,14 +111,17 @@ What the engine reports so the rest of the device can follow:
   that frame leaving the speaker; and `speedFactor`.
 - A move to another output (section 5) holds the playhead for the gap and changes the output
   latency. `outputChanged` carries the new `latencyMs` and the gap, so a host that keeps a lyric
-  clock from `startedAt` moves it by both, or re-anchors it on the next `position` event. The live
-  graph keeps the output latency it was swapped in with for its guide clock until the next song.
+  clock from `startedAt` moves it by both, or re-anchors it on the next `position` event. The guide
+  clock moves by the new latency itself: from the first block after the new stream's `start`
+  returns, every pitch reading and every note edge the corrector follows is on the new output's
+  clock.
 - Every ack carries the backing position at the block the command landed. `seek`, `resume` and
   `start` return it. A `position` event also fires once a second.
 - When a live key shifter is engaged, its latency is subtracted from the reported position, so
   the lyric clock stays on the audio the room hears.
 - A pitch reading carries the position on the guide's clock at the reading's centre. The slot's
-  guide clock is the playhead less `backingOffsetMs` less the slot's mic-path latency, which the
+  guide clock is the playhead less the output latency playing now, `backingOffsetMs` until a move
+  and the moved-to `latencyMs` after one, less the slot's mic-path latency, which the
   engine knows, plus a host-set `guideOffsetMs` for what it cannot know: the phone's capture and
   the Wi-Fi.
 - An engaged corrector delays its slot's voice by an amount that moves with the voice, and holds
@@ -315,7 +320,7 @@ pub struct TimerDriver;
 /// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
 /// test's render. `moved` is called between streams, never on the audio thread: the next block
 /// starts every slot's stream again and fades in over 5 ms.
-pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); fn callback_frames(&self) -> Arc<AtomicU32>; }   // callback_frames: where the follower writes each stream's StreamInfo.period_frames as its start returns
+pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); fn callback_frames(&self) -> Arc<AtomicU32>; fn output_latency_frames(&self) -> Arc<AtomicU32>; }   // where the follower writes each stream's StreamInfo.period_frames and StreamInfo.output_latency_frames as its start returns
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
 pub struct OfflineDriver;
@@ -680,7 +685,9 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   callback comes. A stall never faults the engine.
 - A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
   stream with it on the same `Stats`. As every stream's `start` returns, the first one's too, the
-  follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell. The gap is from the wake to the new stream running.
+  follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell and its
+  `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
+  to the new stream running.
 - With nothing to play on, or an output that refuses to open, it waits for the next wake and
   tries again every 100 ms for up to a second, then fails the stats, which faults the engine.
 - The binding reads `Current` for `engine.output`, and its events thread sends `outputChanged`
