@@ -12,9 +12,12 @@
 //! The fill before a pull is not how long the mic's sample waited: it swings with where the pull
 //! falls between two deliveries and in its output's wake. The wait itself holds still, the trough
 //! and the headroom less where in the input's period the pulls fall, which the voice reports as
-//! its latency and its playout delay.
+//! its latency and its playout delay. It counts every frame it moves its delay by, so the echo
+//! canceller moves its reference with the echo.
 
 use std::sync::Arc;
+
+use kernels::SourceDelay;
 
 use crate::block::{BLOCK, RATE};
 use crate::ingest::capture_producer::CaptureProducer;
@@ -68,6 +71,8 @@ pub fn capture_voice() -> (CaptureProducer, CaptureVoice) {
         delay: 0,
         played: false,
         short: None,
+        moved: 0,
+        recovering: false,
         stats: SlotStats::default(),
         shared: Arc::new(SharedStats::default()),
     };
@@ -92,6 +97,13 @@ pub struct CaptureVoice {
     /// The pulls running short since the last full one: how many, what they lacked in all, and what
     /// the first of them lacked.
     short: Option<Short>,
+    /// Frames the slot has moved its delay by while playing: spliced in or out, a gap's silence,
+    /// a backlog dropped. The echo canceller follows them, less the target's own moves, which
+    /// the latency already says.
+    moved: i64,
+    /// From an input that stopped until the trough is back on the target, which the moves of
+    /// that recovery do not count toward.
+    recovering: bool,
     stats: SlotStats,
     shared: Arc<SharedStats>,
 }
@@ -338,14 +350,31 @@ impl Source for CaptureVoice {
         if let Some(run) = self.short.take() {
             let phase = run.pulls <= (self.burst / BLOCK).max(MAX_PERIOD_FRAMES / BLOCK);
             let raise = if phase { run.lacked } else { run.first };
+            let was = self.target;
             self.target = (self.target + raise + MARGIN).min(self.ceiling_target());
+            if phase {
+                // The silence played the samples that came late that much later
+                self.moved += raise as i64;
+            } else {
+                // What a stopped input hands over after, a backlog or nothing, says nothing of
+                // how far the delay moved, so its recovery goes uncounted and the latency the
+                // target sets is where the delay ends up
+                self.moved += (self.target - was) as i64;
+                self.recovering = true;
+            }
         }
         self.splice(frames, out);
         self.played = true;
+        if !self.recovering {
+            self.moved -= step;
+        }
 
         self.phase = match self.phase {
             Phase::Correcting { frames } => match frames + step {
-                0 => MEASURING,
+                0 => {
+                    self.recovering = false;
+                    MEASURING
+                }
                 left => Phase::Correcting { frames: left },
             },
             Phase::Measuring { trough, blocks } => {
@@ -353,12 +382,16 @@ impl Source for CaptureVoice {
                 if blocks + 1 < WINDOW_BLOCKS {
                     Phase::Measuring { trough, blocks: blocks + 1 }
                 } else if trough == self.target {
+                    self.recovering = false;
                     MEASURING
                 } else if trough > self.target + self.period {
                     // A backlog: the whole window stayed more than a period over the target, which
                     // drift never does between windows. A fill high for one pull is no backlog, since
                     // an output catching up after a late wake fills that way and drains it at once.
                     self.discard(trough - self.target);
+                    if !self.recovering {
+                        self.moved -= (trough - self.target) as i64;
+                    }
                     stats.resyncs += 1;
                     MEASURING
                 } else {
@@ -411,6 +444,19 @@ impl Source for CaptureVoice {
     /// canceller, which follows a latency that holds for two blocks, follows each real move.
     fn latency_frames(&self) -> u32 {
         self.hardware + self.wait_frames() as u32
+    }
+
+    /// The latency holds still between moves of the target, but the delay does not: the slot
+    /// splices frames in and out a frame a block, plays a gap's silence and drops a backlog, and
+    /// each moves the echo. The canceller follows the latency and these, so they leave out the
+    /// target's own moves, which the latency says. The drift between the two clocks is the
+    /// canceller's to follow.
+    fn delay(&self) -> SourceDelay {
+        SourceDelay {
+            latency_frames: self.latency_frames(),
+            spliced_frames: self.moved - self.target as i64,
+            ..SourceDelay::default()
+        }
     }
 }
 
@@ -752,6 +798,56 @@ mod tests {
                 println!("{case}: reported {reported}, off by {worst} at most");
                 assert_eq!(rig.stats().concealed, before.concealed, "{case}");
                 assert!(worst <= step, "{case}: off by {worst}, a step is {step}");
+            }
+        }
+    }
+
+    /// What the echo canceller follows of a capture slot, its latency and the frames it splices,
+    /// moves with how long its samples really waited, but for the drift of the two clocks, which
+    /// the canceller follows by itself. Over an hour at 200 ppm either way, with wakes up to 8
+    /// frames early or late, through the gap a slower input meets, each move of the target and
+    /// every splice, it strays from the true wait less the drift by 4 frames at most, a twelfth of
+    /// a millisecond. Twenty minutes in, the input stops for 40 blocks and hands over all it
+    /// missed: once the slot is back on its target, two seconds on, it is where it was, to the same
+    /// 4 frames. Forty minutes in it stops again and those frames are gone, and the slot comes back
+    /// on its target within a step and those 4 frames of where it was, as its latency does: 16
+    /// frames for a 480-frame input under a block-a-wake output, a period under a longer callback.
+    /// A pull the ring could not fill has no first sample to judge.
+    #[test]
+    fn its_latency_and_splices_move_with_the_wait_but_for_the_drift() {
+        let cases = [(128, 128), (480, 128), (128, 480), (480, 480)];
+        for (period, callback) in cases {
+            for ppm in [0, 200, -200] {
+                let mut rig = Rig::new(ppm, period).under(callback).jittered(8);
+                rig.run(SECOND);
+                // The true wait less the drift, against what the slot says: lowest and highest
+                // before the first stall, between the two, and after the second
+                let mut spans = [(f64::MAX, f64::MIN); 3];
+                let (mut span, mut judged_from) = (0, 0);
+                for block in 0..3600 * SECOND {
+                    if block == 1200 * SECOND || block == 2400 * SECOND {
+                        rig.stall(40, block == 1200 * SECOND);
+                        (span, judged_from) = (span + 1, block + 2 * SECOND);
+                    }
+                    rig.block();
+                    let full = rig.voice.played() && rig.voice.ring_frames() >= BLOCK;
+                    if block < judged_from || !full {
+                        continue;
+                    }
+                    let delay = rig.voice.delay();
+                    let followed = i64::from(delay.latency_frames) + delay.spliced_frames;
+                    let drift = (rig.blocks * BLOCK as u64) as f64 * ppm as f64 * 1e-6;
+                    let off = rig.waited as f64 - followed as f64 - drift;
+                    let (low, high) = &mut spans[span];
+                    (*low, *high) = (low.min(off), high.max(off));
+                }
+                let case = format!("{period} frames under {callback}, {ppm} ppm");
+                println!("{case}: the true wait less the drift, {spans:.1?} over it");
+                let middle = |(low, high): (f64, f64)| (low + high) / 2.0;
+                assert!(spans.iter().all(|(low, high)| high - low <= 4.0), "{case}: {spans:.1?}");
+                assert!((middle(spans[1]) - middle(spans[0])).abs() <= 4.0, "{case}: a backlog");
+                let step = rig.voice.step() as f64 + 4.0;
+                assert!((middle(spans[2]) - middle(spans[1])).abs() <= step, "{case}: frames gone");
             }
         }
     }

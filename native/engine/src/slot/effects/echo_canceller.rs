@@ -1,4 +1,4 @@
-use kernels::{EchoFindings, EchoHistory};
+use kernels::{EchoFindings, EchoHistory, SourceDelay};
 
 use crate::block::RATE;
 use crate::params::EchoCancelParams;
@@ -17,14 +17,14 @@ impl EchoCanceller {
     }
 
     /// One block of the slot's input, in place. `history` is the master up to the block before
-    /// and `own` this slot's share of it; `source_frames` is the source's own latency, which the
+    /// and `own` this slot's share of it; `source` is where the source has its delay, which the
     /// canceller follows as it moves.
     pub fn process(
         &mut self,
         params: &EchoCancelParams,
         history: &EchoHistory,
         own: &EchoHistory,
-        source_frames: u32,
+        source: SourceDelay,
         block: &mut [f32],
     ) {
         if !params.enabled {
@@ -35,7 +35,7 @@ impl EchoCanceller {
             return;
         }
         self.on = true;
-        self.kernel.process(history, own, source_frames, block);
+        self.kernel.process(history, own, source, block);
     }
 
     pub fn findings(&self) -> Option<EchoFindings> {

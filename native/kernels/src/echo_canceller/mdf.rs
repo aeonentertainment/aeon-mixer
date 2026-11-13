@@ -80,6 +80,9 @@ pub struct Mdf {
     spec_average: f32,
     beta0: f32,
     beta_max: f32,
+    /// `e^(-2 pi i k / WINDOW)` for each bin `k`, which turns a window's spectrum as what it
+    /// holds moves a sample along it.
+    turn: Spectrum,
     state: State,
 }
 
@@ -158,6 +161,9 @@ impl Mdf {
             spec_average: FRAME as f32 / rate as f32,
             beta0: 2.0 * FRAME as f32 / rate as f32,
             beta_max: 0.5 * FRAME as f32 / rate as f32,
+            turn: std::array::from_fn(|k| {
+                Complex32::from_polar(1.0, -2.0 * std::f32::consts::PI * k as f32 / N)
+            }),
             state: FRESH,
         };
         mdf.reset();
@@ -201,6 +207,27 @@ impl Mdf {
             window(j, &mut whole, &mut others);
             self.fft.forward(&whole, &mut self.x[j]);
             self.fft.forward(&others, &mut self.others[j]);
+        }
+    }
+
+    /// The reference the filter convolves with moved by a sample, one older when `older`, as a
+    /// source that splices a sample moves its echo, so every window it holds slides by one.
+    /// `edges(j)` gives, for the windows of the frame `j + 1` frames before the next one, the
+    /// sample that enters each less the one that leaves it, pre-emphasised: of the whole
+    /// reference and of the others. Exact, where `refill` reads and transforms every window
+    /// again at a hundred times the cost.
+    pub fn slide(&mut self, older: bool, mut edges: impl FnMut(usize) -> (f32, f32)) {
+        let x = self.x.iter_mut().zip(&mut self.others).enumerate();
+        for (j, (whole, others)) in x {
+            let (whole_edge, others_edge) = edges(j);
+            for (spectrum, edge) in [(whole, whole_edge), (others, others_edge)] {
+                let edge = edge / N;
+                for (bin, turn) in spectrum.iter_mut().zip(&self.turn) {
+                    // A window a sample older is this one turned a sample on, with the sample
+                    // before it in and its newest out; one newer, the reverse
+                    *bin = if older { turn * *bin + edge } else { turn.conj() * (*bin + edge) };
+                }
+            }
         }
     }
 

@@ -5,6 +5,8 @@
 //! does the same, since what waits in the ring belongs to the stream it forgets, and after a move
 //! to another output it is the whole gap.
 
+use kernels::SourceDelay;
+
 use super::jitter::JitterBuffer;
 use super::packet::PacketConsumer;
 use crate::slot::source::Source;
@@ -43,6 +45,17 @@ impl Source for PacketSource {
 
     fn latency_frames(&self) -> u32 {
         self.jitter.latency_frames()
+    }
+
+    /// A skew correction drops or conceals a frame, moving the echo with it, and the latency
+    /// holds, so the jitter buffer reports it as a splice. A new stream starts at the opening
+    /// delay, wherever the last had drifted to.
+    fn delay(&self) -> SourceDelay {
+        SourceDelay {
+            latency_frames: self.jitter.latency_frames(),
+            spliced_frames: self.jitter.spliced_frames(),
+            streams: self.jitter.streams(),
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 use assert_no_alloc::assert_no_alloc;
 
 use super::*;
-use crate::fixtures::{at_db, db, pink_noise, rms, room, talker, through};
+use crate::fixtures::{at_db, between, db, on_clock, pink_noise, rms, room, talker, through};
 use crate::test_support::RATE;
 
 const SECOND: usize = RATE as usize;
@@ -10,6 +10,16 @@ const SECOND: usize = RATE as usize;
 /// allocation guard, as a slot runs it: the mic's frame first, then the master's frame pushed.
 /// `known(frame)` is the source's latency at each frame.
 fn cancel(far: &[f32], mic: &[f32], known: impl Fn(usize) -> u32) -> (Vec<f32>, EchoCanceller) {
+    let delay = |frame| SourceDelay { latency_frames: known(frame), ..SourceDelay::default() };
+    cancel_spliced(far, mic, delay)
+}
+
+/// The same, with the source's whole delay at each frame, its splices too.
+fn cancel_spliced(
+    far: &[f32],
+    mic: &[f32],
+    delay: impl Fn(usize) -> SourceDelay,
+) -> (Vec<f32>, EchoCanceller) {
     let mut history = EchoHistory::new();
     let silent = EchoHistory::new();
     let mut canceller = EchoCanceller::new(RATE);
@@ -18,7 +28,7 @@ fn cancel(far: &[f32], mic: &[f32], known: impl Fn(usize) -> u32) -> (Vec<f32>, 
         far.as_chunks::<FRAME>().0.iter().zip(out.as_chunks_mut::<FRAME>().0.iter_mut()).enumerate()
     {
         assert_no_alloc(|| {
-            canceller.process(&history, &silent, known(index), block);
+            canceller.process(&history, &silent, delay(index), block);
             history.push(far, far);
         });
     }
@@ -96,4 +106,228 @@ fn a_room_echo_comes_out_and_stays_out() {
         "bleed read {:.1} dB against {bleed:.1}",
         findings.bleed_db
     );
+}
+
+/// The level removed in each whole second.
+fn per_second(mic: &[f32], out: &[f32]) -> Vec<f32> {
+    (0..mic.len() / SECOND).map(|s| removed(mic, out, s as f64, s as f64 + 1.0)).collect()
+}
+
+// A lag between frames reads the signal between them, to within 1e-4 of a 1 kHz tone at half
+// scale, and a whole lag reads the frame itself.
+#[test]
+fn history_reads_between_frames() {
+    let tone = |t: f64| (0.5 * (std::f64::consts::TAU * 1000.0 * t / f64::from(RATE)).sin()) as f32;
+    let played: Vec<f32> = (0..4 * FRAME).map(|k| tone(k as f64)).collect();
+    let mut history = EchoHistory::new();
+    for block in played.chunks(FRAME) {
+        history.push(block, block);
+    }
+    for lag in [100.0, 100.25, 100.5, 311.9] {
+        let mut out = [0.0; 64];
+        Between::new(lag).read(&history, 0, &mut out);
+        let newest = (4 * FRAME - 64) as f64 - lag;
+        let worst = (0..64).map(|i| (out[i] - tone(newest + i as f64)).abs()).fold(0.0, f32::max);
+        assert!(worst < 1e-4, "{lag}: off by {worst:e}");
+    }
+    let (mut whole, mut read) = ([0.0; 64], [0.0; 64]);
+    Between::new(100.0).read(&history, 0, &mut whole);
+    history.read(100, &mut read);
+    assert_eq!(whole, read);
+}
+
+// A mic on its own clock hears the room's echo slide against the master, 4.8 frames a second at
+// 100 ppm and 9.6 at 200. The canceller learns the rate, to 1% measured and 3% asked, and follows
+// it, and from the fifth second takes out within 3 dB of what it takes from the same mic on the
+// master's clock: measured, 1.6 dB at most.
+#[test]
+fn a_mic_on_its_own_clock_has_its_echo_taken_out_as_on_the_masters() {
+    let frames = 10 * SECOND;
+    // A second more of the room, so the slower mic's last frames have an echo to hear
+    let far = far_end(frames + SECOND);
+    let echo = through(&far, &room(40 * 48, 0.316, 0.3, 0.25, 11));
+    let floor = at_db(pink_noise(frames, 99), -60.0);
+    let through_clock = |ppm: f64| {
+        let heard = on_clock(&echo, ppm);
+        let mic: Vec<f32> = heard.iter().zip(&floor).map(|(e, f)| e + f).collect();
+        let (out, canceller) = cancel(&far[..frames], &mic, |_| 0);
+        (per_second(&mic, &out), canceller.drift.frames_per_second(RATE))
+    };
+    let (same, _) = through_clock(0.0);
+    for ppm in [100.0, -100.0, 200.0, -200.0] {
+        let (removed, rate) = through_clock(ppm);
+        println!("{ppm} ppm: {removed:.1?} dB out against {same:.1?}; {rate:.2} frames a second");
+        let drift = ppm * 1e-6 * f64::from(RATE);
+        assert!((rate - drift).abs() < 0.03 * drift.abs(), "{ppm}: {rate} against {drift}");
+        for second in 4..removed.len() {
+            assert!(removed[second] > same[second] - 3.0, "{ppm}, second {}", second + 1);
+        }
+    }
+}
+
+/// `mic` as a capture slot hands it over when it splices `frames`, 1 or -1, at each of `count`
+/// blocks from `from`: each of those reads 127 or 129 frames into 128 by linear interpolation.
+/// Returns it and the source's splices so far at each block.
+fn spliced(mic: &[f32], from: usize, count: usize, frames: i64) -> (Vec<f32>, Vec<i64>) {
+    let (mut out, mut totals) = (Vec::with_capacity(mic.len()), Vec::new());
+    let (mut at, mut total) = (0, 0);
+    for block in 0..mic.len() / FRAME - 2 {
+        let step = if (from..from + count).contains(&block) { frames } else { 0 };
+        let read = (FRAME as i64 - step) as usize;
+        for i in 0..FRAME {
+            let (index, rest) = (at + i * read / FRAME, (i * read) % FRAME);
+            let a = mic[index];
+            out.push(a + (mic[index + 1] - a) * rest as f32 / FRAME as f32);
+        }
+        at += read;
+        total += step;
+        totals.push(total);
+    }
+    (out, totals)
+}
+
+// A capture slot corrects a 480-frame mic's slip by splicing 32 frames in or out, a frame a
+// block, and a 128-frame mic's by 128, and says so. The echo moves with each splice, and the
+// canceller slides every window its filter holds with it. The second it happens in loses 1.7 dB
+// of what it takes out for 32 splices, within a tolerance of 3, and 4.0 for 128, within 5; every
+// second after is within 0.5 dB of a mic that never spliced.
+#[test]
+fn the_echo_is_followed_through_a_sources_splices() {
+    let frames = 10 * SECOND;
+    let far = far_end(frames);
+    let path = room(40 * 48, 0.316, 0.3, 0.25, 11);
+    let floor = at_db(pink_noise(frames, 99), -60.0);
+    let raw: Vec<f32> = through(&far, &path).iter().zip(&floor).map(|(e, f)| e + f).collect();
+    let from = 5 * SECOND / FRAME;
+    let through_splices = |count: usize, frames: i64| {
+        let (mic, totals) = spliced(&raw, from, count, frames);
+        let delay = |block: usize| SourceDelay {
+            latency_frames: 0,
+            spliced_frames: totals[block],
+            ..SourceDelay::default()
+        };
+        let (out, _) = cancel_spliced(&far, &mic, delay);
+        per_second(&mic, &out)
+    };
+    let still = through_splices(0, 0);
+    for (count, frames) in [(32, 1), (32, -1), (128, 1), (128, -1)] {
+        let removed = through_splices(count, frames);
+        println!("{count} x {frames}: {removed:.1?} dB out against {still:.1?}");
+        let within = if count == 32 { 3.0 } else { 5.0 };
+        assert!(removed[5] > still[5] - within, "{count} x {frames}: the second it splices in");
+        for second in 6..removed.len() {
+            let case = format!("{count} x {frames}, second {second}");
+            assert!((removed[second] - still[second]).abs() < 0.5, "{case}");
+        }
+    }
+}
+
+// A capture slot with a fine step, such as a 100-frame mic under 128-frame callbacks, splices a
+// few frames every second or so. Its echo path moves 400 frames at 4 s, as a mic carried across
+// the room does. Splices that small never hold the finder back, so the canceller finds the new
+// path and takes the echo out again: 15 dB or more from the ninth second.
+#[test]
+fn a_source_that_splices_a_little_and_often_still_has_a_new_path_found() {
+    let frames = 12 * SECOND;
+    let far = far_end(frames);
+    let floor = at_db(pink_noise(frames, 99), -60.0);
+    let first = through(&far, &room(40 * 48, 0.316, 0.3, 0.25, 11));
+    let moved = through(&far, &room(40 * 48 + 400, 0.316, 0.3, 0.25, 12));
+    let at = 4 * SECOND;
+    let raw: Vec<f32> =
+        (0..frames).map(|k| if k < at { first[k] } else { moved[k] } + floor[k]).collect();
+    // Four frames spliced in every 300 blocks, 0.8 s
+    let (mut mic, mut totals) = (raw.clone(), vec![0; frames / FRAME]);
+    for from in (0..frames / FRAME - 8).step_by(300) {
+        let (next, more) = spliced(&mic, from, 4, 1);
+        mic = next;
+        mic.resize(frames, 0.0);
+        for (total, extra) in totals.iter_mut().zip(more.iter().chain(std::iter::repeat(&4))) {
+            *total += extra;
+        }
+    }
+    let delay = |block: usize| SourceDelay {
+        latency_frames: 0,
+        spliced_frames: totals[block],
+        ..SourceDelay::default()
+    };
+    let (out, _) = cancel_spliced(&far, &mic, delay);
+    let removed = per_second(&mic, &out);
+    println!("{removed:.1?} dB out, the path moving 400 frames at 4 s");
+    assert!(removed[8..].iter().all(|db| *db >= 15.0), "{removed:.1?}");
+}
+
+// A phone's jitter buffer corrects its clock's skew a frame at a time: on 2.5 ms frames it drops
+// 120 frames at once, and says so. The canceller moves its reference with the echo, as it does
+// for any splice, and from the second it happens in takes out within 1 dB of what it takes from a
+// phone that never stepped: 0.2 dB under, measured. Unreported, the step left 120 frames between
+// them, inside what the finder takes for the same path, and the slot came out 2.3 to 3.3 dB louder
+// than it went in.
+#[test]
+fn a_whole_frame_dropped_at_once_is_followed() {
+    let frames = 10 * SECOND;
+    // A second more of the room, for the frames the phone skips
+    let far = far_end(frames + SECOND);
+    let path = room(40 * 48, 0.316, 0.3, 0.25, 11);
+    let floor = at_db(pink_noise(frames + SECOND, 99), -60.0);
+    let raw: Vec<f32> = through(&far, &path).iter().zip(&floor).map(|(e, f)| e + f).collect();
+    let at = 5 * SECOND;
+    let through_step = |step: usize, reported: bool| {
+        // From `at` on the phone plays its stream `step` frames earlier
+        let mic: Vec<f32> =
+            (0..frames).map(|k| if k < at { raw[k] } else { raw[k + step] }).collect();
+        let delay = |block: usize| {
+            let spliced = if reported && block * FRAME >= at { -(step as i64) } else { 0 };
+            SourceDelay { latency_frames: 0, spliced_frames: spliced, ..SourceDelay::default() }
+        };
+        let (out, _) = cancel_spliced(&far[..frames], &mic, delay);
+        per_second(&mic, &out)
+    };
+    let still = through_step(0, true);
+    let stepped = through_step(120, true);
+    let unreported = through_step(120, false);
+    println!("{stepped:.1?} dB out, against {still:.1?} still and {unreported:.1?} unreported");
+    for second in 5..stepped.len() {
+        assert!(
+            (stepped[second] - still[second]).abs() < 1.0,
+            "second {}: {stepped:.1?}",
+            second + 1
+        );
+    }
+}
+
+// A phone 100 ppm fast starts a new stream fifteen seconds in, as it does when it reconnects
+// with a new SSRC, and its jitter buffer anchors it at the opening delay: the echo is back where
+// the latency says, 72 frames from where it had drifted. The source says it started a stream, and
+// the canceller starts its drift over, keeping the rate: from the second after, it takes out
+// within 3 dB of a phone that never reconnected, 2.6 dB under at most. Unreported, it took out
+// between 1.1 dB louder and 2.8 dB down for the seven seconds after.
+#[test]
+fn a_new_stream_starts_the_drift_over() {
+    let frames = 22 * SECOND;
+    let far = far_end(frames + SECOND);
+    let echo = through(&far, &room(40 * 48, 0.316, 0.3, 0.25, 11));
+    let floor = at_db(pink_noise(frames, 99), -60.0);
+    let fast = 1.0 + 100e-6;
+    let anew = 15 * SECOND;
+    let through_streams = |restarts: bool, reported: bool| {
+        let start = if restarts { anew } else { frames };
+        // Mic frame `k` hears the room at `at`: the new stream starts where its latency says
+        let at = |k: usize| if k < start { k } else { k - start } as f64 / fast;
+        let at = |k: usize| at(k) + if k < start { 0.0 } else { start as f64 };
+        let mic: Vec<f32> = (0..frames).map(|k| between(&echo, at(k)) + floor[k]).collect();
+        let delay = |block: usize| {
+            let streams = u32::from(reported && block * FRAME >= start);
+            SourceDelay { streams, ..SourceDelay::default() }
+        };
+        let (out, _) = cancel_spliced(&far[..frames], &mic, delay);
+        per_second(&mic, &out)
+    };
+    let still = through_streams(false, false);
+    let anew_reported = through_streams(true, true);
+    let unreported = through_streams(true, false);
+    println!("{anew_reported:.1?} dB out, against {still:.1?} and {unreported:.1?} unreported");
+    for second in 16..still.len() {
+        assert!(anew_reported[second] > still[second] - 3.0, "second {}", second + 1);
+    }
 }

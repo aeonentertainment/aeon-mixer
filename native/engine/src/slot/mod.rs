@@ -117,7 +117,7 @@ impl Slot {
             &params.effects.echo_cancel,
             shared.history,
             &self.own,
-            self.source.latency_frames(),
+            self.source.delay(),
             &mut self.input,
         );
         self.howl_guard.process(&params.effects.howl_guard, &mut self.input);

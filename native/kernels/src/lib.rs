@@ -19,7 +19,7 @@ mod voice_shifter;
 mod yin;
 
 pub use corrector::PitchCorrector;
-pub use echo_canceller::{EchoCanceller, EchoFindings, EchoHistory};
+pub use echo_canceller::{EchoCanceller, EchoFindings, EchoHistory, SourceDelay};
 pub use howl_guard::HowlGuard;
 pub use pitch::{EVERY_PITCH_CLASS, Pitch, PitchClassMask, pitch_class_of};
 pub use reverb::Reverb;

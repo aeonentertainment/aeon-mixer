@@ -1,5 +1,6 @@
 //! Synthetic signals for testing and measuring the echo stages, the same in every crate that
-//! asks for them: noise, a voice-shaped talker and a room. Built with the `fixtures` feature.
+//! asks for them: noise, a voice-shaped talker, a room and a mic on its own clock. Built with the
+//! `fixtures` feature.
 
 use std::f64::consts::TAU;
 
@@ -106,4 +107,29 @@ pub fn rms(signal: &[f32]) -> f32 {
 
 pub fn db(level: f32) -> f32 {
     20.0 * level.max(1e-12).log10()
+}
+
+/// `signal` at a moment `t` frames in, between its frames, as a converter on another clock
+/// samples it: a Hann-windowed sinc 32 frames wide. Linear interpolation would add a lowpass that
+/// sweeps with the two clocks' phase, which no real mic has. Silence outside the signal.
+pub fn between(signal: &[f32], t: f64) -> f32 {
+    const HALF: i64 = 16;
+    let whole = t.floor() as i64;
+    let fraction = t - whole as f64;
+    (1 - HALF..=HALF)
+        .filter_map(|m| {
+            let sample = signal.get(usize::try_from(whole + m).ok()?)?;
+            let x = m as f64 - fraction;
+            let window = 0.5 + 0.5 * (std::f64::consts::PI * x / HALF as f64).cos();
+            let angle = std::f64::consts::PI * x;
+            let sinc = if x == 0.0 { 1.0 } else { angle.sin() / angle };
+            Some(f64::from(*sample) * sinc * window)
+        })
+        .sum::<f64>() as f32
+}
+
+/// `signal` as a mic on a clock `ppm` fast or slow hears it: its frame `k` falls at
+/// `k / (1 + ppm / 1e6)` on the signal's clock.
+pub fn on_clock(signal: &[f32], ppm: f64) -> Vec<f32> {
+    (0..signal.len()).map(|k| between(signal, k as f64 / (1.0 + ppm * 1e-6))).collect()
 }

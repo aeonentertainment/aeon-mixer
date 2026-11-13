@@ -1,4 +1,6 @@
+mod between;
 mod delay_finder;
+mod drift;
 mod fft;
 mod history;
 mod lowpass;
@@ -6,7 +8,9 @@ mod mdf;
 #[cfg(test)]
 mod tests;
 
+use between::Between;
 use delay_finder::DelayFinder;
+use drift::Drift;
 pub use history::EchoHistory;
 use mdf::Mdf;
 
@@ -21,6 +25,8 @@ const BINS: usize = FRAME + 1;
 const PARTITIONS: usize = 64;
 /// mdf.c's arithmetic is tuned to 16-bit samples.
 const SCALE: f32 = 32768.0;
+/// mdf.c's pre-emphasis of the reference.
+const PREEMPHASIS: f32 = 0.9;
 /// How far ahead of the found echo the filter starts, for the finder's 16-frame resolution and
 /// the direct path's rise.
 const LEAD: usize = 64;
@@ -30,6 +36,18 @@ const LEAD: usize = 64;
 const SETTLE: u32 = 2;
 /// A lag the finder names this close to the one in use is the same path.
 const SAME_PATH: i64 = 2 * LEAD as i64;
+/// A lag the finder names is judged only once the source's recent splices, halving every three
+/// seconds, come to less than a lead. The finder takes time to follow an echo the source has
+/// moved: after a capture slot's 128-frame correction it named lags up to 259 frames from where
+/// the splices put the path for up to two seconds, and 1.6 s of waiting was not enough. Taken for
+/// a new path, the filter started over and came out up to 26.5 dB under the same mic on the
+/// output's clock, more than 3 dB under for eight seconds. So such a correction holds the finder
+/// about three seconds, and a lag named meanwhile is judged then. A 480-frame mic's 32-frame
+/// corrections, or a finer step's few frames a second, never move the finder that far, and never
+/// hold it.
+const SPLICES_SETTLE: f32 = LEAD as f32;
+/// Three seconds of blocks halve the recent splices.
+const SPLICES_FADE: f32 = 0.999_384;
 /// Once adapted, the filter stops learning while the mic is this many times the energy of the
 /// echo it estimates: a singer over the echo, whose voice the filter would otherwise partly fit
 /// through the backing's own notes. 3 dB, a Geigel detector on energies: 1.5 dB slows the first
@@ -51,11 +69,25 @@ pub struct EchoFindings {
     pub removed_db: f32,
 }
 
+/// Where a slot's source has its delay, block by block: `latency_frames`, how long ago the singer
+/// sang what it hands over, which the canceller follows once it holds for two blocks;
+/// `spliced_frames`, the frames it has spliced into what it hands over since it began, less those
+/// it took out, which the canceller follows the block they happen; and `streams`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceDelay {
+    pub latency_frames: u32,
+    pub spliced_frames: i64,
+    /// Streams the source has started. A new one starts its delay over at the latency, so the
+    /// echo is back where the latency says, however far the last one had drifted.
+    pub streams: u32,
+}
+
 /// Takes the room's echo of the master out of one mic, with the master as its reference. The
 /// slot's source says how long ago the singer sang what it hands over; the canceller finds the
 /// rest of the path, the output, the air and whatever the sender adds, and follows the source's
-/// own moves at once instead of finding the echo again. Built on the control thread; `process`
-/// allocates nothing.
+/// own moves at once instead of finding the echo again. A mic on its own clock slides its echo a
+/// few samples a second against the master, and the canceller follows that too. Built on the
+/// control thread; `process` allocates nothing.
 pub struct EchoCanceller {
     finder: DelayFinder,
     mdf: Mdf,
@@ -64,8 +96,14 @@ pub struct EchoCanceller {
     /// The part of the path the engine cannot know: the found lag less the source's latency.
     unknown: Option<i64>,
     known: Known,
-    /// The lag the filter's reference is read at now.
+    /// The lag the filter's reference is read at now, less the drift's offset.
     alignment: Option<usize>,
+    drift: Drift,
+    /// The source's splices and streams as of the block before.
+    spliced: Option<i64>,
+    streams: Option<u32>,
+    /// The source's recent splices, in frames, fading.
+    recent_splices: f32,
     adapted: bool,
     meters: Meters,
     /// The mic's energy and the echo estimate's, smoothed over about 20 ms.
@@ -77,6 +115,7 @@ pub struct EchoCanceller {
     others: [f32; WINDOW],
     mic: [f32; FRAME],
     out: [f32; FRAME],
+    echo: [f32; FRAME],
 }
 
 /// A source's latency as the canceller follows it.
@@ -104,6 +143,10 @@ impl EchoCanceller {
             unknown: None,
             known: Known::default(),
             alignment: None,
+            drift: Drift::default(),
+            spliced: None,
+            streams: None,
+            recent_splices: 0.0,
             adapted: false,
             meters: Meters::default(),
             talk: (0.0, 0.0),
@@ -114,6 +157,7 @@ impl EchoCanceller {
             others: [0.0; WINDOW],
             mic: [0.0; FRAME],
             out: [0.0; FRAME],
+            echo: [0.0; FRAME],
         }
     }
 
@@ -125,6 +169,10 @@ impl EchoCanceller {
         self.unknown = None;
         self.known = Known::default();
         self.alignment = None;
+        self.drift.reset();
+        self.spliced = None;
+        self.streams = None;
+        self.recent_splices = 0.0;
         self.adapted = false;
         self.meters = Meters::default();
         self.talk = (0.0, 0.0);
@@ -135,34 +183,50 @@ impl EchoCanceller {
         let alignment = self.alignment.filter(|_| self.adapted)?;
         let db = |num: f32, den: f32| 10.0 * ((num + 1e-12) / (den + 1e-12)).log10();
         Some(EchoFindings {
-            path_frames: (alignment + LEAD) as u32,
+            path_frames: ((alignment + LEAD) as f64 + self.drift.offset()).round().max(0.0) as u32,
             bleed_db: db(self.meters.echo, self.meters.reference),
             removed_db: db(self.meters.mic, self.meters.out),
         })
     }
 
     /// One frame of the mic, in place. `history` holds the master up to the frame before this
-    /// one, and `own` the part of it that was this mic's own voice; `known_frames` is how long
-    /// ago the singer sang what the slot's source handed over. Until the echo is found the frame
-    /// passes untouched.
+    /// one, and `own` the part of it that was this mic's own voice; `source` is where the slot's
+    /// source had its delay for this frame. Until the echo is found the frame passes untouched.
     pub fn process(
         &mut self,
         history: &EchoHistory,
         own: &EchoHistory,
-        known_frames: u32,
+        source: SourceDelay,
         block: &mut [f32],
     ) {
         let Ok(block) = <&mut [f32; FRAME]>::try_from(block) else { return };
         history.read(0, &mut self.newest);
         let found = self.finder.process(&self.newest, block);
-        let known = self.follow(known_frames);
+        let known = self.follow(source.latency_frames);
+        let spliced = source.spliced_frames - self.spliced.unwrap_or(source.spliced_frames);
+        self.spliced = Some(source.spliced_frames);
+        self.recent_splices = self.recent_splices * SPLICES_FADE + spliced.unsigned_abs() as f32;
+        let restarted = self.streams.is_some_and(|was| was != source.streams);
+        self.streams = Some(source.streams);
+        if restarted {
+            // A new stream: the echo is back where the latency says, and the clocks are the same
+            self.drift.restart();
+            self.alignment = None;
+        }
+        let read_at = self.drift.offset();
+        self.drift.shift(spliced as f64);
 
-        if found.is_some() && found != self.found {
+        // Until the source has settled, a lag the finder names is not taken, nor kept as the one
+        // it named, so it is judged again once the source has
+        let settled = self.unknown.is_none() || self.recent_splices < SPLICES_SETTLE;
+        if let Some(lag) = found.filter(|_| settled && found != self.found) {
             self.found = found;
-            let unknown = found.map_or(0, |lag| lag as i64) - i64::from(known);
-            if self.unknown.is_none_or(|was| (was - unknown).abs() > SAME_PATH) {
+            let unknown = lag as i64 - i64::from(known);
+            let followed = unknown - self.drift.offset().round() as i64;
+            if self.unknown.is_none_or(|was| (was - followed).abs() > SAME_PATH) {
                 // A new path: what the filter learned was about another
                 self.unknown = Some(unknown);
+                self.drift.restart();
                 self.mdf.reset();
                 self.alignment = None;
                 self.adapted = false;
@@ -172,29 +236,62 @@ impl EchoCanceller {
         let most = EchoHistory::reach() - PARTITIONS * FRAME - WINDOW - 1;
         let lag = (unknown + i64::from(known) - LEAD as i64).clamp(FRAME as i64, most as i64);
         let alignment = lag as usize;
-        if self.alignment != Some(alignment) {
+        if self.alignment == Some(alignment) && spliced.abs() == 1 {
+            // A splice moves the echo a sample, and every window the filter holds slides by one.
+            // `edge(history, more)` is the pre-emphasised sample `more` older than the one after
+            // the newest of window 0, read where the windows were read
+            let after = Between::new(alignment as f64 + read_at - 1.0);
+            let edge = |history: &EchoHistory, more: usize| {
+                let mut pair = [0.0; 2];
+                after.read(history, more, &mut pair);
+                (pair[1] - PREEMPHASIS * pair[0]) * SCALE
+            };
+            let older = spliced > 0;
+            self.mdf.slide(older, |j| {
+                let newest = j * FRAME + 1;
+                // Older, the frame before the window enters and its newest leaves; newer, the
+                // frame after it enters and its oldest leaves
+                let (enters, leaves) = if older {
+                    (newest + WINDOW, newest)
+                } else {
+                    (newest - 1, newest + WINDOW - 1)
+                };
+                let whole = edge(history, enters) - edge(history, leaves);
+                let others = whole - (edge(own, enters) - edge(own, leaves));
+                (whole, others)
+            });
+        } else if self.alignment != Some(alignment) || spliced != 0 {
+            // A jump, of the path the source names or by more than a sample: read every window
             self.alignment = Some(alignment);
-            let Self { mdf, raw, own_raw, .. } = self;
+            let Self { mdf, raw, own_raw, drift, .. } = self;
             mdf.refill(|j, whole, others| {
-                let lag = alignment + j * FRAME;
+                let lag = (alignment + j * FRAME) as f64 + drift.offset();
                 emphasised(history, lag, raw, whole);
                 emphasised(own, lag, own_raw, others);
                 others.iter_mut().zip(whole.iter()).for_each(|(o, w)| *o = w - *o);
             });
         }
 
-        // This frame's window ends `alignment` frames before the mic's first sample, a frame on
-        emphasised(history, alignment - FRAME, &mut self.raw, &mut self.window);
-        emphasised(own, alignment - FRAME, &mut self.own_raw, &mut self.others);
+        // This frame's window ends `alignment` frames before the mic's first sample, a frame on,
+        // and as far again as the path has drifted
+        let lag = (alignment - FRAME) as f64 + self.drift.offset();
+        emphasised(history, lag, &mut self.raw, &mut self.window);
+        emphasised(own, lag, &mut self.own_raw, &mut self.others);
         self.others.iter_mut().zip(&self.window).for_each(|(o, w)| *o = w - *o);
         for (scaled, sample) in self.mic.iter_mut().zip(block.iter()) {
             *scaled = sample * SCALE;
         }
-        if self.adapted && self.talk.0 > DOUBLE_TALK * self.talk.1 {
+        let talking = self.talk.0 > DOUBLE_TALK * self.talk.1;
+        if self.adapted && talking {
             self.mdf.hold(1);
         }
+
         let frame = self.mdf.process(&self.mic, &self.window, &self.others, &mut self.out);
         self.adapted = frame.adapted;
+        for ((echo, mic), out) in self.echo.iter_mut().zip(&self.mic).zip(&self.out) {
+            *echo = mic - out;
+        }
+        self.drift.follow(&self.echo, &self.out, self.adapted && !talking);
 
         let mut energies = Meters::default();
         for ((sample, out), reference) in
@@ -236,12 +333,12 @@ impl EchoCanceller {
 /// before it for the first sample's emphasis.
 fn emphasised(
     history: &EchoHistory,
-    lag: usize,
+    lag: f64,
     raw: &mut [f32; WINDOW + 1],
     out: &mut [f32; WINDOW],
 ) {
-    history.read(lag, raw);
+    Between::new(lag).read(history, 0, raw);
     for (i, sample) in out.iter_mut().enumerate() {
-        *sample = (raw[i + 1] - 0.9 * raw[i]) * SCALE;
+        *sample = (raw[i + 1] - PREEMPHASIS * raw[i]) * SCALE;
     }
 }
