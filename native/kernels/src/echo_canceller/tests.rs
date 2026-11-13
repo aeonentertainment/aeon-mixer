@@ -170,7 +170,7 @@ fn a_mic_on_its_own_clock_has_its_echo_taken_out_as_on_the_masters() {
 /// Returns it and the source's splices so far at each block.
 fn spliced(mic: &[f32], from: usize, count: usize, frames: i64) -> (Vec<f32>, Vec<i64>) {
     let (mut out, mut totals) = (Vec::with_capacity(mic.len()), Vec::new());
-    let (mut at, mut total) = (0usize, 0i64);
+    let (mut at, mut total) = (0, 0);
     for block in 0..mic.len() / FRAME - 2 {
         let step = if (from..from + count).contains(&block) { frames } else { 0 };
         let read = (FRAME as i64 - step) as usize;

@@ -60,7 +60,7 @@ impl Drift {
     pub fn follow(&mut self, echo: &[f32; FRAME], error: &[f32; FRAME], reading: bool) {
         if reading {
             // An estimate a fraction `lag` early leaves an error of `-lag` times its slope
-            let (mut along, mut slope_energy) = (0.0f64, 0.0f64);
+            let (mut along, mut slope_energy) = (0.0, 0.0);
             let mut before = self.last;
             for i in 0..FRAME - 1 {
                 let slope = 0.5 * f64::from(echo[i + 1] - before);

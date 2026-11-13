@@ -788,7 +788,7 @@ mod tests {
     /// a millisecond. A pull the ring could not fill has no first sample to judge.
     #[test]
     fn its_latency_and_splices_move_with_the_wait_but_for_the_drift() {
-        let cases = [(128u64, 128u64), (480, 128), (128, 480), (480, 480)];
+        let cases = [(128, 128), (480, 128), (128, 480), (480, 480)];
         for (period, callback) in cases {
             for ppm in [0, 200, -200] {
                 let mut rig = Rig::new(ppm, period).under(callback).jittered(8);

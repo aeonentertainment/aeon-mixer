@@ -326,9 +326,9 @@ fn a_capture_slot_on_the_outputs_clock_has_its_echo_cancelled() {
 /// splices comes out up to 3.3 dB under, so it is held to 4.
 #[test]
 fn a_capture_slot_on_its_own_clock_has_its_echo_cancelled_as_on_the_outputs() {
-    for (period, within) in [(128u64, 3.0), (480, 4.0)] {
+    for (period, within) in [(128, 3.0), (480, 4.0)] {
         let (same, _) = echo_through_capture(period, 0);
-        for ppm in [100i64, -100, 200, -200] {
+        for ppm in [100, -100, 200, -200] {
             let (removed, findings) = echo_through_capture(period, ppm);
             println!("{period} frames, {ppm} ppm: {removed:.1?} dB out against {same:.1?}");
             assert!(findings.is_some(), "{period}, {ppm}: found and adapted");
