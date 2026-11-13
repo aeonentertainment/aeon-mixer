@@ -70,6 +70,15 @@ seconds after every splice instead, a source that spliced 4 frames every 0.8 s n
 found: for the eight seconds after its path moved, its echo came out between 1.9 dB louder and
 1.3 dB down. Now it comes out 17.6 dB down by the ninth second.
 
+## A new stream
+
+A phone that reconnects, or pauses for more than a second, starts a stream its jitter buffer
+anchors at the opening delay, and its echo is back where the latency says, however far the last
+stream had drifted. So a source counts the streams it has started, and the canceller starts its
+drift over on each, keeping the rate, since the clocks are the same. In the kernel test a phone
+100 ppm fast that reconnects after 15 s comes back within 2.6 dB of one that never did. Without
+the count, it took out between 1.1 dB louder and 2.8 dB down for the seven seconds after.
+
 ## The loop
 
 A filter estimate that is `lag` samples early leaves an error of `-lag` times its slope, so `lag` is
@@ -128,12 +137,6 @@ sets is where the delay ends up.
 
 ## What this does not do
 
-- **Carry a phone's drift across a new stream.** A phone that reconnects, or pauses for a second,
-  starts a stream its jitter buffer anchors at the opening delay, and the echo is back where the
-  latency says, however far the last stream had drifted. The source counts its streams, and the
-  canceller starts its drift over on each, keeping the rate. In the kernel test, a phone 100 ppm
-  fast that reconnects after 15 s comes back within 2.6 dB of one that never did; without the
-  count it took out between 1.1 dB louder and 2.8 dB down for the seven seconds after.
 - **Measure a phone.** A jitter buffer that steps its delay reports it in its latency, as before, and
   its skew corrections now report as splices: each drops or conceals a step, 120 frames on 2.5 ms
   frames, and the playout delay holds. Unreported, the loop would carry its offset across a step
