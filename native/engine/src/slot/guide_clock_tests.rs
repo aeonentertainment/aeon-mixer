@@ -17,7 +17,7 @@ use crate::driver::Movable;
 use crate::graph::Graph;
 use crate::ingest::fixtures::L16Sender;
 use crate::ingest::packet::RING_CAPACITY;
-use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
+use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring, push_voice};
 use crate::params::{CorrectorParams, Params};
 use crate::slot::Slot;
 use crate::slot::guide::{Guide, Note};
@@ -196,6 +196,45 @@ fn a_pause_short_of_an_edge_crosses_it_once_after_the_resume() {
     assert_eq!(into.len(), 2, "into the note and out at its end: {into:?}");
     let edge = position_ms(NOTE.0 as i64);
     assert!((edge..edge + HOP_MS).contains(&into[0].0), "{into:?}");
+}
+
+// A push slot's latency is its ring's depth, which moves every block as the host hands in 10 ms
+// and the output takes 2.67. Paused, the slot holds the frame it had when the hold began, so a
+// note edge within that wobble is never crossed back and forth.
+#[test]
+fn a_paused_push_slot_holds_its_frame_though_its_ring_drains() {
+    const HELD: u64 = 49_024;
+    const NOTE: (u64, u64) = (HELD - 240, 96_000);
+    let (mut producer, voice) = push_voice(SECOND);
+    let mut song = Song::new(Box::new(voice), &[NOTE]);
+    let mut sine = Sine::new(226.0, 0.5);
+    let (mut mono, mut stereo) = ([0.0; HOP as usize], [0.0; 2 * HOP as usize]);
+    // The host hands in 10 ms whenever the output has taken what it last handed in
+    let (mut pushed, mut rendered) = (0, 0);
+    let mut play = |song: &mut Song, frames: usize| {
+        let until = rendered + frames;
+        while rendered < until {
+            if pushed <= rendered {
+                sine.pull(&mut mono);
+                for (frame, sample) in stereo.as_chunks_mut::<2>().0.iter_mut().zip(mono) {
+                    *frame = [sample; 2];
+                }
+                assert_eq!(producer.push(&stereo), HOP as usize, "the ring has room");
+                pushed += HOP as usize;
+            }
+            song.render(BLOCK);
+            rendered += BLOCK;
+        }
+    };
+    play(&mut song, SECOND);
+    song.steer(Transport::Pause);
+    play(&mut song, SECOND);
+    assert_eq!(song.graph.position_frames(), HELD);
+
+    let held = &song.reads[song.reads.len() - 50..];
+    let first = held[0];
+    let same = |read: &Read| read.position_ms == first.position_ms && read.target == first.target;
+    assert!(held.iter().all(same), "{held:?}");
 }
 
 // A phone's 5 ms packets stop for 200 ms, far longer than its 15 ms playout delay, and a note
