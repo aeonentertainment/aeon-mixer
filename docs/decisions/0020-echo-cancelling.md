@@ -113,7 +113,7 @@ Four changes, each measured in a test that fails without it:
   level, the filter takes what it hears as it is. The longest such run a silenced source handed
   over was 4 frames. A phone turned face down, its echo 12 dB down and low-passed at 1 kHz, comes
   out 5.8 dB down in that second and 18.4 in the next, against mdf.c's 2.2 and 18.4; held as
-  silence, as when this first shipped, 3.8 dB in the next. A room turned down 12 or 20 dB at once
+  silence, with no limit, 3.8 dB in the next. A room turned down 12 or 20 dB at once
   keeps the path's shape and is learned again as mdf.c learns it, but the 20 dB drop's own second
   comes out at -6.7 dB against -4.6, since its faintest frames pass as silence and do not count
   toward the reset. Where a backing leaves gaps the echo falls 30 dB into, those frames pass too,
