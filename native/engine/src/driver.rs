@@ -37,6 +37,12 @@ pub trait Movable: Send + 'static {
     fn callback_frames(&self) -> Arc<AtomicU32> {
         Arc::default()
     }
+    /// Where the follower writes each stream's `StreamInfo.output_latency_frames` beside its
+    /// period, so the guide clock follows the output the room hears. Taken and defaulted as
+    /// `callback_frames` is.
+    fn output_latency_frames(&self) -> Arc<AtomicU32> {
+        Arc::default()
+    }
 }
 
 pub struct Running {

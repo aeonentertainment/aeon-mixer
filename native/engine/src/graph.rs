@@ -66,7 +66,8 @@ impl Graph {
     }
 
     /// The device's output latency, which the guide clock subtracts so a singer is corrected
-    /// toward the note they hear, not the one being rendered. Set before the graph goes live.
+    /// toward the note they hear, not the one being rendered. The audio thread sets it as the
+    /// graph is swapped in, and again in the first block after a move to another output.
     pub fn set_backing_offset_frames(&mut self, frames: u32) {
         self.backing_offset_frames = frames;
     }
