@@ -3,7 +3,7 @@
 //! ring. A panic inside is caught here; every block after is silence, no further command is
 //! taken, and `Fault` is sent, again each block until the event ring has room for it
 //! (docs/design.md section 2). Moved to another output, it starts every slot's stream again and
-//! fades in (section 5).
+//! fades in (section 5), and every graph's guide clock takes the new output's latency (section 3).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -48,6 +48,10 @@ pub struct AudioThread {
     /// one the graphs last heard: a graph swapped in hears it too.
     callback: Arc<AtomicU32>,
     heard: u32,
+    /// The stream's output latency, which the follower writes beside its period, and the one the
+    /// graphs last heard. Zero until a stream says otherwise, as the offline and timer clocks do.
+    latency: Arc<AtomicU32>,
+    latency_heard: u32,
     /// Frames of the fade in after a move that have played; the fade is done at the swap fade.
     faded_in: u32,
 }
@@ -87,6 +91,8 @@ impl AudioThread {
             restart: false,
             callback: Arc::default(),
             heard: 0,
+            latency: Arc::default(),
+            latency_heard: 0,
             faded_in: SWAP_FADE_FRAMES,
         };
         let controls = Controls {
@@ -126,6 +132,14 @@ impl AudioThread {
             self.live.output_moved(callback);
             if let Some(outgoing) = &mut self.outgoing {
                 outgoing.output_moved(callback);
+            }
+        }
+        let latency = self.latency.load(Ordering::Acquire);
+        if latency != self.latency_heard {
+            self.latency_heard = latency;
+            self.live.set_backing_offset_frames(latency);
+            if let Some(outgoing) = &mut self.outgoing {
+                outgoing.set_backing_offset_frames(latency);
             }
         }
         self.drain_commands();
@@ -190,6 +204,7 @@ impl AudioThread {
                     if self.heard != 0 {
                         graph.output_moved(self.heard);
                     }
+                    graph.set_backing_offset_frames(self.latency_heard);
                     if let Some(previous) = self.outgoing.take() {
                         self.retire(Retired::Graph(previous));
                     }
@@ -271,6 +286,10 @@ impl Movable for AudioThread {
     fn callback_frames(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.callback)
     }
+
+    fn output_latency_frames(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.latency)
+    }
 }
 
 #[cfg(test)]
@@ -278,11 +297,14 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
+    use crate::backing::test_support::SECOND;
+    use crate::backing::{Backing, Planar, Stems};
     use crate::command::EVENT_CAPACITY;
     use crate::driver::OfflineDriver;
+    use crate::params::CorrectorParams;
     use crate::slot::Slot;
-    use crate::slot::guide::Guide;
-    use crate::slot::source::fixtures::{Constant, Panics};
+    use crate::slot::guide::{Guide, Note};
+    use crate::slot::source::fixtures::{Constant, Panics, Sine};
 
     const CENTRE: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
@@ -388,6 +410,88 @@ mod tests {
         assert_eq!(acks, vec![1, 2, 3], "the same graph answers after the move");
         assert!(matches!(controls.retired.pop(), Some(Retired::Graph(_))), "the silent graph");
         assert!(controls.retired.pop().is_none(), "and nothing else: the live graph stayed");
+    }
+
+    // The guide clock is the playhead less the output latency. The song opens on a 10 ms output
+    // and moves to a 30 ms one after a second; the new stream renders three blocks before its
+    // `start` returns and the follower writes its latency, as a backend may, so the block after
+    // that, which holds the first reading on the new stream, must already be on the new clock.
+    // Every reading's position and target then name the note the room hears: a note edge comes
+    // 20 ms later in the room after the move, two readings.
+    #[test]
+    fn after_a_move_readings_and_note_edges_follow_the_new_output_latency() {
+        const B_FLAT_3: u8 = 58;
+        const OPENED: u32 = 480;
+        const MOVED: u32 = 1_440;
+        const BEFORE_STORE: usize = 3;
+        let notes = [(24_100, 36_100), (72_100, 120_100)];
+        let blocks = |seconds: usize| seconds * SECOND / BLOCK;
+
+        let (mut audio, mut controls) = AudioThread::new();
+        audio.output_latency_frames().store(OPENED, Ordering::Release);
+        audio.callback_frames().store(BLOCK as u32, Ordering::Release);
+        let mut slot = Slot::new(Box::new(Sine::new(226.0, 0.5)));
+        slot.set_guide(Some(Box::new(Guide {
+            notes: notes
+                .iter()
+                .map(|&(start_frame, end_frame)| Note { midi: B_FLAT_3, start_frame, end_frame })
+                .collect(),
+            key_mask: 0,
+        })));
+        let mut graph = Graph::new(vec![slot]);
+        graph.set_backing(Backing::new(Stems::new(Planar::silence(4 * SECOND), None), 0));
+        controls.commands.push(Command::Swap { id: 1, graph: Box::new(graph) }).ok().unwrap();
+        controls.commands.push(Command::Start { id: 2 }).ok().unwrap();
+        controls.params.update(|p| {
+            p.slots[0].effects.corrector =
+                CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
+        });
+
+        let mut readings = Vec::new();
+        let mut render = |audio: &mut AudioThread, blocks: usize| {
+            for _ in 0..blocks {
+                let (mut left, mut right) = ([0.0; BLOCK], [0.0; BLOCK]);
+                assert_no_alloc(|| audio.render(Stereo { left: &mut left, right: &mut right }));
+                readings.extend(std::iter::from_fn(|| controls.events.pop()).filter_map(|e| {
+                    if let Event::Pitch { position_ms, target_midi, .. } = e {
+                        Some((position_ms, target_midi))
+                    } else {
+                        None
+                    }
+                }));
+            }
+        };
+        render(&mut audio, blocks(1));
+        Movable::moved(&mut audio);
+        render(&mut audio, BEFORE_STORE);
+        audio.output_latency_frames().store(MOVED, Ordering::Release);
+        render(&mut audio, blocks(2) - BEFORE_STORE);
+
+        // A reading comes every 480 frames the slot renders, counted again from the move, which
+        // starts the slot over. The playhead held through the move, so it is the frames rendered.
+        let lag = kernels::PitchCorrector::new(RATE).reading_lag_samples() as i64;
+        let moved_at = (blocks(1) * BLOCK) as i64;
+        let expected = (1..=moved_at / 480)
+            .map(|k| (480 * k, OPENED))
+            .chain((1..=(2 * SECOND as i64) / 480).map(|k| (moved_at + 480 * k, MOVED)));
+        let mut in_note = [0; 2];
+        let mut count = 0;
+        for ((position_ms, target), (playhead, latency)) in readings.iter().zip(expected) {
+            let heard = playhead - i64::from(latency);
+            let ms = (heard - lag) as f64 * 1000.0 / f64::from(RATE);
+            assert!((position_ms - ms).abs() < 1e-9, "at {playhead}: {position_ms} for {ms}");
+            // The target a reading carries is the one its last run set, a frame before it ends
+            let sounding = notes
+                .iter()
+                .position(|&(start, end)| (start as i64..end as i64).contains(&(heard - 1)));
+            assert_eq!(*target, sounding.map(|_| i16::from(B_FLAT_3)), "at {playhead}");
+            if let Some(note) = sounding {
+                in_note[note] += 1;
+            }
+            count += 1;
+        }
+        assert_eq!((count, readings.len()), (300, 300), "every reading checked");
+        assert_eq!(in_note, [25, 100], "both notes, each a reading every 10 ms");
     }
 
     #[test]

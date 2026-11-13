@@ -173,6 +173,7 @@ struct Counter {
     panics: bool,
     dropped: Sender<Seen>,
     callback: Arc<AtomicU32>,
+    latency: Arc<AtomicU32>,
 }
 
 impl Movable for Counter {
@@ -193,6 +194,10 @@ impl Movable for Counter {
     fn callback_frames(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.callback)
     }
+
+    fn output_latency_frames(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.latency)
+    }
 }
 
 impl Drop for Counter {
@@ -204,8 +209,9 @@ impl Drop for Counter {
 struct Rig {
     fake: Fake,
     seen: Receiver<Seen>,
-    /// What the render was told of each stream's period.
+    /// What the render was told of each stream's period and output latency.
     callback: Arc<AtomicU32>,
+    latency: Arc<AtomicU32>,
     stats: Arc<Stats>,
     follower: Option<Follower>,
 }
@@ -220,20 +226,21 @@ impl Rig {
         let (sender, seen) = channel();
         let fake = Fake { room: Arc::default(), seen: sender.clone() };
         fake.offer(outputs);
-        let callback = Arc::new(AtomicU32::new(0));
+        let (callback, latency) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0)));
         let counter = Counter {
             frame: 1.0,
             moved: false,
             panics,
             dropped: sender,
             callback: Arc::clone(&callback),
+            latency: Arc::clone(&latency),
         };
         let stats = Arc::new(Stats::new());
         let request = Request { device: pinned.map(Into::into), ..Request::default() };
         let follower =
             Follower::stalling_after(stall, request, counter, fake.clone(), Arc::clone(&stats))
                 .expect("the first output opens");
-        Self { fake, seen, stats, callback, follower: Some(follower) }
+        Self { fake, seen, stats, callback, latency, follower: Some(follower) }
     }
 
     fn next(&self) -> Seen {
@@ -293,19 +300,21 @@ fn a_new_default_takes_the_song_with_nothing_lost_but_the_gap() {
     assert_eq!(after[BLOCK], next + BLOCK as f32, "and the song plays on after it");
 }
 
-/// A capture slot sizes its ring by how much the output pulls at a wake, so the render hears each
-/// stream's granted period as that stream starts, before the follower reports the move: 240 frames
-/// on `hdmi`, then 480 on `built-in`.
+/// A capture slot sizes its ring by how much the output pulls at a wake, and the guide clock
+/// subtracts the output's latency, so the render hears each stream's granted period and latency as
+/// that stream starts, before the follower reports the move: 240 frames and 400 on `hdmi`, then
+/// 480 and 800 on `built-in`.
 #[test]
-fn each_stream_tells_the_render_its_period_as_it_starts() {
+fn each_stream_tells_the_render_its_period_and_latency_as_it_starts() {
     let rig = Rig::new(&[("hdmi", true), ("built-in", false)], None);
+    let told = || (rig.callback.load(Ordering::Acquire), rig.latency.load(Ordering::Acquire));
     rig.expect(&[started("hdmi")]);
     rig.settle();
-    assert_eq!(rig.callback.load(Ordering::Acquire), 240);
+    assert_eq!(told(), (240, 400));
     rig.fake.offer(&[("hdmi", false), ("built-in", true)]);
     rig.expect(&[stopped("hdmi"), started("built-in")]);
     rig.settle();
-    assert_eq!(rig.callback.load(Ordering::Acquire), 480);
+    assert_eq!(told(), (480, 800));
 }
 
 #[test]

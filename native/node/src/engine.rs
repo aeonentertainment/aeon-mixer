@@ -191,10 +191,9 @@ impl Engine {
     /// comes back through the retired ring as a `retired` event.
     #[napi]
     pub fn swap(&mut self, mixer: &mut Mixer) -> Result<u32> {
-        let mut graph = mixer.take_graph()?;
-        // The guide clock subtracts the output latency, so a singer is corrected toward the note
-        // they hear (docs/design.md section 3)
-        graph.set_backing_offset_frames(self.clock()?.info().output_latency_frames);
+        let graph = mixer.take_graph()?;
+        // The audio thread gives the graph the output latency its guide clock subtracts, the one
+        // playing when the swap lands (docs/design.md section 2)
         let id = self.next_id();
         if let Err(Command::Swap { graph, .. }) = self.send(Command::Swap { id, graph }) {
             mixer.give_back(graph);

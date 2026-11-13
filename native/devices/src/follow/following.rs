@@ -222,13 +222,15 @@ fn start<M: Movable>(
     output: &Output,
     movable: M,
 ) -> Result<(Running, Dock<M>), (DriverError, Option<M>)> {
-    let callback = movable.callback_frames();
+    let (callback, latency) = (movable.callback_frames(), movable.output_latency_frames());
     let (render, dock) = Dock::lend(movable);
     let request = Request { device: Some(output.id.clone()), ..request.clone() };
     match system.driver(request, Arc::clone(stats)).start(render) {
         Ok(running) => {
             // The stream may have rendered already. A capture slot re-priming from `moved` waits
-            // for more mic than arrives before this store, and the next block hears it.
+            // for more mic than arrives before this store, and the next block hears it; so does
+            // the guide clock.
+            latency.store(running.info.output_latency_frames, Ordering::Release);
             callback.store(running.info.period_frames, Ordering::Release);
             Ok((running, dock))
         }
