@@ -62,10 +62,11 @@ A filter estimate that is `lag` samples early leaves an error of `-lag` times it
 the error against the estimate's slope, over the slope's energy, each block. A proportional and an
 integral gain of 0.03 and 4e-4 per block give a natural frequency of 1.2 Hz, damped at 0.75. Gains
 of 0.005 and 2e-5 took four seconds to learn the rate instead of two, and 7 to 18 dB less out at the
-fifth second. The loop
-reads only once the filter has adapted and not while the double-talk hold is on; then it moves on at
-the rate it has learned. A tighter gate, reading only while the filter explains 90% of the mic, kept
-it from learning: at 200 ppm, 16 dB out at the fifth second instead of 27.
+fifth second.
+
+The loop reads only once the filter has adapted and not while the double-talk hold is on; then it
+moves on at the rate it has learned. A tighter gate, reading only while the filter explains 90% of
+the mic, kept it from learning: at 200 ppm, 16 dB out at the fifth second instead of 27.
 
 ## Numbers
 
