@@ -96,8 +96,16 @@ than 16 frames from it twofold, is the move to a fraction of a frame; the filter
 master there and cancels at once. A voice correlates with itself a few pitch periods away nearly
 as well as at its own lag over one syllable, and without the second test an echo 30 frames early
 was taken for one 711 early. While it looks, under half a second, the slot passes untouched,
-and `stats()` keeps the path it had. A second without a clear peak leaves the filter where it was
-for the finder to judge, as before. The search reaches 21 ms either way: a block's rounding, and
+and `stats()` keeps the path it had. A frame counts only when the estimate holds at least a tenth of the mic's
+energy: a perfect estimate 10 dB under the mic correlates at 0.32, under the 0.5 the peak needs.
+So a silent intro or break, or a master holding only the slot's own voice, counts for nothing,
+and the search waits it out with the slot passing untouched; after 10 s of it, what was summed is
+forgotten and the next frame that counts starts afresh, since the drift's rate, learned to 1%,
+moves the reference half a frame in that time at 100 ppm. Spending its budget on such frames, a
+phone back a quarter packet off during a silent intro took out 10.6 dB in the second ending 2 s
+after the backing returned, against 16.7 before it stopped; waiting, 14.4 to 14.7. A second of
+counted frames without a clear peak leaves the filter where it was for the finder to judge, as
+before. The search reaches 21 ms either way: a block's rounding, and
 three quarters of a 20 ms packet.
 
 On the offline driver, through Opus and the jitter buffer, a phone whose new stream lands a

@@ -17,6 +17,18 @@ const PARTITIONS: usize = 2 * REACH / FRAME;
 const LEAST_HEARD: u32 = 32;
 /// Heard frames after which an echo still not found is not the filter's: a second.
 const MOST_HEARD: u32 = 375;
+/// A frame is heard only when the filter's estimate, the learned path's echo of the master, holds
+/// at least this share of the mic's energy: 10 dB under it. The peak needs a normalised
+/// correlation of `LIKE`, and a perfect estimate 10 dB under the mic reaches only 0.32, so a
+/// quieter one dilutes the sum and cannot name the lag. A silent intro or a break, or a master
+/// that holds only the mic's own voice, which the estimate leaves out, is heard as nothing, and
+/// the search waits it out with the slot passing untouched.
+const ESTIMATE_SHARE: f32 = 0.1;
+/// Frames in a row not heard after which what was summed is forgotten, and the next frame heard
+/// starts the search afresh: 10 s. The reference moves on at the drift's learned rate meanwhile,
+/// learned to 1% (decision 0022), so at 100 ppm a sum held over 10 s of silence sits half a frame
+/// from the frames after it, and one held longer blurs the peak.
+const FORGET_AFTER: u32 = 3750;
 /// The peak's correlation, normalised by both energies, that names the lag.
 const LIKE: f32 = 0.5;
 /// And at least twice any lag more than `RIVAL_GAP` frames from it. A voice correlates with
@@ -57,6 +69,8 @@ pub struct Realign {
     correlation: [f32; 2 * REACH],
     last_mic: f32,
     heard: u32,
+    /// Frames in a row not heard.
+    unheard: u32,
     mic_energy: f32,
     estimate_energy: f32,
     looking: bool,
@@ -75,6 +89,7 @@ impl Realign {
             correlation: [0.0; 2 * REACH],
             last_mic: 0.0,
             heard: 0,
+            unheard: 0,
             mic_energy: 0.0,
             estimate_energy: 0.0,
             looking: false,
@@ -84,13 +99,18 @@ impl Realign {
     /// Starts a search from nothing.
     pub fn begin(&mut self) {
         self.windows.fill(SILENT);
-        self.sums.fill(SILENT);
         self.estimate = [0.0; WINDOW];
         self.last_mic = 0.0;
+        self.forget();
+        self.looking = true;
+    }
+
+    fn forget(&mut self) {
+        self.sums.fill(SILENT);
         self.heard = 0;
+        self.unheard = 0;
         self.mic_energy = 0.0;
         self.estimate_energy = 0.0;
-        self.looking = true;
     }
 
     pub fn stop(&mut self) {
@@ -102,7 +122,8 @@ impl Realign {
     }
 
     /// One frame: `estimate` is the filter's echo, pre-emphasised and read early, and `mic` what
-    /// the slot heard, both on the 16-bit scale. A mic that hears nothing counts for nothing.
+    /// the slot heard, both on the 16-bit scale. A frame where either is too quiet to judge
+    /// counts for nothing.
     pub fn hear(&mut self, estimate: &[f32; FRAME], mic: &[f32; FRAME]) -> Search {
         self.estimate.copy_within(FRAME.., 0);
         self.estimate[FRAME..].copy_from_slice(estimate);
@@ -114,12 +135,19 @@ impl Realign {
             self.last_mic = sample;
             energy += sample * sample;
         }
-        if energy < QUIETEST_MIC {
+        let emphasised: f32 = self.mic[FRAME..].iter().map(|s| s * s).sum();
+        let estimated: f32 = estimate.iter().map(|s| s * s).sum();
+        if energy < QUIETEST_MIC || estimated < ESTIMATE_SHARE * emphasised {
+            self.unheard += 1;
+            if self.unheard >= FORGET_AFTER {
+                self.forget();
+            }
             return Search::Looking;
         }
         self.heard += 1;
-        self.mic_energy += self.mic[FRAME..].iter().map(|s| s * s).sum::<f32>();
-        self.estimate_energy += estimate.iter().map(|s| s * s).sum::<f32>();
+        self.unheard = 0;
+        self.mic_energy += emphasised;
+        self.estimate_energy += estimated;
         self.fft.forward(&self.mic, &mut self.spectrum);
         for (sum, window) in self.sums.iter_mut().zip(&self.windows) {
             for ((sum, w), m) in sum.iter_mut().zip(window).zip(&self.spectrum) {
@@ -156,7 +184,7 @@ impl Realign {
             .enumerate()
             .filter(|(lag, _)| lag.abs_diff(at) > RIVAL_GAP)
             .map(|(_, &value)| value)
-            .fold(0.0f32, f32::max);
+            .fold(0.0, f32::max);
         let alike = peak >= LIKE * (self.mic_energy * self.estimate_energy).sqrt() / WINDOW as f32;
         if !alike || peak < PEAK_OVER_RIVAL * rival {
             return None;

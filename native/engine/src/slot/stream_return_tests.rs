@@ -3,6 +3,7 @@
 //! driver, closed loop, the room hearing the master as the device played it.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 
 use assert_no_alloc::{assert_no_alloc, permit_alloc};
 use kernels::fixtures::{at_db, db, pink_noise, rms, room, talker};
@@ -29,6 +30,8 @@ const RECOVERS_IN: f64 = 2.0;
 /// ...within this much of what it took out in the second before the phone stopped, as after a
 /// source gone silent.
 const USUAL_WITHIN_DB: f32 = 3.0;
+/// No silence in the backing.
+const NO_BREAK: Range<usize> = 0..0;
 /// The quickest a stream's packets reach the mixer here, 1.3 ms.
 const QUICKEST: usize = BLOCK / 2;
 
@@ -86,13 +89,13 @@ struct Phone {
 }
 
 impl Phone {
-    fn new(frame: usize, streams: (Stream, Stream)) -> Self {
+    fn new(frame: usize, streams: (Stream, Stream), end: usize) -> Self {
         Self {
             sender: OpusSender::new(frame, 0x5107),
             streams,
-            heard: Vec::with_capacity(END + BLOCK),
+            heard: Vec::with_capacity(end + BLOCK),
             next: streams.0.start,
-            on_the_way: VecDeque::with_capacity(END / frame),
+            on_the_way: VecDeque::with_capacity(end / frame),
         }
     }
 
@@ -132,21 +135,24 @@ struct Run {
 }
 
 /// A phone in a living room, 10 ms and 10 dB down with a 300 ms tail, hearing a karaoke room's
-/// backing through a slot with the canceller on. The backing plays hard right and the slot hard
-/// left, so the master's left is the slot alone.
-fn run(frame: usize, off: Off) -> Run {
-    let far: Vec<f32> = at_db(talker(END, 110.0, 3), -18.0)
+/// backing through a slot with the canceller on. The backing is silent over `quiet`, and the run
+/// ends three seconds after both the return and the silence. The backing plays hard right and
+/// the slot hard left, so the master's left is the slot alone.
+fn run(frame: usize, off: Off, quiet: Range<usize>) -> Run {
+    let end = END.max(quiet.end + 3 * SECOND);
+    let mut far: Vec<f32> = at_db(talker(end, 110.0, 3), -18.0)
         .iter()
-        .zip(&at_db(pink_noise(END, 7), -26.0))
+        .zip(&at_db(pink_noise(end, 7), -26.0))
         .map(|(v, b)| v + b)
         .collect();
+    far[quiet].fill(0.0);
     let path = room(480, 0.316, 0.3, 0.25, 11);
     let floor = at_db(pink_noise(SECOND, 99), -60.0);
-    let mut phone = Phone::new(frame, off.streams(frame));
+    let mut phone = Phone::new(frame, off.streams(frame), end);
     let (mut packets, consumer) = packet_ring(RING_CAPACITY);
     let jitter = JitterBuffer::new(DELAY, Codec::opus().expect("a decoder"));
     let source = Box::new(PacketSource::new(consumer, jitter));
-    let (handed, mut handed_out) = RingBuffer::new(END + BLOCK);
+    let (handed, mut handed_out) = RingBuffer::new(end + BLOCK);
     let slot = Slot::new(Box::new(Tapped { inner: source, handed }));
     let report = slot.echo_report();
     let mut graph = Graph::new(vec![slot]);
@@ -159,9 +165,9 @@ fn run(frame: usize, off: Off) -> Run {
         p.slots[0].pan = -1.0;
         p.slots[0].effects.echo_cancel = EchoCancelParams { enabled: true };
     });
-    let mut played: Vec<f32> = Vec::with_capacity(END + BLOCK);
+    let mut played: Vec<f32> = Vec::with_capacity(end + BLOCK);
     let mut heard = [0.0; BLOCK];
-    let (mut paths, mut paths_out) = RingBuffer::new(END / BLOCK + 1);
+    let (mut paths, mut paths_out) = RingBuffer::new(end / BLOCK + 1);
     let mut driver = OfflineDriver::new(Box::new(move |out: Stereo<'_>| {
         // The phone and its network are other threads, which may allocate
         permit_alloc(|| {
@@ -186,9 +192,9 @@ fn run(frame: usize, off: Off) -> Run {
             let _ = paths.push(report.findings().map(|found| found.path_frames));
         });
     }));
-    let mut out = Vec::with_capacity(END);
+    let mut out = Vec::with_capacity(end);
     let mut interleaved = [0.0; 2 * BLOCK];
-    while out.len() < END {
+    while out.len() < end {
         assert_no_alloc(|| driver.pump_into(&mut interleaved));
         out.extend(interleaved.iter().step_by(2));
     }
@@ -220,7 +226,7 @@ fn a_phone_back_as_a_new_stream_off_its_old_alignment_has_its_echo_cancelled_aga
         .into_iter()
         .flat_map(|frame| offs.iter().map(move |&off| (frame, off)))
         .map(|(frame, off)| {
-            let run = run(frame, off);
+            let run = run(frame, off, NO_BREAK);
             let usual = removed(&run, 5.0, 6.0);
             let back = removed(&run, return_at + RECOVERS_IN - 1.0, return_at + RECOVERS_IN);
             let path = |at: f64| run.paths[(at * SECOND as f64) as usize / BLOCK];
@@ -256,9 +262,27 @@ fn a_phone_back_as_a_new_stream_off_its_old_alignment_has_its_echo_cancelled_aga
 fn a_phone_back_as_a_new_stream_reports_its_echo_on_every_block() {
     let learned = 5 * SECOND / BLOCK;
     for off in [Off::Later(1, 4), Off::Earlier(1, 4)] {
-        let run = run(120, off);
+        let run = run(120, off, NO_BREAK);
         let lost: Vec<usize> =
             (learned..run.paths.len()).filter(|&b| run.paths[b].is_none()).collect();
         assert!(lost.is_empty(), "{off:?}: no findings at blocks {lost:?}");
+    }
+}
+
+// A phone comes back a quarter packet off during four seconds of silent backing, three of them
+// after its return, as in an intro or a break. With nothing in the master to find the echo by,
+// the canceller waits, and finds it once the backing plays again: in the second that ends two
+// seconds after the backing returns, it takes out within 3 dB of the second before the phone
+// stopped.
+#[test]
+fn a_phone_back_during_a_silent_backing_has_its_echo_found_when_the_backing_returns() {
+    let quiet = RETURNS - SECOND..RETURNS + 3 * SECOND;
+    let plays_at = quiet.end as f64 / SECOND as f64;
+    for off in [Off::Later(1, 4), Off::Earlier(1, 4)] {
+        let run = run(120, off, quiet.clone());
+        let usual = removed(&run, 5.0, 6.0);
+        let back = removed(&run, plays_at + RECOVERS_IN - 1.0, plays_at + RECOVERS_IN);
+        println!("{off:?}: {usual:.1} dB out before, {back:.1} in the second to 2 s after");
+        assert!(back >= usual - USUAL_WITHIN_DB, "{off:?}: {back:.1} dB out, {usual:.1} before");
     }
 }
