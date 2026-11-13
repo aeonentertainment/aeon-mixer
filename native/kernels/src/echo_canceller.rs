@@ -36,13 +36,18 @@ const LEAD: usize = 64;
 const SETTLE: u32 = 2;
 /// A lag the finder names this close to the one in use is the same path.
 const SAME_PATH: i64 = 2 * LEAD as i64;
-/// Blocks after a source's last splice before a lag the finder names is judged, three seconds.
-/// The finder takes time to follow an echo the source has moved: after a capture slot's 128-frame
-/// correction it named lags up to 259 frames from where the splices put the path for up to two
-/// seconds, and 1.6 s of waiting was not enough. Taken for a new path, the filter started over and
-/// came out up to 26.5 dB under the same mic on the output's clock, more than 3 dB under for eight
-/// seconds. A lag it names meanwhile is judged once the source has settled.
-const FINDER_SETTLE: u32 = 1125;
+/// A lag the finder names is judged only once the source's recent splices, halving every three
+/// seconds, come to less than a lead. The finder takes time to follow an echo the source has
+/// moved: after a capture slot's 128-frame correction it named lags up to 259 frames from where
+/// the splices put the path for up to two seconds, and 1.6 s of waiting was not enough. Taken for
+/// a new path, the filter started over and came out up to 26.5 dB under the same mic on the
+/// output's clock, more than 3 dB under for eight seconds. So such a correction holds the finder
+/// about three seconds, and a lag named meanwhile is judged then. A 480-frame mic's 32-frame
+/// corrections, or a finer step's few frames a second, never move the finder that far, and never
+/// hold it.
+const SPLICES_SETTLE: f32 = LEAD as f32;
+/// Three seconds of blocks halve the recent splices.
+const SPLICES_FADE: f32 = 0.999_384;
 /// Once adapted, the filter stops learning while the mic is this many times the energy of the
 /// echo it estimates: a singer over the echo, whose voice the filter would otherwise partly fit
 /// through the backing's own notes. 3 dB, a Geigel detector on energies: 1.5 dB slows the first
@@ -93,8 +98,8 @@ pub struct EchoCanceller {
     drift: Drift,
     /// The source's splices as of the block before.
     spliced: Option<i64>,
-    /// Blocks since the source last spliced.
-    unspliced: u32,
+    /// The source's recent splices, in frames, fading.
+    recent_splices: f32,
     adapted: bool,
     meters: Meters,
     /// The mic's energy and the echo estimate's, smoothed over about 20 ms.
@@ -136,7 +141,7 @@ impl EchoCanceller {
             alignment: None,
             drift: Drift::default(),
             spliced: None,
-            unspliced: 0,
+            recent_splices: 0.0,
             adapted: false,
             meters: Meters::default(),
             talk: (0.0, 0.0),
@@ -161,7 +166,7 @@ impl EchoCanceller {
         self.alignment = None;
         self.drift.reset();
         self.spliced = None;
-        self.unspliced = 0;
+        self.recent_splices = 0.0;
         self.adapted = false;
         self.meters = Meters::default();
         self.talk = (0.0, 0.0);
@@ -194,13 +199,13 @@ impl EchoCanceller {
         let known = self.follow(source.latency_frames);
         let spliced = source.spliced_frames - self.spliced.unwrap_or(source.spliced_frames);
         self.spliced = Some(source.spliced_frames);
-        self.unspliced = if spliced == 0 { self.unspliced.saturating_add(1) } else { 0 };
+        self.recent_splices = self.recent_splices * SPLICES_FADE + spliced.unsigned_abs() as f32;
         let read_at = self.drift.offset();
         self.drift.shift(spliced as f64);
 
         // Until the source has settled, a lag the finder names is not taken, nor kept as the one
         // it named, so it is judged again once the source has
-        let settled = self.unknown.is_none() || self.unspliced >= FINDER_SETTLE;
+        let settled = self.unknown.is_none() || self.recent_splices < SPLICES_SETTLE;
         if let Some(lag) = found.filter(|_| settled && found != self.found) {
             self.found = found;
             let unknown = lag as i64 - i64::from(known);

@@ -217,3 +217,34 @@ fn the_echo_is_followed_through_a_sources_splices() {
         }
     }
 }
+
+// A capture slot with a fine step, such as a 100-frame mic under 128-frame callbacks, splices a
+// few frames every second or so. Its echo path moves 400 frames at 4 s, as a mic carried across
+// the room does. Splices that small never hold the finder back, so the canceller finds the new
+// path and takes the echo out again: 15 dB or more from the ninth second.
+#[test]
+fn a_source_that_splices_a_little_and_often_still_has_a_new_path_found() {
+    let frames = 12 * SECOND;
+    let far = far_end(frames);
+    let floor = at_db(pink_noise(frames, 99), -60.0);
+    let first = through(&far, &room(40 * 48, 0.316, 0.3, 0.25, 11));
+    let moved = through(&far, &room(40 * 48 + 400, 0.316, 0.3, 0.25, 12));
+    let at = 4 * SECOND;
+    let raw: Vec<f32> =
+        (0..frames).map(|k| if k < at { first[k] } else { moved[k] } + floor[k]).collect();
+    // Four frames spliced in every 300 blocks, 0.8 s
+    let (mut mic, mut totals) = (raw.clone(), vec![0; frames / FRAME]);
+    for from in (0..frames / FRAME - 8).step_by(300) {
+        let (next, more) = spliced(&mic, from, 4, 1);
+        mic = next;
+        mic.resize(frames, 0.0);
+        for (total, extra) in totals.iter_mut().zip(more.iter().chain(std::iter::repeat(&4))) {
+            *total += extra;
+        }
+    }
+    let delay = |block: usize| SourceDelay { latency_frames: 0, spliced_frames: totals[block] };
+    let (out, _) = cancel_spliced(&far, &mic, delay);
+    let removed = per_second(&mic, &out);
+    println!("{removed:.1?} dB out, the path moving 400 frames at 4 s");
+    assert!(removed[8..].iter().all(|db| *db >= 15.0), "{removed:.1?}");
+}
