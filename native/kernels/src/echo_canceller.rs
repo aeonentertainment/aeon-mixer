@@ -100,6 +100,10 @@ pub struct EchoCanceller {
     known: Known,
     /// The lag the filter's reference is read at now, less the drift's offset.
     alignment: Option<usize>,
+    /// The windows the filter holds were read where a search looked, not where it found the
+    /// echo: the next frame reads them all again. `alignment` stays meanwhile, since `findings`
+    /// reports the path from it.
+    stale: bool,
     drift: Drift,
     /// Where a new stream's echo landed, while it is looked for, and how far before the path the
     /// filter reads the master meanwhile.
@@ -150,6 +154,7 @@ impl EchoCanceller {
             unknown: None,
             known: Known::default(),
             alignment: None,
+            stale: false,
             drift: Drift::default(),
             realign: Realign::new(),
             early: 0,
@@ -179,6 +184,7 @@ impl EchoCanceller {
         self.unknown = None;
         self.known = Known::default();
         self.alignment = None;
+        self.stale = false;
         self.drift.reset();
         self.realign.stop();
         self.early = 0;
@@ -259,7 +265,8 @@ impl EchoCanceller {
         // `early` frames early, so that every lag looked for comes after its estimate
         self.early = if self.realign.looking() { REACH.min(lag as usize - FRAME) } else { 0 };
         let alignment = lag as usize - self.early;
-        if self.alignment == Some(alignment) && spliced.abs() == 1 {
+        let stale = std::mem::take(&mut self.stale);
+        if self.alignment == Some(alignment) && spliced.abs() == 1 && !stale {
             // A splice moves the echo a sample, and every window the filter holds slides by one.
             // `edge(history, more)` is the pre-emphasised sample `more` older than the one after
             // the newest of window 0, read where the windows were read
@@ -283,7 +290,7 @@ impl EchoCanceller {
                 let others = whole - (edge(own, enters) - edge(own, leaves));
                 (whole, others)
             });
-        } else if self.alignment != Some(alignment) || spliced != 0 {
+        } else if self.alignment != Some(alignment) || spliced != 0 || stale {
             // A jump, of the path the source names or by more than a sample: read every window
             self.alignment = Some(alignment);
             let Self { mdf, raw, own_raw, drift, .. } = self;
@@ -324,9 +331,9 @@ impl EchoCanceller {
                     let whole = moved.round();
                     self.unknown = Some(unknown + whole as i64);
                     self.drift.shift(moved - whole);
-                    self.alignment = None;
+                    self.stale = true;
                 }
-                Search::Lost => self.alignment = None,
+                Search::Lost => self.stale = true,
             }
             frame
         } else {

@@ -248,3 +248,17 @@ fn a_phone_back_as_a_new_stream_off_its_old_alignment_has_its_echo_cancelled_aga
         );
     }
 }
+
+// A host reads `stats().echo` whenever it likes, so a slot that has learned its room reports it
+// on every block: from the second before the phone stops, through the stop, its return and the
+// search for where its new stream's echo landed, to the end.
+#[test]
+fn a_phone_back_as_a_new_stream_reports_its_echo_on_every_block() {
+    let learned = 5 * SECOND / BLOCK;
+    for off in [Off::Later(1, 4), Off::Earlier(1, 4)] {
+        let run = run(120, off);
+        let lost: Vec<usize> =
+            (learned..run.paths.len()).filter(|&b| run.paths[b].is_none()).collect();
+        assert!(lost.is_empty(), "{off:?}: no findings at blocks {lost:?}");
+    }
+}
