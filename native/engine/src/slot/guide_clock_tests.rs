@@ -293,6 +293,31 @@ fn an_edge_the_first_key_change_replays_is_crossed_again_at_the_new_key() {
     assert_eq!(targets, [Some(note), None, Some(note + 2)]);
 }
 
+// Once the stretcher is engaged, a seek back to the start leaves the heard position at 0 until the
+// playhead is past the stretcher's latency, 140 ms. The clock holds there as it does on a pause, so
+// an edge 64 frames in is crossed once, after the hold, and the readings never step back.
+#[test]
+fn a_seek_to_the_start_under_the_live_key_holds_the_clock_until_it_is_heard() {
+    const NOTE: (u64, u64) = (64, 96_000);
+    let mut song = Song::singing(&[NOTE]);
+    song.steer(Transport::SetKey { semitones: 2 });
+    song.render(SECOND);
+    let before = song.reads.len();
+    song.steer(Transport::Seek { to_frame: 0 });
+    song.render(SECOND);
+
+    let after = &song.reads[before..];
+    let landed = (1..after.len()).find(|&i| after[i].position_ms < after[i - 1].position_ms);
+    let landed = landed.expect("the seek went back");
+    let restarted = &after[landed..];
+    assert_on_the_guide(restarted, &[NOTE], 2);
+    let held = restarted.iter().take_while(|read| read.position_ms == position_ms(0)).count();
+    assert!(held >= 12, "{held} readings held at the start");
+    assert!(restarted.windows(2).all(|w| w[1].position_ms >= w[0].position_ms), "never back");
+    let into: Vec<_> = changes(restarted).into_iter().map(|(_, target)| target).collect();
+    assert_eq!(into, [Some(i16::from(B_FLAT_3) + 2)], "into the note once");
+}
+
 // A move to another output holds the playhead for the gap and starts the slot again, so the next
 // reading comes a hop after the move on the clock where it stopped: no jump, and an edge just past
 // the move is crossed once. The output keeps its latency here; #105 tests one that changes it.
