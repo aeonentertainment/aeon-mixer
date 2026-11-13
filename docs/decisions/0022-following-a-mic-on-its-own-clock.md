@@ -137,8 +137,12 @@ sets is where the delay ends up.
 
 ## What this does not do
 
-- **Measure a phone.** A jitter buffer that steps its delay reports it in its latency, as before, and
-  its skew corrections now report as splices: each drops or conceals a step, 120 frames on 2.5 ms
+- **Measure a phone.** A jitter buffer that moves its delay reports the new delay in its latency,
+  and as a splice the part of that the echo did not move by: the new delay also takes up the slack
+  the stream had drifted into, which the loop has followed already. Followed as a jump of the
+  latency alone, a fall at 200 ppm counted the drift twice and left the slot up to 2.8 dB louder
+  than it went in; reported, the echo comes out no less than a same-clock phone's. Its skew
+  corrections report as splices too: each drops or conceals a step, 120 frames on 2.5 ms
   frames, and the playout delay holds. Unreported, the loop would carry its offset across a step
   that sits inside what the finder takes for the same path; in the kernel test that left the slot
   2.3 to 3.3 dB louder than it went in, and reported it costs 0.2 dB. A phone on its own clock
