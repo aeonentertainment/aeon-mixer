@@ -52,7 +52,7 @@ impl Stream {
     }
 }
 
-/// How the new stream lands against the old one, by a fraction of a packet.
+/// How the new stream lands against the old one: `n / d` of a packet later or earlier.
 #[derive(Clone, Copy, Debug)]
 enum Off {
     Later(usize, usize),
@@ -64,6 +64,7 @@ impl Off {
     /// to arrive than the old one's did, and the phone starts it where its first packet falls as
     /// far before a block as the old one's did, so its echo lands exactly that offset away.
     fn streams(self, frame: usize) -> (Stream, Stream) {
+        // Late enough that a stream landing a packet earlier still takes time to arrive
         let old = 2 * frame + BLOCK;
         let new = match self {
             Self::Later(n, d) => old + frame * n / d,
