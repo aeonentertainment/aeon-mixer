@@ -104,18 +104,76 @@ van Waterschoot and Moonen's survey keeps: when a howl is detected, turn the gai
 stabilises any loop. It detects the howl the way notch suppressors do. Every 10.7 ms, a 1024-point
 FFT of the slot's voice gives the strongest peak that is narrow (10 dB over the bins three and four
 away), over the band's mean (10 dB), and has no harmonic at double its frequency (12 dB over it),
-which every sung partial has and a howl does not. A peak followed across analyses, allowed two
-misses, that grows 6 dB after its first 107 ms is a loop running away. The first 107 ms are a sung
-note's attack.
+which every sung partial has and a howl does not. A peak followed across analyses, allowed five
+misses and a semitone's move, that grows 6 dB after its first 107 ms is a loop running away. The
+first 107 ms are a sung note's attack. A tone settles at the middle of the levels it was seen at
+in its last five analyses, so neither a note's edge nor a miss falling on the analysis it settles
+at sets the baseline at the dip, and a miss otherwise counts as quiet, so a tone that comes back lower is judged from there. A step to a new note starts
+that note's own baseline at once: a move of more than a quarter semitone past the swing of a pitch
+held for those 107 ms, unless the tone is climbing as a loop does, 0.2 dB an analysis, about 19 dB a
+second. The pitch held is the mean over the last 213 ms, a whole cycle of a vibrato from 4.7 to
+7 Hz, and its swing how far it strays from that mean, so a sung vibrato of a semitone either way
+still holds its note.
+
+The misses and the semitone are for a correcting slot. A corrector that hears a howl retunes it,
+so the tone moves by up to a semitone at a time, more than a bin at 1 kHz, and loses its shape for
+three or four analyses of each trip round the loop. Followed a bin at a time with two misses, each
+move and each gap started a new track from an already loud level, and a howl that plateaued before
+it had grown 6 dB on one track was never caught, since the guard leaves a steady tone alone by
+design. The held-note rule is for a melody. A whistle or a high soprano has little second harmonic,
+and followed through a semitone it could grow 6 dB over a few notes of a crescendo; each note it
+holds now starts afresh. A howl a corrector moves never holds still that long, or climbs as it
+moves.
+
+Over 480 seeded rooms of the loop in the table, 6 dB over unity with correction and a +2 voice on:
+
+| Corrector                 | Guard                                                  | Never caught | Caught past -20 dBFS | Loudest over -20 dBFS |
+| ------------------------- | ------------------------------------------------------ | ------------ | -------------------- | --------------------- |
+| today's                   | a bin, 2 misses                                        | 8            | 237                  | 221                   |
+| today's                   | a held mean past its swing, settling on the last level | 0            | 153                  | 119                   |
+| today's                   | settling on the middle of the last five                | 0            | 124                  | 95                    |
+| today's                   | this rule, settling on the middle of those seen        | 0            | 106                  | 75                    |
+| #67's, reading every 5 ms | a bin, 2 misses                                        | 20           | 224                  | 213                   |
+| #67's, reading every 5 ms | a held mean past its swing, settling on the last level | 3            | 121                  | 101                   |
+| #67's, reading every 5 ms | settling on the middle of the last five                | 1            | 104                  | 86                    |
+| #67's, reading every 5 ms | this rule, settling on the middle of those seen        | 0            | 98                   | 74                    |
+
+| Phrase, a semitone a note unless it says                                                | Ducked before      | This rule                    |
+| --------------------------------------------------------------------------------------- | ------------------ | ---------------------------- |
+| Whistle E7 to B7, 300 ms notes, -36 to -22 dBFS, no harmonics, breaths of 0 to 60 ms    | never              | never                        |
+| Soprano A5 to E6, 400 ms notes, -30 to -16 dBFS, 2nd harmonic -15 dB, 25 cent vibrato   | twice, under 20 ms | never                        |
+| The same soprano with a 40, 60 or 100 cent vibrato at 5.5 Hz                            | twice              | never                        |
+| E7 at -30 dBFS, then F7 6 dB louder                                                     | never              | never                        |
+| Soprano melisma, a major scale up an octave from A5, 125 or 94 ms notes, up 1 dB a note | once at 125 ms     | never                        |
+| Whistled major scale C7 to C8, 125 or 94 ms notes, up 1 dB a note                       | never              | never                        |
+| Whistled chromatic run E7 to B7, 94 ms notes, up 1 dB a note                            | never              | once, 12 dB, 682 ms in       |
+| The same up 2 dB a note                                                                 | never              | twice, to 24 dB, from 309 ms |
+| A 50 ms grace note under a phrase E7 to B7, 250 ms notes, up 2 dB a note                | never              | once, 12 dB, 832 ms in       |
+
+The last three are the guard's limit, [#139](https://github.com/aeonentertainment/aeon-mixer/issues/139).
+A run whose notes are shorter than the 107 ms a hold needs is followed note to note, and its
+crescendo counted across the notes, as is a phrase the guard enters on a grace note. No cheap rule
+found separates them from a howl a corrector moves. Requiring a smooth climb after a followed step
+also marked a howl forming at one pitch, whose frequency drifts up to 9 % as its mode settles and
+which grows in bursts, and the 3 dB loop below was caught at -18.2 dBFS against -25.8 on the
+guard as it then stood.
+Restarting the hold at each followed step fixed the grace note and ducked the soprano's wide
+vibrato. The guard is opt-in and stays off on phones until the bleed run, and it trades these ducks
+for catching every one of 480 rooms on either corrector, against 8 and 20 missed, and for cutting
+those that get loud by two thirds, 221 to 75 and 213 to 74. Real rooms decide whether these runs happen there.
+
+One draw of this loop is a coin toss on each platform's rounding, so the engine test holds the
+guard to its rate over 96 rooms: at most 33 louder than -20 dBFS, against 38 for the guard before,
+and at most one uncaught.
 
 A catch ducks 12 dB within the block, holds half a second, and lifts at 3 dB a second to a ceiling
 6 dB under the gain that howled, which itself lifts 0.1 dB a second. A ceiling 3 dB under let a loop
 3 dB over unity howl again within seconds.
 
 Measured on the offline driver, a phone 80 ms round trip from the speakers in a room that rings at
-1 kHz, 3 dB over unity there: unguarded, the howl reaches the clipper. Guarded, it is caught 456 ms
-after passing -40 dBFS, at -25.8 dBFS, and never goes louder than -26.1 dBFS in ten seconds, with
-one catch. A steady tone and a ten-second sung voice pass bit for bit. With correction and a voice on, a
+1 kHz, 3 dB over unity there: unguarded, the howl reaches the clipper. Guarded, it is caught 125 ms
+after passing -40 dBFS, at -36.4 dBFS, and never goes louder than -37.9 dBFS in ten seconds, with
+two catches. A steady tone and a ten-second sung voice pass bit for bit. With correction and a voice on, a
 3 dB loop never runs away at all: the corrector's moving pitch and the voice's formant filter break
 its coherence, as frequency shifting would. A whistled note that grows
 would be taken for a howl; any detector that looks at the signal alone has that limit.
@@ -140,25 +198,26 @@ leave the singer's level alone but cut whatever note howled.
 
 From the tests on the offline driver, under the allocation guard, and `measure-echo`:
 
-| What                                                                              | Measured                                                    | Test's tolerance               |
-| --------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------ |
-| `aec:measure`'s eight scenarios, its own WAVs, scored by its own formulas         | 30.4 to 39.4 dB out; 15 dB from 1 s; singer +0.0 to +0.1 dB | `measure-echo harness`, not CI |
-| A house mic in a living room, 300 ms tail, singer in the master, the third second | 17.9 dB out                                                 | 15 dB                          |
-| The same before the singer, and after                                             | 23.9 and 28.6 dB                                            | 22 dB                          |
-| The same while the singer sings over it, echo against echo                        | 16.1 dB out                                                 | 12 dB                          |
-| The singer's level through it                                                     | +0.02 dB                                                    | 0.5 dB                         |
-| The path it reports, against the room's 480 frames                                | 480                                                         | 16 frames                      |
-| A jitter buffer stepping 5 ms: the second before, and from 20 ms after            | 22.2 and 24.8 dB                                            | within 3 dB                    |
-| A singer 10 cents sharp of the backing's melody, 40 ms late, and no echo          | nothing found, nothing touched                              | exact                          |
-| A howl 3 dB over unity at 1 kHz, 80 ms round trip: caught after passing -40 dBFS  | 456 ms, at -25.8 dBFS                                       | 500 ms                         |
-| The same, loudest in ten seconds                                                  | -26.1 dBFS, one catch                                       | -20 dBFS                       |
-| A click with the canceller engaged on a room it has learned                       | leaves on the sample it entered                             | 0 samples                      |
-| A click while the guard ducks                                                     | leaves on the sample it entered                             | 0 samples                      |
-| A backing seek of 20 s: the second before, and from 100 ms after                  | 22.3 and 27.1 dB                                            | within 3 dB                    |
-| A phone joining mid-song, from 3 s after                                          | 23.1 dB, the path at 480 frames                             | 20 dB, 16 frames               |
-| A mixer swap mid-song, the new graph's history empty, from 3 s after              | 25.0 dB                                                     | 20 dB                          |
-| The canceller turned off after learning                                           | bit for bit from the block it went off                      | exact                          |
-| A loop 6 dB over unity with correction and a +2 voice on: caught, and its loudest | before it passed -20 dBFS; -21.2 dBFS                       | -20 dBFS                       |
+| What                                                                                                         | Measured                                                    | Test's tolerance               |
+| ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- | ------------------------------ |
+| `aec:measure`'s eight scenarios, its own WAVs, scored by its own formulas                                    | 30.4 to 39.4 dB out; 15 dB from 1 s; singer +0.0 to +0.1 dB | `measure-echo harness`, not CI |
+| A house mic in a living room, 300 ms tail, singer in the master, the third second                            | 17.9 dB out                                                 | 15 dB                          |
+| The same before the singer, and after                                                                        | 23.9 and 28.6 dB                                            | 22 dB                          |
+| The same while the singer sings over it, echo against echo                                                   | 16.1 dB out                                                 | 12 dB                          |
+| The singer's level through it                                                                                | +0.02 dB                                                    | 0.5 dB                         |
+| The path it reports, against the room's 480 frames                                                           | 480                                                         | 16 frames                      |
+| A jitter buffer stepping 5 ms: the second before, and from 20 ms after                                       | 22.2 and 24.8 dB                                            | within 3 dB                    |
+| A singer 10 cents sharp of the backing's melody, 40 ms late, and no echo                                     | nothing found, nothing touched                              | exact                          |
+| A howl 3 dB over unity at 1 kHz, 80 ms round trip: caught after passing -40 dBFS                             | 125 ms, at -36.4 dBFS                                       | 500 ms                         |
+| The same, loudest in ten seconds                                                                             | -37.9 dBFS, two catches                                     | -20 dBFS                       |
+| A click with the canceller engaged on a room it has learned                                                  | leaves on the sample it entered                             | 0 samples                      |
+| A click while the guard ducks                                                                                | leaves on the sample it entered                             | 0 samples                      |
+| A backing seek of 20 s: the second before, and from 100 ms after                                             | 22.3 and 27.1 dB                                            | within 3 dB                    |
+| A phone joining mid-song, from 3 s after                                                                     | 23.1 dB, the path at 480 frames                             | 20 dB, 16 frames               |
+| A mixer swap mid-song, the new graph's history empty, from 3 s after                                         | 25.0 dB                                                     | 20 dB                          |
+| The canceller turned off after learning                                                                      | bit for bit from the block it went off                      | exact                          |
+| A loop 6 dB over unity with correction and a +2 voice on, 96 seeded rooms                                    | 19 louder than -20 dBFS, none uncaught                      | 33, and 1                      |
+| A whistled phrase and a soprano climbing a semitone a note, legato and swelling, with a vibrato to 100 cents | not ducked                                                  | none                           |
 
 ## What this does not do
 

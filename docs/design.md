@@ -926,7 +926,8 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   that reading, so the target and the error a host shows are the ones the shifter acts on.
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
-  growing. Decision [0020](decisions/0020-echo-cancelling.md) has both. The port carries mdf.c's
+  growing, following it through a corrector's move and a moment unseen. Decision
+  [0020](decisions/0020-echo-cancelling.md) has both. The port carries mdf.c's
   BSD licence in its file.
 - The slot drives its stages from `slot::effects`, each in place on its mono block.
   `EchoCanceller::process(params, history, own, source_frames, block)` and

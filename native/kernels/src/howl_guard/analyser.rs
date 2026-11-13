@@ -25,6 +25,9 @@ const QUIETEST_DB: f32 = -60.0;
 #[derive(Clone, Copy, Debug)]
 pub struct Peak {
     pub bin: usize,
+    /// Where the tone sits between bins, by a parabola through the peak's log power and its
+    /// neighbours': a tone's frequency to well within a bin.
+    pub at: f32,
     /// The level a sine at this bin would have, in dBFS.
     pub db: f32,
 }
@@ -90,6 +93,14 @@ impl Analyser {
             .max_by(|a, b| p[*a].total_cmp(&p[*b]))?;
         // A sine of amplitude A peaks at A * LENGTH / 4 through a Hann window
         let db = 10.0 * p[bin].max(1e-30).log10() + 20.0 * (4.0 / LENGTH as f32).log10();
-        (db >= QUIETEST_DB).then_some(Peak { bin, db })
+        let level = |k: usize| p[k].max(1e-30).ln();
+        let (before, peak, after) = (level(bin - 1), level(bin), level(bin + 1));
+        let curvature = before - 2.0 * peak + after;
+        let offset = if curvature < 0.0 {
+            (0.5 * (before - after) / curvature).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+        (db >= QUIETEST_DB).then_some(Peak { bin, at: bin as f32 + offset, db })
     }
 }
