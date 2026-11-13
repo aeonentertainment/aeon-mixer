@@ -8,8 +8,9 @@ run it; the run a person owes is at the end.
 The canceller learns the drift itself. A delay-locked loop reads how far its filter's estimate
 trails the echo and moves the reference by that and by the rate it has learned, reading the master
 between frames with a 16-tap windowed sinc. The capture slot keeps its splices and says how many it
-has made: a source hands the canceller a `SourceDelay`, its latency and its splices so far. A
-splice slides every window the filter holds by one sample, in the block it happens. Nothing changes
+has made, and a phone's jitter buffer says the same of its skew corrections: a source hands the
+canceller a `SourceDelay`, its latency and its splices so far. A splice of a sample slides every
+window the filter holds by one, in the block it happens; a longer one reads them all again. Nothing changes
 on the mic path.
 
 ## The problem
