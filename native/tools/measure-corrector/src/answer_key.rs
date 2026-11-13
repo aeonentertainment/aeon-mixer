@@ -9,6 +9,8 @@
 //! 3. **Broken and restored.** The degrader sings the key badly in known ways and the slot puts
 //!    it right. What is left against the key is the error, and the degrader's own round trip,
 //!    bent and bent back, is the floor no row can go under.
+//! 4. **As sung.** The clip itself through the slot, for how often correction lets go of a note
+//!    and takes it back.
 
 use engine::params::CleanupParams;
 use serde_json::{Value, json};
@@ -21,6 +23,7 @@ use crate::contour::{self, Point};
 use crate::curve::Curve;
 use crate::degrader::{Degradation, Part};
 use crate::expression::{self, Envelope, HAS_VIBRATO_CENTS, VIBRATO_BAND, band_rms, note_contour};
+use crate::flapping;
 use crate::music::{cents_off_class, median, percentile};
 use crate::pitch_error::{Moment, moments};
 use crate::spectral::{SpectralDistance, SpectralRuler};
@@ -103,9 +106,12 @@ pub fn rows(clip: &SungClip, variants: &[Variant]) -> Result<Value, String> {
             render(&broken_clip, Condition::Direct, variant.guide(&broken_clip)?, variant, OFF)
                 .take;
         let restored = Heard::take(&restored_take);
+        let sung_take = render(clip, Condition::Direct, variant.guide(clip)?, variant, OFF).take;
+        let flapping = flapping::measure(&sung_take.readings, &sung_take.engaged, &clip.notes);
         by_variant.insert(
             variant.label.clone(),
             json!({
+                "flapping": flapping.json(),
                 "left_alone": left_alone(&ruler, &key, &left, &key_clip),
                 "restored": restored_row(&ruler, &key, &broken, &restored, &clip.notes, &degradation),
             }),

@@ -181,6 +181,11 @@ int PitchCorrector::readingLagSamples() const { return state_->detector.windowSa
 
 float PitchCorrector::errorSemitones() const { return state_->error; }
 
+bool PitchCorrector::correcting() const {
+  const State &s = *state_;
+  return s.strength > 0 && s.targetMidi != kNoTarget;
+}
+
 int PitchCorrector::latencySamples() const {
   const State &s = *state_;
   return s.wetGain > 0 ? int(std::lround(s.shifter.delaySamples())) : 0;

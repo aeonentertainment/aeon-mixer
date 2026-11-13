@@ -39,6 +39,8 @@ class PitchCorrector {
   int readingLagSamples() const;
   /** The newest reading's distance to the class it is pulled toward, in semitones; 0 while unvoiced. */
   float errorSemitones() const;
+  /** Whether it is pulling the voice now: a voice it hears, a class to pull it to, and a strength over 0. */
+  bool correcting() const;
   /** How far the output trails the input now, in samples; 0 while bypassed. */
   int latencySamples() const;
 

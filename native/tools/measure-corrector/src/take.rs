@@ -12,6 +12,8 @@ pub struct Take {
     pub right: Vec<f32>,
     /// The slot's own pitch readings, on the guide's clock.
     pub readings: Vec<Point>,
+    /// Whether the corrector was pulling the voice as each of `readings` came out.
+    pub engaged: Vec<bool>,
     /// How far the corrector made the voice trail, in frames, once per block.
     pub delays: Vec<u32>,
     pub cpu_seconds: f64,

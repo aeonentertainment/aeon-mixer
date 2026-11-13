@@ -39,6 +39,7 @@ unsafe extern "C" {
     pub fn aeon_corrector_frames_until_reading(corrector: *const Corrector) -> i32;
     pub fn aeon_corrector_reading_lag_samples(corrector: *const Corrector) -> i32;
     pub fn aeon_corrector_error_semitones(corrector: *const Corrector) -> f32;
+    pub fn aeon_corrector_correcting(corrector: *const Corrector) -> bool;
     pub fn aeon_corrector_latency_samples(corrector: *const Corrector) -> i32;
 
     pub fn aeon_yin_new(rate: f64, window_samples: i32) -> *mut Yin;
