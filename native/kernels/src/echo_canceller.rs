@@ -78,8 +78,8 @@ pub struct SourceDelay {
 /// slot's source says how long ago the singer sang what it hands over; the canceller finds the
 /// rest of the path, the output, the air and whatever the sender adds, and follows the source's
 /// own moves at once instead of finding the echo again. A mic on its own clock slides its echo a
-/// few samples a second against the master, and the canceller follows that too. Built on the control thread; `process`
-/// allocates nothing.
+/// few samples a second against the master, and the canceller follows that too. Built on the
+/// control thread; `process` allocates nothing.
 pub struct EchoCanceller {
     finder: DelayFinder,
     mdf: Mdf,
