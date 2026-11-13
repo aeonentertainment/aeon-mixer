@@ -103,7 +103,11 @@ frames and nothing changed.
 
 `capture.rs` holds the accounting: over an hour at 200 ppm either way with wakes up to 8 frames
 early or late, a capture slot's latency and splices stay within 4 frames of the true wait less the
-drift, through the gap a slower input meets, every move of the target and every splice.
+drift, through the gap a slower input meets, every move of the target and every splice. An input
+that stops and then hands over all it missed comes back within those 4 frames. One whose frames
+are gone comes back within a step of the slot's wait, as its latency does, since the delivery phase
+may have moved: the slot counts nothing of a stopped input's recovery, and the latency the target
+sets is where the delay ends up.
 
 ## What it costs
 

@@ -852,7 +852,9 @@ ring into the jitter buffer at the top of each block.
   wait and what the OS reports for the input's hardware, and it moves only when the target does.
   `delay()` gives the echo canceller that latency and the frames the slot has moved its delay by
   since it opened, less the target's own moves: each splice, a gap's silence once full pulls come
-  back, each backlog dropped. `stats()` gives the wait as `playoutDelayMs`, zero until the
+  back, each backlog dropped. After an input that stopped it counts nothing until the trough is
+  back on the target, since what a stopped input hands over says nothing of how far the delay
+  moved, and the latency the target sets is where it ends up. `stats()` gives the wait as `playoutDelayMs`, zero until the
   slot first plays, and zero from a move to a callback its ring cannot hold until the next move.
   `concealed` counts pulls the ring could not fill, `resyncs` each move of the delay, each dropped
   backlog and each move to a callback the ring cannot hold, and the rest stay 0. While the slot is
