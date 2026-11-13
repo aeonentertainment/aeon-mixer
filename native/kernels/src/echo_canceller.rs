@@ -36,12 +36,13 @@ const LEAD: usize = 64;
 const SETTLE: u32 = 2;
 /// A lag the finder names this close to the one in use is the same path.
 const SAME_PATH: i64 = 2 * LEAD as i64;
-/// Blocks after a source's last splice before a lag the finder names can be a new path, one
-/// second. The finder takes time to follow an echo the source has moved, and while a capture
-/// slot corrected 128 frames it named lags up to 259 frames from where the splices put the path;
-/// taken for a new one, the filter started over and came out up to 26.5 dB under the same mic on
-/// the output's clock, more than 3 dB under for eight seconds.
-const FINDER_SETTLE: u32 = 375;
+/// Blocks after a source's last splice before a lag the finder names is judged, three seconds.
+/// The finder takes time to follow an echo the source has moved: after a capture slot's 128-frame
+/// correction it named lags up to 259 frames from where the splices put the path for up to two
+/// seconds, and 1.6 s of waiting was not enough. Taken for a new path, the filter started over and
+/// came out up to 26.5 dB under the same mic on the output's clock, more than 3 dB under for eight
+/// seconds. A lag it names meanwhile is judged once the source has settled.
+const FINDER_SETTLE: u32 = 1125;
 /// Once adapted, the filter stops learning while the mic is this many times the energy of the
 /// echo it estimates: a singer over the echo, whose voice the filter would otherwise partly fit
 /// through the backing's own notes. 3 dB, a Geigel detector on energies: 1.5 dB slows the first
@@ -197,12 +198,14 @@ impl EchoCanceller {
         let read_at = self.drift.offset();
         self.drift.shift(spliced as f64);
 
-        if let Some(lag) = found.filter(|_| found != self.found) {
+        // Until the source has settled, a lag the finder names is not taken, nor kept as the one
+        // it named, so it is judged again once the source has
+        let settled = self.unknown.is_none() || self.unspliced >= FINDER_SETTLE;
+        if let Some(lag) = found.filter(|_| settled && found != self.found) {
             self.found = found;
             let unknown = lag as i64 - i64::from(known);
             let followed = unknown - self.drift.offset().round() as i64;
-            let moved = |was: i64| (was - followed).abs() > SAME_PATH;
-            if self.unknown.is_none_or(|was| self.unspliced >= FINDER_SETTLE && moved(was)) {
+            if self.unknown.is_none_or(|was| (was - followed).abs() > SAME_PATH) {
                 // A new path: what the filter learned was about another
                 self.unknown = Some(unknown);
                 self.drift.restart();
