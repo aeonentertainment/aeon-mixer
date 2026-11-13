@@ -60,7 +60,8 @@ it. Here:
 - **The canceller follows its source's own moves.** A jitter buffer that steps its delay reports
   it, and the canceller moves its reference by the same frames two blocks later instead of finding
   the echo again. Measured: 22.2 dB removed in the second before a 5 ms step, 24.8 dB from 20 ms
-  after it.
+  after it. A capture slot reports each frame it splices, and the canceller follows that in the
+  same block; a mic on its own clock it follows by itself (decision 0022).
 - **It adapts without the singer's own voice.** A singer is in the master, so in the reference, and
   a sung vowel is easy to predict from its own past: a filter adapted on the whole master learns to
   take the singer out with the echo. Feedback cancellers in hearing aids know this as the
@@ -202,9 +203,9 @@ From the tests on the offline driver, under the allocation guard, and `measure-e
 | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- | ------------------------------ |
 | `aec:measure`'s eight scenarios, its own WAVs, scored by its own formulas                                    | 30.4 to 39.4 dB out; 15 dB from 1 s; singer +0.0 to +0.1 dB | `measure-echo harness`, not CI |
 | A house mic in a living room, 300 ms tail, singer in the master, the third second                            | 17.9 dB out                                                 | 15 dB                          |
-| The same before the singer, and after                                                                        | 23.9 and 28.6 dB                                            | 22 dB                          |
-| The same while the singer sings over it, echo against echo                                                   | 16.1 dB out                                                 | 12 dB                          |
-| The singer's level through it                                                                                | +0.02 dB                                                    | 0.5 dB                         |
+| The same before the singer, and after                                                                        | 23.9 and 28.5 dB                                            | 22 dB                          |
+| The same while the singer sings over it, echo against echo                                                   | 15.6 dB out; 16.1 before the drift follower of 0022         | 12 dB                          |
+| The singer's level through it                                                                                | +0.00 dB                                                    | 0.5 dB                         |
 | The path it reports, against the room's 480 frames                                                           | 480                                                         | 16 frames                      |
 | A jitter buffer stepping 5 ms: the second before, and from 20 ms after                                       | 22.2 and 24.8 dB                                            | within 3 dB                    |
 | A singer 10 cents sharp of the backing's melody, 40 ms late, and no echo                                     | nothing found, nothing touched                              | exact                          |
