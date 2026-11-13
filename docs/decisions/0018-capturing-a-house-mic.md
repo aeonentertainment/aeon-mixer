@@ -160,20 +160,20 @@ the number this table cannot.
 ## Echo cancelling
 
 The canceller follows the latency its slot reports, which for a capture slot is the wait, still
-until the target moves. From the closed-loop tests in `engine/src/ingest/capture_edges.rs`, a
-living room's echo of the far end in a house mic:
+until the target moves, and every frame the slot splices in or out, which moves the echo without
+moving the latency. From the closed-loop tests in `engine/src/ingest/capture_edges.rs`, a living
+room's echo of the far end in a house mic:
 
 | Input                      | Taken out, second 3, 5 to 9 | Path found                              |
 | -------------------------- | --------------------------- | --------------------------------------- |
 | 128 frames, output's clock | 15.3, 23.5 to 28.8 dB       | 624 frames, the room's 480 and the wait |
-| 480 frames, output's clock | 16.0, 23.4 to 29.6 dB       | 1072 frames, the same                   |
-| 128 frames, 100 ppm slow   | 10.9, 6.6 to 11.1 dB        | 752 frames, still moving                |
+| 480 frames, output's clock | 16.0, 23.5 to 29.7 dB       | 1072 frames, the same                   |
+| 128 frames, 100 ppm slow   | 14.6, 22.6 to 28.6 dB       | 752 frames, the target raised once      |
 
-On its own clock the mic's echo of the room moves 4.8 samples a second until the slot's next move,
-27 s on, and the canceller cannot follow a path that never holds still. It never makes the slot
-louder. A house mic beside the speakers on its own clock, the commonest kind, gets partial
-cancelling until the slot spreads its moves at the rate it has learned, one sample at a time
-between slips, which would hold the echo's delay to a sample.
+On its own clock the mic's echo of the room slides 4.8 samples a second between the slot's moves.
+The canceller learns that rate and follows it; decision
+[0022](0022-following-a-mic-on-its-own-clock.md) has how, and the numbers at 100 and 200 ppm
+either way. Before it, the slow mic had 6.6 to 11.1 dB taken out from the fifth second.
 
 ## What this does not do
 

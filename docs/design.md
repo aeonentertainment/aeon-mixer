@@ -416,7 +416,8 @@ pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in p
 pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
 pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
 pub struct EchoHistory;     // new(), push(left, right) folds a block to mono, read(lag, out): the frames ending `lag` before the next one
-pub struct EchoCanceller;   // new(rate), process(history, own, source_latency_frames, block) in place, reset(), findings() -> Option<EchoFindings>; adds no delay
+pub struct EchoCanceller;   // new(rate), process(history, own, SourceDelay, block) in place, reset(), findings() -> Option<EchoFindings>; adds no delay
+pub struct SourceDelay;     // { latency_frames: u32, spliced_frames: i64 }: where a slot's source has its delay this block, from Source::delay(); the splices are every frame it has spliced in less those it took out, which move the echo and not the latency
 pub struct EchoFindings { pub path_frames: u32, pub bleed_db: f32, pub removed_db: f32 }
 pub struct HowlGuard;       // new(rate), process(block) in place, reset(), catches(); adds no delay
 ```
@@ -847,19 +848,23 @@ ring into the jitter buffer at the top of each block.
   `gcd(period, 128)`. Under a longer callback, one that takes three blocks on some wakes and four
   on others at 480 frames, the step is the whole input period. The slot reports the middle of that
   step, within half a step of the truth: 4.33 ms for a 128-frame input at its opening target, and
-  12.33 ms under a 480-frame callback. `latency_frames`, which the guide clock subtracts and the
-  echo canceller follows, is that wait and what the OS reports for the input's hardware, and it
-  moves only when the target does. `stats()` gives the wait as `playoutDelayMs`, zero until the
+  12.33 ms under a 480-frame callback. `latency_frames`, which the guide clock subtracts, is that
+  wait and what the OS reports for the input's hardware, and it moves only when the target does.
+  `delay()` gives the echo canceller that latency and the frames the slot has moved its delay by
+  since it opened, less the target's own moves: each splice, a gap's silence once full pulls come
+  back, each backlog dropped. `stats()` gives the wait as `playoutDelayMs`, zero until the
   slot first plays, and zero from a move to a callback its ring cannot hold until the next move.
   `concealed` counts pulls the ring could not fill, `resyncs` each move of the delay, each dropped
   backlog and each move to a callback the ring cannot hold, and the rest stay 0. While the slot is
   silent under such a callback, `latency_frames` keeps the hardware's share and the wait its target
   sets; nothing plays, so the guide clock and the canceller have nothing to follow.
-- The echo canceller works on a capture slot whose mic is on the output's clock, as one on the
-  same interface is: it finds the path to the frame and takes 20 dB or more out, as on any slot.
-  A mic on its own clock moves the echo's delay a few samples a second between the slot's moves,
-  which the canceller cannot follow, so it takes out about 10 dB at first and less as the path
-  walks. Decision 0018 has the numbers.
+- The echo canceller works on a capture slot on either clock. On the output's, as a mic on the
+  same interface is, it finds the path to the frame and takes 20 dB or more out, as on any slot.
+  A mic on its own clock slides the echo a few samples a second against the master; the canceller
+  learns the rate and follows it, and slides its reference a sample with each splice the slot
+  reports. From the fifth second it takes out within 1 dB of the same mic on the output's clock at
+  a 128-frame input period, and within 3.3 dB at 480, in the second that holds a correction.
+  Decision [0022](decisions/0022-following-a-mic-on-its-own-clock.md) has the numbers.
 - A slot can be recorded, so a problem heard in a real room can be replayed offline (8.9). With
   `recordSlot` on, the slot's receiver hands every datagram it reads, RTCP and all, to a `Tap`
   with the moment it read it, after the packet is in the ring. The tap copies it into a ring of
@@ -935,9 +940,11 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
   growing, following it through a corrector's move and a moment unseen. Decision
   [0020](decisions/0020-echo-cancelling.md) has both. The port carries mdf.c's
-  BSD licence in its file.
+  BSD licence in its file. A delay-locked loop in front of the filter follows an echo that slides
+  against the master, as a mic on its own clock's does, reading the master between frames, and a
+  source's splice slides the filter's windows by a sample (decision 0022).
 - The slot drives its stages from `slot::effects`, each in place on its mono block.
-  `EchoCanceller::process(params, history, own, source_frames, block)` and
+  `EchoCanceller::process(params, history, own, source, block)` and
   `HowlGuard::process(params, block)` run first, after the source.
   `Corrector::process(params, guide, frame, semitones, block, on_reading)` borrows the slot's
   guide, takes the guide-clock frame of the block's first sample and the backing's key shift, and
