@@ -1058,6 +1058,10 @@ owns the paths named in the module sections in its row. Shared files are `native
 `native/engine/src/lib.rs` and `src/index.ts`: add your own line, leave the rest. Each row is a
 GitHub issue, which carries what it is blocked by; each issue is one or more PRs.
 
+A measuring tool may add a read-only accessor to a kernel or engine type another workstream owns:
+one function that reports state, with no change to behaviour. That is how a tool reads state
+without owning the file, as `Slot::corrector_correcting` does for `measure-corrector`.
+
 | #   | Workstream          | Owns               |
 | --- | ------------------- | ------------------ |
 | 0   | Skeleton            | 8.0                |
