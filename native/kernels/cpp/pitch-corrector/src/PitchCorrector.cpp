@@ -1,7 +1,7 @@
 #include "aeon/dsp/PitchCorrector.h"
 
+#include "aeon/dsp/PitchReader.h"
 #include "aeon/dsp/PitchShifter.h"
-#include "aeon/dsp/YinDetector.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,45 +11,33 @@ namespace aeon::dsp {
 
 namespace {
 
-constexpr double kHopSeconds = 0.010;
-/** YIN over 2048 samples at 48 kHz, the #87 choice, scaled to the stream's rate. */
-constexpr double kWindowSeconds = 2048.0 / 48000;
+constexpr double kHopSeconds = 0.005;
+/** A host hears every second reading, every 10 ms; the display and the score need no more, and only those ask the longest window. */
+constexpr int kReadingsPerPublished = 2;
 constexpr double kCrossfadeSeconds = 0.020;
-/** A reading this sure is a voice to correct: YIN's dip under its threshold. */
-constexpr float kVoicedConfidence = 0.9f;
-/** E2, the bottom of a bass's range. A lower voice would need jumps that break the 15 ms budget, so it passes uncorrected. */
-constexpr float kLowestCorrectedHz = 82.0f;
-/** Readings a held correction survives without a voice, so one dropped frame mid-note does not let go. */
-constexpr int kUnvoicedHold = 3;
 /** Semitones past the midpoint between two classes before the target changes class, so vibrato there cannot flip it. */
 constexpr float kHysteresis = 0.2f;
 constexpr int kNoTarget = -1;
-
-int powerOfTwoNear(double samples) {
-  return 1 << std::max(4, int(std::lround(std::log2(samples))));
-}
 
 }  // namespace
 
 struct PitchCorrector::State {
   double rate;
   int hop;
-  YinDetector detector;
+  PitchReader reader;
   PitchShifter shifter;
-  std::vector<float> history;
-  std::vector<float> window;
   std::vector<float> wet;
-  int historyPos = 0;
   int hopFill = 0;
+  int readingsUntilPublished = kReadingsPerPublished;
 
   PitchClassMask mask = kEveryPitchClass;
   float strength = 0;
   float retuneMs = 0;
 
-  Pitch pitch;
-  float midi = 0;
-  bool voiced = false;
-  int unvoiced = 0;
+  /** Where the voice is by the time the output plays what the shifter is reading. */
+  float midiNow = 0;
+  Pitch published;
+  float publishedError = 0;
   int targetMidi = kNoTarget;
   float error = 0;
   float targetShift = 0;
@@ -60,10 +48,8 @@ struct PitchCorrector::State {
   explicit State(double sampleRate)
       : rate(sampleRate),
         hop(std::max(1, int(std::lround(sampleRate * kHopSeconds)))),
-        detector(sampleRate, powerOfTwoNear(sampleRate * kWindowSeconds)),
+        reader(sampleRate),
         shifter(sampleRate),
-        history(size_t(detector.windowSamples())),
-        window(size_t(detector.windowSamples())),
         wet(size_t(hop)),
         crossfadeStep(float(1.0 / (sampleRate * kCrossfadeSeconds))) {}
 
@@ -88,26 +74,31 @@ struct PitchCorrector::State {
     return best;
   }
 
+  // Which note comes from the reading itself, so a glide does not reach a new note before the
+  // voice does; how far to move comes from where the voice is now
   void retarget() {
-    targetMidi = voiced ? nearestTarget(midi) : kNoTarget;
-    error = targetMidi == kNoTarget ? 0 : float(targetMidi) - midi;
-    targetShift = strength * error;
+    targetMidi = reader.voiced() ? nearestTarget(reader.midi()) : kNoTarget;
+    const bool correcting = targetMidi != kNoTarget;
+    error = correcting ? float(targetMidi) - reader.midi() : 0;
+    targetShift = correcting ? strength * (float(targetMidi) - midiNow) : 0;
   }
 
-  void read() {
-    for (int i = 0; i < detector.windowSamples(); ++i) {
-      window[size_t(i)] = history[size_t((historyPos + i) % detector.windowSamples())];
+  void read(bool toPublish) {
+    if (toPublish ? reader.read() : reader.glance()) {
+      shifter.setPeriod(float(rate / reader.pitch().hz));
+      // A reading describes its window's centre and waits up to a hop for the next, and the
+      // shifter's own delay takes back what it trails the input by
+      const float behind = float(reader.lagSamples()) + 0.5f * float(hop) - shifter.delaySamples();
+      midiNow = reader.midiAfter(std::max(0.0f, behind));
     }
-    pitch = detector.analyze(window.data());
-    if (pitch.hz >= kLowestCorrectedHz && pitch.confidence >= kVoicedConfidence) {
-      midi = midiOf(pitch.hz);
-      voiced = true;
-      unvoiced = 0;
-      shifter.setPeriod(float(rate / pitch.hz));
-    } else if (++unvoiced > kUnvoicedHold) {
-      voiced = false;
-    }
+    if (toPublish) published = reader.longest();
     retarget();
+    if (toPublish) {
+      // A host gets the error against the reading it gets, in the singer's own octave
+      const float against = float(targetMidi) - midiOf(published.hz);
+      const bool sure = targetMidi != kNoTarget && PitchReader::isVoice(published);
+      publishedError = sure ? against - 12.0f * std::round(against / 12.0f) : 0;
+    }
   }
 };
 
@@ -117,12 +108,12 @@ PitchCorrector::~PitchCorrector() = default;
 
 void PitchCorrector::reset() {
   State &s = *state_;
-  std::fill(s.history.begin(), s.history.end(), 0.0f);
-  s.historyPos = 0;
+  s.reader.reset();
   s.hopFill = 0;
-  s.pitch = {};
-  s.voiced = false;
-  s.unvoiced = 0;
+  s.readingsUntilPublished = kReadingsPerPublished;
+  s.midiNow = 0;
+  s.published = {};
+  s.publishedError = 0;
   s.targetMidi = kNoTarget;
   s.error = 0;
   s.targetShift = 0;
@@ -143,15 +134,11 @@ void PitchCorrector::setTarget(PitchClassMask mask, float strength, float retune
 
 void PitchCorrector::process(const float *in, float *out, int frames) {
   State &s = *state_;
-  const int windowSamples = s.detector.windowSamples();
   const float wetTarget = s.strength > 0 ? 1.0f : 0.0f;
   int done = 0;
   while (done < frames) {
     const int n = std::min(frames - done, s.hop - s.hopFill);
-    for (int i = 0; i < n; ++i) {
-      s.history[size_t(s.historyPos)] = in[done + i];
-      s.historyPos = (s.historyPos + 1) % windowSamples;
-    }
+    s.reader.push(in + done, n);
 
     const double easeSamples = s.retuneMs * s.rate / 1000.0;
     s.shift = easeSamples <= 0 ? s.targetShift : s.shift + (s.targetShift - s.shift) * float(1 - std::exp(-n / easeSamples));
@@ -167,17 +154,28 @@ void PitchCorrector::process(const float *in, float *out, int frames) {
     s.hopFill += n;
     if (s.hopFill == s.hop) {
       s.hopFill = 0;
-      s.read();
+      const bool toPublish = s.readingsUntilPublished == 1;
+      s.readingsUntilPublished = toPublish ? kReadingsPerPublished : s.readingsUntilPublished - 1;
+      s.read(toPublish);
     }
     done += n;
   }
 }
 
-Pitch PitchCorrector::detected() const { return state_->pitch; }
+Pitch PitchCorrector::detected() const { return state_->reader.pitch(); }
 
-int PitchCorrector::framesUntilReading() const { return state_->hop - state_->hopFill; }
+Pitch PitchCorrector::published() const { return state_->published; }
 
-int PitchCorrector::readingLagSamples() const { return state_->detector.windowSamples() / 2; }
+int PitchCorrector::publishedLagSamples() const { return state_->reader.longestLagSamples(); }
+
+float PitchCorrector::publishedErrorSemitones() const { return state_->publishedError; }
+
+int PitchCorrector::framesUntilReading() const {
+  const State &s = *state_;
+  return s.readingsUntilPublished * s.hop - s.hopFill;
+}
+
+int PitchCorrector::readingLagSamples() const { return state_->reader.lagSamples(); }
 
 float PitchCorrector::errorSemitones() const { return state_->error; }
 

@@ -7,6 +7,7 @@ fn main() {
         "cpp/shim/stretch.cpp",
         "cpp/shim/yin.cpp",
         "cpp/pitch-corrector/src/PitchCorrector.cpp",
+        "cpp/pitch-corrector/src/PitchReader.cpp",
         "cpp/pitch-corrector/src/PitchShifter.cpp",
         "cpp/pitch-corrector/src/YinDetector.cpp",
     ];

@@ -73,6 +73,31 @@ mod tests {
         }
     }
 
+    // The dip that finds a period leans sharp, by up to 4 cents in a short window, and a corrector
+    // would hand that lean to the voice. Whatever the window and wherever it falls on the wave, a
+    // steady tone reads true within 0.4 cents
+    #[test]
+    fn a_steady_tone_reads_true_in_every_window() {
+        for (window, tones) in [
+            (512, &[207.0, 220.0, 330.0, 440.0, 660.0, 880.0][..]),
+            (1024, &[104.0, 110.0, 150.0, 220.0, 440.0, 880.0]),
+            (2048, &[82.4, 92.5, 110.0, 220.0, 440.0, 880.0]),
+        ] {
+            let mut yin = YinDetector::new(RATE, window);
+            for &hz in tones {
+                let tone = harmonic_tone(hz, 0.3);
+                for start in (3000..7000).step_by(97) {
+                    let read = yin.analyze(&tone[start..start + window]);
+                    let cents = cents_between(f64::from(read.hz), hz);
+                    assert!(
+                        cents.abs() < 0.4,
+                        "window {window} read {hz} Hz {cents:+.2} cents off"
+                    );
+                }
+            }
+        }
+    }
+
     // Noise gets a best guess YIN is unsure of; silence gets nothing
     #[test]
     fn noise_is_unsure_and_silence_has_no_pitch() {

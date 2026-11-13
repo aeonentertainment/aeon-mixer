@@ -33,6 +33,15 @@ AeonPitch aeon_corrector_detected(const PitchCorrector *corrector) noexcept {
   return {pitch.hz, pitch.confidence};
 }
 
+AeonPitch aeon_corrector_published(const PitchCorrector *corrector) noexcept {
+  const aeon::dsp::Pitch pitch = corrector->published();
+  return {pitch.hz, pitch.confidence};
+}
+
+std::int32_t aeon_corrector_published_lag_samples(const PitchCorrector *corrector) noexcept {
+  return corrector->publishedLagSamples();
+}
+
 std::int32_t aeon_corrector_frames_until_reading(const PitchCorrector *corrector) noexcept {
   return corrector->framesUntilReading();
 }
@@ -44,6 +53,10 @@ std::int32_t aeon_corrector_reading_lag_samples(const PitchCorrector *corrector)
 float aeon_corrector_error_semitones(const PitchCorrector *corrector) noexcept { return corrector->errorSemitones(); }
 
 bool aeon_corrector_correcting(const PitchCorrector *corrector) noexcept { return corrector->correcting(); }
+
+float aeon_corrector_published_error_semitones(const PitchCorrector *corrector) noexcept {
+  return corrector->publishedErrorSemitones();
+}
 
 std::int32_t aeon_corrector_latency_samples(const PitchCorrector *corrector) noexcept {
   return corrector->latencySamples();
