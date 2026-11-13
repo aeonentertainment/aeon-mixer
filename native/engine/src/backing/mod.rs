@@ -98,6 +98,11 @@ impl Backing {
         }
     }
 
+    /// Whether this block moves the playhead on; before the start, paused or ended, it holds.
+    pub fn is_advancing(&self) -> bool {
+        self.playhead.is_advancing()
+    }
+
     /// The backing frame the room hears now, which every ack carries.
     pub fn position_frames(&self) -> u64 {
         self.playhead.position()

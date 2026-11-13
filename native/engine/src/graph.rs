@@ -76,7 +76,11 @@ impl Graph {
     fn cue(&self) -> Cue {
         let Some(backing) = &self.backing else { return Cue::default() };
         let heard = i64::try_from(backing.position_frames()).unwrap_or(i64::MAX);
-        Cue { frame: heard - i64::from(self.backing_offset_frames), semitones: backing.semitones() }
+        Cue {
+            frame: heard - i64::from(self.backing_offset_frames),
+            semitones: backing.semitones(),
+            advancing: backing.is_advancing(),
+        }
     }
 
     /// Gives the master a return ring for the network thread to encode, before the graph goes

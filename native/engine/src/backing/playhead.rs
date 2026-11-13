@@ -70,6 +70,11 @@ impl Playhead {
         self.latency = frames;
     }
 
+    /// Whether the next block moves the playhead on: playing, or fading out to a seek or a pause.
+    pub fn is_advancing(&self) -> bool {
+        matches!(self.motion, Motion::Playing | Motion::Leaving { .. })
+    }
+
     /// Whether the playhead holds still on pause, where the live key still drains its tail.
     pub fn is_paused(&self) -> bool {
         matches!(self.motion, Motion::Paused)

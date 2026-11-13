@@ -8,6 +8,8 @@ pub mod echo_report;
 mod echo_tests;
 pub mod effects;
 pub mod guide;
+#[cfg(test)]
+mod guide_clock_tests;
 pub mod meter;
 pub mod shared;
 pub mod source;
@@ -19,6 +21,7 @@ use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{Event, EventProducer};
 use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
+use cue::Cue;
 use echo_report::EchoReport;
 use effects::{Compressor, Corrector, EchoCanceller, Gate, HighPass, HowlGuard, Reverb, Voice};
 use guide::Guide;
@@ -123,8 +126,7 @@ impl Slot {
         self.corrector.process(
             &params.effects.corrector,
             self.guide.as_deref(),
-            frame,
-            shared.cue.semitones,
+            Cue { frame, ..shared.cue },
             &mut self.input,
             |reading| {
                 events.push(Event::Pitch {
@@ -243,7 +245,6 @@ mod tests {
     use crate::ingest::packet::RING_CAPACITY;
     use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
     use crate::params::{CleanupParams, CorrectorParams, EffectParams, Params};
-    use crate::slot::cue::Cue;
     use crate::slot::guide::Note;
 
     const CORRECTING: CorrectorParams =
