@@ -22,7 +22,7 @@ pub mod stats;
 #[cfg(test)]
 pub(crate) mod fixtures;
 
-pub use capture::{CaptureVoice, capture_voice};
+pub use capture::{CaptureVoice, capture_voice, input_period_for};
 pub use capture_producer::CaptureProducer;
 pub use codec::Codec;
 pub use jitter::JitterBuffer;

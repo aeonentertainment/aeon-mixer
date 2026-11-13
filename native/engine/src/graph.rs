@@ -113,6 +113,13 @@ impl Graph {
         }
     }
 
+    /// After a move to another output: every slot starts again on the new clock.
+    pub fn restart_slots(&mut self) {
+        for slot in &mut self.slots {
+            slot.restart();
+        }
+    }
+
     pub fn reset_slot(&mut self, slot: u8) {
         if let Some(slot) = self.slots.get_mut(usize::from(slot)) {
             slot.reset();

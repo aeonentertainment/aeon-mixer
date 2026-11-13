@@ -185,12 +185,28 @@ impl Slot {
 
     /// A new singer: the source forgets its stream, the corrector and the voice what they heard,
     /// and the gate and compressor the level of the phone before, and the echo stages the path,
-    /// since a new sender is a new one.
+    /// since a new sender is a new one. A source that keeps its sender, a capture slot's mic, keeps
+    /// its stream and the path, and only the corrector starts again.
     pub fn reset(&mut self) {
         self.source.reset();
+        self.corrector.reset();
+        if self.source.keeps_its_sender() {
+            return;
+        }
+        self.forget_the_path();
+    }
+
+    /// A move to another output: the source starts on the new clock, and every stage forgets the
+    /// path through the old output and what it heard.
+    pub fn restart(&mut self) {
+        self.source.restart();
+        self.corrector.reset();
+        self.forget_the_path();
+    }
+
+    fn forget_the_path(&mut self) {
         self.echo_canceller.reset();
         self.howl_guard.reset();
-        self.corrector.reset();
         self.voice.reset();
         self.gate = Gate::new();
         self.compressor = Compressor::new();

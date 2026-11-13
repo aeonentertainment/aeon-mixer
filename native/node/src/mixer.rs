@@ -32,13 +32,14 @@ pub struct Mixer {
 }
 
 impl Mixer {
-    /// One slot per input, in order: `"rtp"`, `"l16"`, `"push"` or `"capture"`. A capture slot's
-    /// input runs at `input_period_frames`, the output's period, or as near as its device allows.
+    /// One slot per input, in order: `"rtp"`, `"l16"`, `"push"` or `"capture"`. A capture slot
+    /// plays under an output whose callback takes `output_frames`, and asks its input for the
+    /// period `input_period_for` gives.
     pub(crate) fn build(
         inputs: Vec<SlotInput>,
         rtp_return: Option<&RtpReturnInput>,
         playout_delay_frames: Option<u32>,
-        input_period_frames: u32,
+        output_frames: u32,
         network: &Network,
     ) -> Result<Self> {
         if inputs.len() > MAX_SLOTS {
@@ -51,7 +52,7 @@ impl Mixer {
                     "capture" => {
                         let channel = u16::try_from(input.channel.unwrap_or(0))
                             .map_err(|_| Error::from_reason("a channel is at most 65535"))?;
-                        Ingest::capture(input.device, channel, input_period_frames)?
+                        Ingest::capture(input.device, channel, output_frames)?
                     }
                     kind => Ingest::open(kind, playout_delay_frames, network)?,
                 };

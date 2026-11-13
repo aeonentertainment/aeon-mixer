@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use assert_no_alloc::assert_no_alloc;
 use kernels::fixtures::{at_db, db, pink_noise, rms, room, talker};
 
-use super::capture::capture_voice;
+use super::capture::{capture_voice, input_period_for};
 use super::capture_producer::CaptureProducer;
 use super::{CaptureVoice, SharedStats, SlotStats};
 use crate::audio_thread::{AudioThread, Controls};
@@ -153,7 +153,7 @@ fn split(p: &mut Params) {
 
 /// The lag at which `played` from `from` on is `heard` exactly, if one is.
 fn exact_lag(played: &[f32], from: usize, heard: impl Fn(u64) -> f32) -> Option<u64> {
-    (0..32 * BLOCK as u64).find(|lag| {
+    (0..48 * BLOCK as u64).find(|lag| {
         played[from..].iter().enumerate().all(|(i, sample)| {
             let k = (from + i) as u64;
             k >= *lag && (sample - heard(k - lag)).abs() < 1e-6
@@ -462,4 +462,52 @@ fn an_output_with_a_callback_the_ring_cannot_hold_leaves_the_slot_silent_once() 
     assert_eq!((end.concealed, end.resyncs), (0, 1), "{end:?}");
     assert_eq!(end.playout_delay_ms, 0.0);
     assert_eq!(end, after_a_second, "nothing moves once it is silent");
+}
+
+/// The host hands a playing house mic to the next singer with `resetSlot`, three seconds in. It is
+/// the same device, so the slot plays the mic on, sample for sample across the reset, with no gap
+/// and no move; only its corrector starts again. A move still re-primes it, as the move tests show.
+#[test]
+fn reset_slot_on_a_playing_capture_slot_keeps_playing_the_mic() {
+    let mut device = Device::new(128, 0);
+    let (voice, stats) = device.open();
+    let mut rig = Rig::new(vec![Slot::new(Box::new(voice))], |p| p.slots[0].pan = -1.0, 6);
+    while rig.frames() < 6 * SECOND {
+        if rig.frames() == 3 * SECOND {
+            rig.controls.commands.push(Command::ResetSlot { slot: 0 }).ok().expect("room");
+        }
+        device.run_to(rig.frames() + BLOCK as u64, |k| tone(440.0, k));
+        rig.pump();
+    }
+    let lag = exact_lag(&rig.left, SECOND as usize, |k| tone(440.0, k));
+    assert!(lag.is_some(), "the mic plays exactly from before the reset to the end");
+    let read = stats.read();
+    assert_eq!((read.concealed, read.resyncs), (0, 0), "{read:?}");
+}
+
+/// Under a 2048-frame output callback, which some Bluetooth outputs grant, a mic that grants
+/// whatever it is asked for is asked for a period the ring holds beside that callback, 896 frames,
+/// not the callback's 2048. So it opens, and plays the mic exactly with no gap and no move.
+#[test]
+fn under_a_2048_frame_output_a_mic_is_asked_for_a_period_it_can_play_at() {
+    let callback = 2048u64;
+    let asked = u64::from(input_period_for(callback as u32));
+    assert_eq!(asked, 896);
+    assert_eq!(input_period_for(128), 128, "a short callback asks for its own period");
+    assert_eq!(input_period_for(480), 480);
+    let mut device = Device::new(asked, 0);
+    let (voice, stats) = device.open_under(callback);
+    let mut rig = Rig::new(vec![Slot::new(Box::new(voice))], |p| p.slots[0].pan = -1.0, 6);
+    let mut wakes = 0;
+    while rig.frames() < 6 * SECOND {
+        device.run_to(wakes * callback, |k| tone(440.0, k));
+        wakes += 1;
+        while rig.frames() < wakes * callback {
+            rig.pump();
+        }
+    }
+    let read = stats.read();
+    assert_eq!((read.concealed, read.resyncs), (0, 0), "{read:?}");
+    let lag = exact_lag(&rig.left, 2 * SECOND as usize, |k| tone(440.0, k));
+    assert!(lag.is_some(), "the mic plays exactly");
 }

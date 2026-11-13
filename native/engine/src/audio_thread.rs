@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::backing::Transport;
-use crate::block::{BLOCK, MAX_SLOTS, RATE, Stereo};
+use crate::block::{BLOCK, RATE, Stereo};
 use crate::command::{
     Command, CommandConsumer, CommandProducer, Event, EventConsumer, EventProducer, Retired,
     RetiredConsumer, RetiredProducer, command_ring, event_ring, retired_ring,
@@ -220,11 +220,9 @@ impl AudioThread {
     // Every packet a slot holds was anchored to the clock that stopped, and the gap's packets
     // waited in its ring; played now, the singer would stay a gap behind for the rest of the song.
     fn restart_slots(&mut self) {
-        for slot in 0..MAX_SLOTS as u8 {
-            self.live.reset_slot(slot);
-            if let Some(outgoing) = &mut self.outgoing {
-                outgoing.reset_slot(slot);
-            }
+        self.live.restart_slots();
+        if let Some(outgoing) = &mut self.outgoing {
+            outgoing.restart_slots();
         }
     }
 

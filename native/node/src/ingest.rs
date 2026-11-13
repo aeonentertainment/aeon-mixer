@@ -56,9 +56,9 @@ impl Ingest {
     pub fn capture(
         device: Option<String>,
         channel: u16,
-        period_frames: u32,
+        output_frames: u32,
     ) -> Result<(Self, Box<dyn Source>)> {
-        let (capturing, voice) = crate::capture_input::open(device, channel, period_frames)?;
+        let (capturing, voice) = crate::capture_input::open(device, channel, output_frames)?;
         let stats = voice.shared_stats();
         Ok((Self::Capture { _capturing: capturing, stats }, Box::new(voice)))
     }

@@ -35,6 +35,18 @@ fn fits(period: usize, burst: usize) -> bool {
     2 * period + burst + MARGIN <= RING_FRAMES
 }
 
+/// The period to ask of an input under an output whose callback takes `output_frames` at a wake:
+/// the output's own, so an interface that is both runs one cycle, unless the ring cannot hold it
+/// beside that callback, and then the longest whole-block period it can, 896 frames under 2048.
+/// Never over `MAX_PERIOD_FRAMES`, and never under a block.
+pub fn input_period_for(output_frames: u32) -> u32 {
+    let output = (output_frames as usize).max(1);
+    let burst = output.div_ceil(BLOCK) * BLOCK;
+    let longest = RING_FRAMES.saturating_sub(burst + MARGIN) / 2 / BLOCK * BLOCK;
+    let asked = if fits(output, burst) { output } else { longest };
+    asked.clamp(BLOCK.min(output), MAX_PERIOD_FRAMES) as u32
+}
+
 /// What a trough keeps over the block it pulls at opening: a third of a millisecond, for the
 /// wakes of two threads.
 const MARGIN: usize = 16;
@@ -168,7 +180,7 @@ impl CaptureVoice {
     /// the headroom. Under one that takes several, the step is the whole period. This is the step's
     /// middle: within half a step of the truth, and still while the trough is on target.
     pub fn wait_frames(&self) -> usize {
-        self.target + self.headroom() - self.step() / 2
+        self.target + self.headroom_frames() - self.step() / 2
     }
 
     /// How far into the input's period the wait can fall short of the trough and its headroom.
@@ -177,8 +189,9 @@ impl CaptureVoice {
     }
 
     /// What the fill holds over the trough just after a delivery, at the first pull of a wake: the
-    /// input's period and the blocks the wake will pull after this one.
-    fn headroom(&self) -> usize {
+    /// input's period and the blocks the wake will pull after this one. A healthy fill before a
+    /// pull stays at or under the target and this.
+    pub fn headroom_frames(&self) -> usize {
         self.period + self.burst - BLOCK
     }
 
@@ -257,7 +270,7 @@ impl Source for CaptureVoice {
         // A trough is only sure to sit on the target when the fill starts its headroom over it,
         // since a delivery may have just landed. The same holds after a backlog is dropped.
         if let Phase::Priming = self.phase {
-            if fill < self.target + self.headroom() {
+            if fill < self.target + self.headroom_frames() {
                 self.delay = fill;
                 out.fill(0.0);
                 return;
@@ -347,14 +360,20 @@ impl Source for CaptureVoice {
         self.publish(stats);
     }
 
-    /// A move, or `ResetSlot`: what the ring holds was paced by the clock that stopped, and the
-    /// move's gap waited in it. The slot primes and settles again, silent, as at its opening.
-    fn reset(&mut self) {
+    /// A move: what the ring holds was paced by the clock that stopped, and the move's gap waited
+    /// in it. The slot primes and settles again, silent, as at its opening.
+    fn restart(&mut self) {
         self.short = None;
         self.phase = match self.phase {
             Phase::Unplayable { counted } => Phase::Unplayable { counted },
             _ => Phase::Opening,
         };
+    }
+
+    /// `ResetSlot` hands the mic to another singer, but it is the same device: the ring keeps its
+    /// fill and plays on, and the slot's echo stages keep the path.
+    fn keeps_its_sender(&self) -> bool {
+        true
     }
 
     /// The new output's callback sets the headroom; a change means priming and settling again
@@ -581,7 +600,7 @@ mod tests {
                 assert_eq!(rig.voice.target_frames() as u32, target, "{case}");
                 assert!(target <= (BLOCK as u64 + period) as u32 + MARGIN as u32, "{case}");
                 assert!(low >= BLOCK as u32, "{case}: {low}");
-                let headroom = rig.voice.headroom() as u32;
+                let headroom = rig.voice.headroom_frames() as u32;
                 assert!(high <= target + headroom, "{case}: {high}");
             }
         }
