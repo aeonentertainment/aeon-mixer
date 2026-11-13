@@ -235,6 +235,10 @@ impl JitterBuffer {
                     &mut self.stats,
                 )
             {
+                // The echo moved by what was dropped or delayed. The new delay also takes up the
+                // slack the stream had drifted into, which the echo canceller has followed
+                // already, so that part is no move of the echo
+                self.spliced += moved.by - (moved.delay - self.playout_delay);
                 self.playout_delay = moved.delay;
                 self.stats.resyncs += 1;
             }
@@ -642,6 +646,121 @@ mod tests {
             // The second of concealment after the stream ends is a pause until a later packet
             // says otherwise, so a clean link loses nothing
             assert_eq!((stats.late, stats.lost), (0, 0), "{rate}: {stats:?}");
+        }
+    }
+
+    /// A phone on its own clock whose room's echo the slot's canceller takes out, on a slot
+    /// that chooses its delay when `chooses` and holds the fixtures' 15 ms when not, on 2.5 ms L16
+    /// frames: the echo of a talker with gaps, heard on the
+    /// phone's clock, sent and played through the buffer, then cancelled block by block with the
+    /// buffer's own `SourceDelay`. From `stalls_from` seconds on, if given, the link stalls 6 ms
+    /// every 20 ms frames' worth. Returns what was taken out in each second, and the slot's
+    /// latency at the end of each.
+    fn phone_echo(
+        ppm: f64,
+        seconds: usize,
+        stalls_from: Option<usize>,
+        chooses: bool,
+    ) -> (Vec<f32>, Vec<u32>) {
+        use kernels::fixtures::{at_db, db, on_clock, pink_noise, rms, room, talker, through};
+        use kernels::{EchoCanceller, EchoHistory};
+        let frames = seconds * RATE as usize;
+        let bed = at_db(pink_noise(frames + RATE as usize, 7), -50.0);
+        let far: Vec<f32> = at_db(talker(frames + RATE as usize, 110.0, 3), -18.0)
+            .iter()
+            .zip(&bed)
+            .map(|(v, b)| v + b)
+            .collect();
+        let echo = through(&far, &room(40 * 48, 0.316, 0.3, 0.25, 11));
+        let floor = at_db(pink_noise(frames, 99), -60.0);
+        let heard: Vec<f32> =
+            on_clock(&echo, ppm)[..frames].iter().zip(&floor).map(|(e, f)| e + f).collect();
+        let mut arrivals = L16Sender::new(120, 31).send_all(&heard, 0, 1.0 + ppm * 1e-6);
+        if let Some(from) = stalls_from {
+            let at = arrivals.iter().position(|a| a.at >= (from * RATE as usize) as i64);
+            let tail = arrivals.split_off(at.unwrap_or(arrivals.len()));
+            arrivals.extend(Stalls::new(i64::from(RATE) * 6 / 1000, 8 * 120).apply(&tail, 5));
+        }
+        let mut jitter = if chooses {
+            JitterBuffer::chosen(Codec::L16)
+        } else {
+            JitterBuffer::new(DELAY, Codec::L16)
+        };
+        let mut canceller = EchoCanceller::new(RATE);
+        let (mut history, silent) = (EchoHistory::new(), EchoHistory::new());
+        let (mut mic, mut out) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+        let mut next = arrivals.iter().peekable();
+        let mut block = [0.0f32; BLOCK];
+        let mut delays = Vec::with_capacity(seconds);
+        for (index, played) in far[..frames].as_chunks::<BLOCK>().0.iter().enumerate() {
+            let pumped = (index * BLOCK) as i64;
+            while let Some(arrival) = next.next_if(|a| a.at < pumped) {
+                jitter.push(&arrival.packet);
+            }
+            let delay = kernels::SourceDelay {
+                latency_frames: jitter.latency_frames(),
+                spliced_frames: jitter.spliced_frames(),
+                streams: jitter.streams(),
+            };
+            assert_no_alloc::assert_no_alloc(|| {
+                jitter.pull(&mut block);
+                mic.extend_from_slice(&block);
+                canceller.process(&history, &silent, delay, &mut block);
+                history.push(played, played);
+            });
+            out.extend_from_slice(&block);
+            if out.len() % RATE as usize == 0 {
+                delays.push(jitter.latency_frames());
+            }
+        }
+        let second =
+            |signal: &[f32], s: usize| rms(&signal[s * RATE as usize..(s + 1) * RATE as usize]);
+        let removed = (0..seconds).map(|s| db(second(&mic, s)) - db(second(&out, s))).collect();
+        (removed, delays)
+    }
+
+    /// A phone 200 ppm fast on a slot that chooses its delay: the delay falls once, about ten
+    /// seconds in, when it has seen ten seconds of the link. The fall drops what the link never
+    /// needed, and the new delay also takes up the slack the phone's clock had drifted into, which
+    /// the echo canceller had followed already. Reported as a splice of what was dropped, it
+    /// leaves the echo where the canceller has it: from the second after the fall, the echo comes
+    /// out within 3 dB of the same phone on the output's clock, and measured no less. Followed as
+    /// a jump of the latency, it counted the drift twice, and the slot came out up to 2.8 dB
+    /// louder than it went in.
+    #[test]
+    fn a_fall_of_the_delay_keeps_a_drifting_phones_echo_cancelled() {
+        let (same, same_delays) = phone_echo(0.0, 16, None, true);
+        let (fast, fast_delays) = phone_echo(200.0, 16, None, true);
+        println!("{fast:.1?} dB out at 200 ppm, {same:.1?} at 0; {fast_delays:?}, {same_delays:?}");
+        let opening = delay_chooser::OPENING + 120;
+        let fell = |delays: &[u32]| delays.last().is_some_and(|delay| *delay < opening);
+        assert!(fell(&fast_delays) && fell(&same_delays), "the delay fell");
+        for second in 11..fast.len() {
+            assert!(fast[second] > same[second] - 3.0, "second {}: {fast:.1?}", second + 1);
+        }
+    }
+
+    /// The same phone 200 ppm either way, its delay fallen at ten seconds, then a link that stalls
+    /// 6 ms every 20 ms from fourteen: packets go late and the delay rises again. The rise is
+    /// reported as the fall is, and from two seconds after it to the thirtieth the echo comes out
+    /// within 2 dB, on the mean, of the same phone on a delay that never moves: measured, 0.2 dB
+    /// over it at 200 ppm fast and 0.6 under slow. Followed as a jump of the latency, either
+    /// phone's echo came out within 1.5 dB of untouched. A phone on the output's clock is no measure here: on this
+    /// fixture its filter settles differently after the stalls, 17 to 20 dB out on a delay that
+    /// never moves and 23 to 34 on one that does.
+    #[test]
+    fn a_rise_of_the_delay_keeps_a_drifting_phones_echo_cancelled() {
+        let mean = |removed: &[f32]| removed.iter().sum::<f32>() / removed.len() as f32;
+        for ppm in [200.0, -200.0] {
+            let (moved, delays) = phone_echo(ppm, 30, Some(14), true);
+            let (held, _) = phone_echo(ppm, 30, Some(14), false);
+            let low = delays.iter().min().copied().unwrap_or_default();
+            let rose_at = delays.iter().rposition(|delay| *delay == low).map_or(0, |at| at + 1);
+            println!("{ppm} ppm: {moved:.1?} dB out, against {held:.1?} held; {delays:?}");
+            assert!((12..delays.len()).contains(&rose_at), "{ppm}: the delay fell, then rose");
+            let from = rose_at + 2;
+            let (moved, held) = (mean(&moved[from..]), mean(&held[from..]));
+            assert!(moved > held - 2.0, "{ppm}: {moved:.1} dB out on the mean, against {held:.1}");
         }
     }
 
