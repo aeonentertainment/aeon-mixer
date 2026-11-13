@@ -284,6 +284,33 @@ fn a_fast_run_or_a_phrase_after_a_grace_note_is_ducked() {
     assert_eq!((one_db.len(), two_db.len(), grace.len()), (1, 2, 1));
 }
 
+// A note's edge can cost the guard a sight of the tone just as it settles. A whistle at 1.2 kHz
+// held 70 ms at -30 dBFS, 12 ms of silence, then the next note a semitone up whose attack sits
+// 6 dB under for 40 ms before it holds at -30: the miss and the quiet attack fall in the analyses
+// the tone settles at, and the baseline is the middle of what was seen, not the attack. Left alone.
+#[test]
+fn a_miss_and_a_quiet_attack_at_the_settle_do_not_set_a_low_baseline() {
+    let rate = RATE as usize;
+    let (first, gap) = (70 * rate / 1000, 12 * rate / 1000);
+    let mut phase = 0.0f32;
+    let tone = (0..first + gap + rate)
+        .map(|i| {
+            let (hz, db) = if i < first {
+                (1200.0, -30.0)
+            } else if i < first + gap {
+                (0.0, f32::NEG_INFINITY)
+            } else {
+                let attack = i - first - gap < rate / 25;
+                (1200.0 * 2f32.powf(1.0 / 12.0), if attack { -36.0 } else { -30.0 })
+            };
+            phase = (phase + hz / RATE as f32).fract();
+            10f32.powf(db / 20.0) * (std::f32::consts::TAU * phase).sin()
+        })
+        .collect();
+    let (_, guard) = guarded(tone);
+    assert_eq!(guard.catches(), 0, "the next note was ducked");
+}
+
 // Ducking, the guard is a gain and nothing more: a click after a catch leaves on the very sample
 // it entered, only quieter, so it costs the mic path no delay (docs/design.md 8.9).
 #[test]

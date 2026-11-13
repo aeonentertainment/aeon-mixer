@@ -135,20 +135,25 @@ impl Track {
         self.missed <= MISSES
     }
 
-    /// The level a settling tone is judged from: the middle of its last five, so a note's edge
-    /// falling on the analysis it settles at does not set the baseline at the dip.
+    /// The level a settling tone is judged from: the middle of the levels it was seen at in its
+    /// last five analyses, so a note's edge falling on the analysis it settles at does not set the
+    /// baseline at the dip, nor does a miss there. With fewer than three seen, the newest.
     fn settling_level(&self, newest: f32) -> f32 {
-        let mut five = [f32::MIN; 5];
-        for (k, level) in five.iter_mut().enumerate() {
-            *level =
+        let mut known = [f32::MIN; 5];
+        let mut count = 0;
+        for k in 0..known.len() {
+            let db =
                 self.recent_db[(self.analyses as usize + SETTLED as usize - k) % SETTLED as usize];
+            if db > f32::MIN {
+                known[count] = db;
+                count += 1;
+            }
         }
-        let known = five.iter().filter(|db| **db > f32::MIN).count();
-        if known < five.len() {
+        if count < 3 {
             return newest;
         }
-        five.sort_unstable_by(f32::total_cmp);
-        five[2]
+        known[..count].sort_unstable_by(f32::total_cmp);
+        known[count / 2]
     }
 
     /// Takes the next analysis of this tone; true when it is running away.

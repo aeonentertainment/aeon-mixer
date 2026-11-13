@@ -615,9 +615,10 @@ fn correcting_room(seed: u32) -> (bool, f32) {
 // platform's rounding decide to a tenth of a dB when the guard sees it, so a single room passes or
 // fails by chance. The guard is held to a rate over 96 seeded rooms instead. Over 480 rooms on
 // macOS, the guard before this one let 46 % of them pass -20 dBFS and never caught 1.7 %; this one
-// lets 20 % pass and catches every one. Of these 96 it lets 17 pass against 38. The bound, 33 of
-// 96, sits 3.6 standard deviations over 20 % and 2.2 under the old guard's 46 %. One room in 96
-// may go uncaught: 1 of the 480 does with a corrector that reads every 5 ms.
+// lets 16 % pass and catches every one, on today's corrector and on one that reads every 5 ms. Of
+// these 96 it lets 12 pass against 38. The bound, 33 of 96, sits 5 standard deviations over 16 %
+// and 2.2 under the old guard's 46 %. One room in 96 may go uncaught, as margin for a platform's
+// own draw.
 #[test]
 fn the_guard_catches_howls_with_the_corrector_and_the_voice_on() {
     const ROOMS: u32 = 96;
