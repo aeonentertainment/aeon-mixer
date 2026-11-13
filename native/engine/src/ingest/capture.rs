@@ -66,6 +66,7 @@ pub fn capture_voice() -> (CaptureProducer, CaptureVoice) {
         target: BLOCK + MARGIN,
         phase: Phase::Opening,
         delay: 0,
+        played: false,
         short: None,
         stats: SlotStats::default(),
         shared: Arc::new(SharedStats::default()),
@@ -86,6 +87,8 @@ pub struct CaptureVoice {
     phase: Phase,
     /// The fill before the last pull.
     delay: usize,
+    /// Whether the last pull played the mic, past priming and settling and not silenced.
+    played: bool,
     /// The pulls running short since the last full one: how many, what they lacked in all, and what
     /// the first of them lacked.
     short: Option<Short>,
@@ -172,6 +175,13 @@ impl CaptureVoice {
         self.delay
     }
 
+    /// Whether the last pull played the mic. Priming and settling hold the fill over the target
+    /// and the headroom on purpose, and play silence, so a measurement of the fill judges only the
+    /// pulls that played.
+    pub fn played(&self) -> bool {
+        self.played
+    }
+
     /// How long a sample waits from the mic's delivery to its pull, the input's period included.
     /// A pull just after a delivery finds more in the ring than one just before it, and its samples
     /// waited as much less, so the wait is the trough and its headroom less where in the input's
@@ -247,6 +257,7 @@ impl CaptureVoice {
 
 impl Source for CaptureVoice {
     fn pull(&mut self, out: &mut [f32]) {
+        self.played = false;
         let n = out.len();
         let mut stats = self.stats;
         stats.playout_delay_ms = (self.wait_frames() as f64 * 1000.0 / f64::from(RATE)) as f32;
@@ -308,6 +319,7 @@ impl Source for CaptureVoice {
         if fill < frames {
             // Short: play what there is, then silence, and keep count until a pull is full again
             self.splice(fill, &mut out[..fill]);
+            self.played = true;
             out[fill..].fill(0.0);
             stats.concealed += 1;
             let lacked = n - fill;
@@ -329,6 +341,7 @@ impl Source for CaptureVoice {
             self.target = (self.target + raise + MARGIN).min(self.ceiling_target());
         }
         self.splice(frames, out);
+        self.played = true;
 
         self.phase = match self.phase {
             Phase::Correcting { frames } => match frames + step {
