@@ -791,21 +791,24 @@ ring into the jitter buffer at the top of each block.
   out of it. 30 ms is three 10 ms chunks, room for a host two chunks late, and is a default
   until `measure-latency` (8.9) gives the push path a number.
 - A `capture` slot is a mic on this machine, with no socket and no jitter buffer. `createMixer`
-  starts its input through `devices::capture` (8.3) at the output's period, or as near as the
-  device allows, and rejects if it cannot, or if the input's period is over 1024 frames, or the
-  ring cannot hold the output's callback beside it: the target's ceiling and the headroom, twice
-  the period, the callback in whole blocks and 16 frames, over its 4096 frames. So a 2048-frame
-  callback, which some Bluetooth outputs grant, plays under any input of 1016 frames or less, and a
-  128-frame mic under any callback up to 3712. `destroy` stops it. The capture thread's sink pushes each delivery into an SPSC
-  ring of 4096 frames, fixed so the audio thread never sizes it, and the slot pulls a block from
-  it. Its headroom is what the fill holds over the trough just after a delivery: an input period,
-  and the blocks an output callback pulls back to back after the first, three more under a
-  480-frame callback, since the input delivers nothing between them. Its first pull drops what
-  arrived while armed. It plays silence until the ring holds its target and its headroom, then for
-  one more window of 128 blocks while it reads the trough, and drops the excess at once, so its first sample waits as long as every one after it: a third of a second
-  of silence when a song starts. An offline engine opens no input, so it refuses a capture slot;
-  the timer clock opens one, since a box that plays nothing may still have a mic. ALSA opens a
-  `hw:` device once, so on Linux an input feeds one mixer at a time, armed or live.
+  starts its input through `devices::capture` (8.3) at the output's period, never over 1024
+  frames, when the ring holds it beside that callback, or else the longest whole-block period it
+  can, 896 frames under 2048, or as near as the device allows, and rejects if it cannot, or if the
+  input's period is over 1024 frames, or the ring cannot hold the output's callback beside it: the
+  target's ceiling and the headroom, twice the period, the callback in whole blocks and 16 frames,
+  over its 4096 frames. So a 2048-frame callback, which some Bluetooth outputs grant, plays under
+  any input of 1016 frames or less, and a 128-frame mic under any callback up to 3712. `destroy`
+  stops it. The capture thread's sink pushes each delivery into an SPSC ring of 4096 frames, fixed
+  so the audio thread never sizes it, and the slot pulls a block from it. Its headroom is what the
+  fill holds over the trough just after a delivery: an input period, and the blocks an output
+  callback pulls back to back after the first, three more under a 480-frame callback, since the
+  input delivers nothing between them. Its first pull drops what arrived while armed. It plays
+  silence until the ring holds its target and its headroom, then for one more window of 128 blocks
+  while it reads the trough, and drops the excess at once, so its first sample waits as long as
+  every one after it: a third of a second of silence when a song starts. An offline engine opens
+  no input, so it refuses a capture slot; the timer clock opens one, since a box that plays
+  nothing may still have a mic. ALSA opens a `hw:` device once, so on Linux an input feeds one
+  mixer at a time, armed or live.
 - The ring's fill drifts when the input runs on another clock than the output. The slot holds the
   lowest fill it sees before a pull over 128 blocks, its trough, at a target: a block to pull and
   16 frames for the wakes of two threads. A trough off target moves the delay one sample a block,
