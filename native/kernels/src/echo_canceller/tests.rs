@@ -248,3 +248,42 @@ fn a_source_that_splices_a_little_and_often_still_has_a_new_path_found() {
     println!("{removed:.1?} dB out, the path moving 400 frames at 4 s");
     assert!(removed[8..].iter().all(|db| *db >= 15.0), "{removed:.1?}");
 }
+
+// A phone's jitter buffer corrects its clock's skew a frame at a time: on 2.5 ms frames it drops
+// 120 frames at once, and says so. The canceller moves its reference with the echo, as it does
+// for any splice, and from the second it happens in takes out within 1 dB of what it takes from a
+// phone that never stepped: 0.2 dB under, measured. Unreported, the step left 120 frames between
+// them, inside what the finder takes for the same path, and the slot came out 2.3 to 3.3 dB louder
+// than it went in.
+#[test]
+fn a_whole_frame_dropped_at_once_is_followed() {
+    let frames = 10 * SECOND;
+    // A second more of the room, for the frames the phone skips
+    let far = far_end(frames + SECOND);
+    let path = room(40 * 48, 0.316, 0.3, 0.25, 11);
+    let floor = at_db(pink_noise(frames + SECOND, 99), -60.0);
+    let raw: Vec<f32> = through(&far, &path).iter().zip(&floor).map(|(e, f)| e + f).collect();
+    let at = 5 * SECOND;
+    let through_step = |step: usize, reported: bool| {
+        // From `at` on the phone plays its stream `step` frames earlier
+        let mic: Vec<f32> =
+            (0..frames).map(|k| if k < at { raw[k] } else { raw[k + step] }).collect();
+        let delay = |block: usize| {
+            let spliced = if reported && block * FRAME >= at { -(step as i64) } else { 0 };
+            SourceDelay { latency_frames: 0, spliced_frames: spliced }
+        };
+        let (out, _) = cancel_spliced(&far[..frames], &mic, delay);
+        per_second(&mic, &out)
+    };
+    let still = through_step(0, true);
+    let stepped = through_step(120, true);
+    let unreported = through_step(120, false);
+    println!("{stepped:.1?} dB out, against {still:.1?} still and {unreported:.1?} unreported");
+    for second in 5..stepped.len() {
+        assert!(
+            (stepped[second] - still[second]).abs() < 1.0,
+            "second {}: {stepped:.1?}",
+            second + 1
+        );
+    }
+}

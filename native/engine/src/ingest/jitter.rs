@@ -58,6 +58,9 @@ pub struct JitterBuffer {
     stream: Option<Stream>,
     /// Whether a stream has ever been anchored, so the next anchor counts as a resync.
     anchored: bool,
+    /// Frames the skew corrections have moved the stream later, less those they moved it
+    /// earlier, since the buffer was made: they move the echo, and the playout delay holds.
+    spliced: i64,
     /// Output frames pulled since the buffer was made: the clock every due time is on.
     now: i64,
     stats: SlotStats,
@@ -130,6 +133,7 @@ impl JitterBuffer {
             scratch: vec![0.0; MAX_FRAME],
             stream: None,
             anchored: false,
+            spliced: 0,
             now: 0,
             stats,
             shared,
@@ -151,6 +155,12 @@ impl JitterBuffer {
     pub fn latency_frames(&self) -> u32 {
         let frame = self.stream.as_ref().map_or(DEFAULT_FRAME, |stream| stream.frame);
         u32::try_from(self.playout_delay + frame as i64).unwrap_or(u32::MAX)
+    }
+
+    /// The frames the skew corrections have moved the stream by, later when positive, which move
+    /// its echo and not its latency.
+    pub fn spliced_frames(&self) -> i64 {
+        self.spliced
     }
 
     /// `ResetSlot`: forget the stream. The next packet is a new singer and re-anchors.
@@ -202,7 +212,8 @@ impl JitterBuffer {
             self.reset();
         }
         if let Some(stream) = &mut self.stream {
-            stream.correct_skew(now, self.playout_delay, self.opening, &mut self.stats);
+            self.spliced +=
+                stream.correct_skew(now, self.playout_delay, self.opening, &mut self.stats);
             let wanted = stream.chooser.as_mut().and_then(|chooser| chooser.tick(now));
             if let Some(moved) = wanted
                 && stream.move_anchor(
@@ -489,9 +500,16 @@ impl Stream {
     }
 
     /// Once a second, this stream's skew correction, and the held stream's at its own delay.
-    fn correct_skew(&mut self, now: i64, playout_delay: i64, opening: i64, stats: &mut SlotStats) {
+    /// Returns the frames it moved this stream by, later when positive.
+    fn correct_skew(
+        &mut self,
+        now: i64,
+        playout_delay: i64,
+        opening: i64,
+        stats: &mut SlotStats,
+    ) -> i64 {
         if now < self.skew.ends_at {
-            return;
+            return 0;
         }
         let window = std::mem::replace(&mut self.skew, SkewWindow::new(now + SKEW_WINDOW));
         let fallen = self.chooser.as_ref().is_some_and(|chooser| chooser.fallen() > 0);
@@ -501,13 +519,14 @@ impl Stream {
             held.offset += window.correction(opening, self.frame as i64, false) - by;
         }
         if by == 0 {
-            return;
+            return 0;
         }
         self.anchor_out += by;
         stats.resyncs += 1;
         if let Some(chooser) = &mut self.chooser {
             chooser.shift(by);
         }
+        by
     }
 }
 
@@ -586,6 +605,7 @@ mod tests {
     /// Thirty seconds from a sender a tenth of a percent fast or slow, which drifts six 5 ms
     /// frames. Each window that sees a whole frame of drift moves the anchor one frame, so the
     /// delay the singer hears stays within a frame of the playout delay, and nothing goes late.
+    /// Each move is reported as a splice, so the echo canceller moves with it.
     #[test]
     fn clock_skew_is_corrected_a_frame_at_a_time() {
         let signal = quantized(&source(30 * RATE as usize));
@@ -606,6 +626,7 @@ mod tests {
                 "{rate}: the stream moved {moved} for a drift of {drift}"
             );
             assert_eq!(moved.signum(), direction);
+            assert_eq!(jitter.spliced_frames(), moved, "{rate}: each correction, reported");
             let stats = jitter.stats();
             assert!((5..=7).contains(&stats.resyncs), "{rate}: {stats:?}");
             // The second of concealment after the stream ends is a pause until a later packet
