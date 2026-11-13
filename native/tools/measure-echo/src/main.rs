@@ -80,8 +80,9 @@ fn main() -> ExitCode {
         ["cpu"] => {
             let cpu = cpu::run();
             println!(
-                "canceller {:.2} % of a core per slot, {:.1} us a block; howl guard {:.3} %",
-                cpu.canceller, cpu.block_micros, cpu.guard
+                "canceller {:.2} % of a core per slot, {:.1} us a block; {:.1} us a block its \
+                 source splices; howl guard {:.3} %",
+                cpu.canceller, cpu.block_micros, cpu.splicing_block_micros, cpu.guard
             );
             Ok(())
         }

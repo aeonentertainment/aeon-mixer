@@ -1,6 +1,8 @@
 //! Where a slot's audio comes from. The ingest workstream implements this for the jitter buffer
 //! and the push ring (docs/design.md 8.4); the graph only asks for one block at a time.
 
+use kernels::SourceDelay;
+
 /// One block of mono input, pulled on the audio thread. `pull` fills `out` completely, with
 /// silence when nothing is due, and allocates nothing.
 pub trait Source: Send {
@@ -30,6 +32,12 @@ pub trait Source: Send {
     /// subtracts it (docs/design.md section 3).
     fn latency_frames(&self) -> u32 {
         0
+    }
+
+    /// Where the echo canceller finds the source's delay: its latency, and the frames it has
+    /// spliced in less those it took out, which move the echo without moving the latency.
+    fn delay(&self) -> SourceDelay {
+        SourceDelay { latency_frames: self.latency_frames(), spliced_frames: 0 }
     }
 }
 

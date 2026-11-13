@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use assert_no_alloc::assert_no_alloc;
-use kernels::fixtures::{at_db, db, pink_noise, rms, room, talker};
+use kernels::fixtures::{at_db, between, db, pink_noise, rms, room, talker};
 
 use super::capture::{capture_voice, input_period_for};
 use super::capture_producer::CaptureProducer;
@@ -264,23 +264,26 @@ fn echo_through_capture(period: u64, ppm: i64) -> (Vec<f32>, Option<kernels::Ech
     };
     let mut rig = Rig::new(slots, echo_cancel, seconds);
     let mut mic = Vec::with_capacity(frames + RATE as usize);
+    // The room's echo of what it played, at each frame of the output's clock
+    let mut echo = Vec::with_capacity(frames + RATE as usize);
+    let nearest = path.iter().map(|(lag, _)| *lag).min().expect("a path");
     while rig.frames() < seconds * SECOND {
         let (left, right) = (&rig.left, &rig.right);
-        // What the room played at a moment on the output's clock, between two of its frames
-        let played = |t: f64| {
-            let (i, frac) = (t.floor() as usize, (t - t.floor()) as f32);
-            let at = |i: usize| left.get(i).zip(right.get(i)).map_or(0.0, |(l, r)| 0.5 * (l + r));
-            at(i) + (at(i + 1) - at(i)) * frac
-        };
+        let played = |i: usize| left.get(i).zip(right.get(i)).map_or(0.0, |(l, r)| 0.5 * (l + r));
+        // An echo is at least the nearest lag late, so it is known that far past what has played
+        while echo.len() < rig.frames() as usize + nearest {
+            let at = echo.len();
+            let heard: f32 = path
+                .iter()
+                .filter(|(lag, _)| at >= *lag)
+                .map(|(lag, gain)| gain * played(at - lag))
+                .sum();
+            echo.push(heard);
+        }
         // The mic's own frame `k` falls at this moment on the output's clock
         let heard = |k: u64| {
             let t = k as f64 * 1_000_000.0 / (1_000_000 + ppm) as f64;
-            let echo: f32 = path
-                .iter()
-                .filter(|(lag, _)| t >= *lag as f64)
-                .map(|(lag, gain)| gain * played(t - *lag as f64))
-                .sum();
-            echo + floor[k as usize % floor.len()]
+            between(&echo, t) + floor[k as usize % floor.len()]
         };
         let before = device.delivered;
         device.run_to(rig.frames(), heard);
@@ -314,17 +317,27 @@ fn a_capture_slot_on_the_outputs_clock_has_its_echo_cancelled() {
     }
 }
 
-/// A house mic on its own clock, 100 ppm slow: the echo's delay drifts 4.8 samples a second until
-/// the slot moves a period's worth back, every 27 s, and the canceller cannot follow a path that
-/// never holds still. It takes about 10 dB out early on and less as the path walks away, never
-/// making the slot louder. This is the limit decision 0018 records, until the slot spreads its
-/// moves at the rate it has learned.
+/// A house mic on its own clock, 100 or 200 ppm either way, as a USB mic beside the speakers is:
+/// the echo's delay slides a few frames a second, and the slot splices a frame back a block at a
+/// time when the ring's fill slips a step. The canceller follows the slide at the rate it learns
+/// and each splice the slot reports. So from the fifth second it takes out within 3 dB of what it
+/// takes from the same mic on the output's clock, at a 128-frame input period: measured, 0.9 dB at
+/// most. A 480-frame input slips 32 frames every 6.7 s at 100 ppm, and the second holding its
+/// splices comes out up to 3.3 dB under, so it is held to 4.
 #[test]
-fn a_capture_slot_on_its_own_clock_has_its_echo_only_partly_cancelled() {
-    let (removed, findings) = echo_through_capture(128, -100);
-    println!("128 frames, -100 ppm: {removed:.1?} dB out, second by second; {findings:?}");
-    assert!(removed.iter().all(|db| *db > 0.0), "never louder: {removed:.1?}");
-    assert!(removed[8] < 15.0, "if this passes 15 dB, rewrite decision 0018's limit");
+fn a_capture_slot_on_its_own_clock_has_its_echo_cancelled_as_on_the_outputs() {
+    for (period, within) in [(128u64, 3.0), (480, 4.0)] {
+        let (same, _) = echo_through_capture(period, 0);
+        for ppm in [100i64, -100, 200, -200] {
+            let (removed, findings) = echo_through_capture(period, ppm);
+            println!("{period} frames, {ppm} ppm: {removed:.1?} dB out against {same:.1?}");
+            assert!(findings.is_some(), "{period}, {ppm}: found and adapted");
+            for second in 4..removed.len() {
+                let case = format!("{period} frames, {ppm} ppm, second {}", second + 1);
+                assert!(removed[second] > same[second] - within, "{case}: {removed:.1?}");
+            }
+        }
+    }
 }
 
 /// A 480-frame output callback, WASAPI shared's on the laptop in decision 0003, renders three or

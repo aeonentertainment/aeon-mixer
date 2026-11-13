@@ -2,7 +2,7 @@
 //! block, then the master's block pushed to the history.
 
 use engine::block::BLOCK;
-use kernels::{EchoCanceller, EchoFindings, EchoHistory};
+use kernels::{EchoCanceller, EchoFindings, EchoHistory, SourceDelay};
 
 use engine::block::RATE;
 
@@ -20,7 +20,7 @@ pub fn cancel(played: &[f32], mic: &[f32]) -> Cancelled {
     for (played, block) in
         played.as_chunks::<BLOCK>().0.iter().zip(out.as_chunks_mut::<BLOCK>().0.iter_mut())
     {
-        canceller.process(&history, &silent, 0, block);
+        canceller.process(&history, &silent, SourceDelay::default(), block);
         history.push(played, played);
     }
     Cancelled { out, findings: canceller.findings() }

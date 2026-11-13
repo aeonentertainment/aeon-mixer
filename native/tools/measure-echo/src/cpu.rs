@@ -4,7 +4,7 @@
 use cpu_time::ThreadTime;
 use engine::block::{BLOCK, RATE};
 use kernels::fixtures::{at_db, pink_noise, room, talker, through};
-use kernels::{EchoCanceller, EchoHistory, HowlGuard};
+use kernels::{EchoCanceller, EchoHistory, HowlGuard, SourceDelay};
 
 const SECONDS: usize = 60;
 const REPEATS: usize = 5;
@@ -14,6 +14,9 @@ pub struct Cpu {
     pub canceller: f64,
     pub guard: f64,
     pub block_micros: f64,
+    /// The canceller's block while its source splices a frame every block, as a capture slot
+    /// does for a third of a second when it corrects a 128-frame slip.
+    pub splicing_block_micros: f64,
 }
 
 pub fn run() -> Cpu {
@@ -28,21 +31,25 @@ pub fn run() -> Cpu {
         echo.iter().zip(&at_db(talker(frames, 180.0, 9), -20.0)).map(|(e, v)| e + v).collect();
     let percent = |seconds: f64| seconds / SECONDS as f64 * 100.0;
 
-    let canceller = median((0..REPEATS).map(|_| {
-        let mut history = EchoHistory::new();
-        let silent = EchoHistory::new();
-        let mut canceller = EchoCanceller::new(RATE);
-        let mut block = [0.0; BLOCK];
-        let started = ThreadTime::now();
-        for (played, heard) in
-            far.as_chunks::<BLOCK>().0.iter().zip(mic.as_chunks::<BLOCK>().0.iter())
-        {
-            block.copy_from_slice(heard);
-            canceller.process(&history, &silent, 0, &mut block);
-            history.push(played, played);
-        }
-        percent(started.elapsed().as_secs_f64())
-    }));
+    let canceller_with = |splices: i64| {
+        median((0..REPEATS).map(|_| {
+            let mut history = EchoHistory::new();
+            let silent = EchoHistory::new();
+            let mut canceller = EchoCanceller::new(RATE);
+            let mut block = [0.0; BLOCK];
+            let started = ThreadTime::now();
+            let blocks = far.as_chunks::<BLOCK>().0.iter().zip(mic.as_chunks::<BLOCK>().0.iter());
+            for (index, (played, heard)) in (0i64..).zip(blocks) {
+                block.copy_from_slice(heard);
+                let delay = SourceDelay { latency_frames: 0, spliced_frames: index * splices };
+                canceller.process(&history, &silent, delay, &mut block);
+                history.push(played, played);
+            }
+            percent(started.elapsed().as_secs_f64())
+        }))
+    };
+    let canceller = canceller_with(0);
+    let splicing = canceller_with(1);
     let guard = median((0..REPEATS).map(|_| {
         let mut guard = HowlGuard::new(RATE);
         let mut block = [0.0; BLOCK];
@@ -54,7 +61,13 @@ pub fn run() -> Cpu {
         percent(started.elapsed().as_secs_f64())
     }));
     let block_seconds = BLOCK as f64 / f64::from(RATE);
-    Cpu { canceller, guard, block_micros: canceller / 100.0 * block_seconds * 1e6 }
+    let micros = |percent: f64| percent / 100.0 * block_seconds * 1e6;
+    Cpu {
+        canceller,
+        guard,
+        block_micros: micros(canceller),
+        splicing_block_micros: micros(splicing),
+    }
 }
 
 fn median(runs: impl Iterator<Item = f64>) -> f64 {
