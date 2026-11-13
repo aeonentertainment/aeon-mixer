@@ -102,14 +102,22 @@ Four changes, each measured in a test that fails without it:
   silent mic, soon calls a filter that learned nothing adapted; the double-talk hold then reads
   every sung frame as talk, and nothing is taken out again. Measured on a phone whose stream
   stopped: -37.9 dBFS from a source handing over -50.0, and 0.6 dB out a second after it came
-  back. Here a frame whose mic carries under one 16-bit step, or a tenth of the echo the filter
-  expects and less than half its energy along the estimate's shape, passes untouched and teaches
-  the filter nothing. The shape test keeps a room whose speakers are turned down 12 or 20 dB at
-  once learned again as mdf.c learns it, within 0.2 dB; without it the filter held the old path
-  and took nothing out after the 20 dB drop. The shape is judged pre-emphasised, as the filter sees
-  it: judged as heard, a muted mic's floor passed for the echo's shape in some frames, and the
-  turned-down room took out 6 to 12 dB in the three seconds after the drop, against 18 to 20. It
-  costs 0.3 us a block.
+  back. Here a frame whose mic carries under one 16-bit step, or sits 30 dB under the echo the
+  filter has expected over the last second, at its own floor, is silence: it passes untouched for
+  as long as it lasts and teaches the filter nothing. Smoothed over a frame instead of a second,
+  a -60 dBFS floor came within 30 dB of the echo for up to 39 frames at a time in a quiet bar.
+  A frame carrying a tenth of the echo the filter expects, and less than half its energy along the
+  estimate's shape, pre-emphasised as the filter sees it, may be a concealment fading out or a
+  phone turned face down onto a quieter path. It passes untouched as well, but counts toward the
+  sanity reset as mdf.c would count it, and after 50 such frames, net of frames at the path's
+  level, the filter takes what it hears as it is. The longest such run a silenced source handed
+  over was 4 frames. A phone turned face down, its echo 12 dB down and low-passed at 1 kHz, comes
+  out 5.8 dB down in that second and 18.4 in the next, against mdf.c's 2.2 and 18.4; held as
+  silence, as when this first shipped, 3.8 dB in the next. A room turned down 12 or 20 dB at once
+  keeps the path's shape and is learned again as mdf.c learns it, but the 20 dB drop's own second
+  comes out at -6.7 dB against -4.6, since its faintest frames pass as silence and do not count
+  toward the reset. Where a backing leaves gaps the echo falls 30 dB into, those frames pass too,
+  and a phone's echo test loses up to 0.6 dB in such seconds. It costs 0.3 us a block.
 
 ## The howl guard
 
@@ -234,6 +242,7 @@ From the tests on the offline driver, under the allocation guard, and `measure-e
 | A loop 6 dB over unity with correction and a +2 voice on, 96 seeded rooms                                    | 19 louder than -20 dBFS, none uncaught                      | 33, and 1                      |
 | A whistled phrase and a soprano climbing a semitone a note, legato and swelling, with a vibrato to 100 cents | not ducked                                                  | none                           |
 | A source silent 3 s as the backing plays: rtp stopped, capture lost, push stopped, muted at mic              | no louder than its source; back to 16.9 to 28.3 dB out      | 0.5 dB; 3 dB under before      |
+| A phone turned face down, its echo 12 dB down and low-passed at 1 kHz, from the second second                | 18.4 dB out                                                 | 12 dB                          |
 
 ## What this does not do
 
