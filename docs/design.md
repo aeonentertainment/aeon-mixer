@@ -417,7 +417,7 @@ pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pit
 pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
 pub struct EchoHistory;     // new(), push(left, right) folds a block to mono, read(lag, out): the frames ending `lag` before the next one
 pub struct EchoCanceller;   // new(rate), process(history, own, SourceDelay, block) in place, reset(), findings() -> Option<EchoFindings>; adds no delay
-pub struct SourceDelay;     // { latency_frames: u32, spliced_frames: i64 }: where a slot's source has its delay this block, from Source::delay(); the splices are every frame it has spliced in less those it took out, which move the echo and not the latency
+pub struct SourceDelay;     // { latency_frames: u32, spliced_frames: i64, streams: u32 }: where a slot's source has its delay this block, from Source::delay(); the splices are every frame it has spliced in less those it took out, which move the echo and not the latency, and streams counts the streams it has started, each at its latency however far the last had drifted
 pub struct EchoFindings { pub path_frames: u32, pub bleed_db: f32, pub removed_db: f32 }
 pub struct HowlGuard;       // new(rate), process(block) in place, reset(), catches(); adds no delay
 ```
@@ -774,6 +774,8 @@ ring into the jitter buffer at the top of each block.
   dropped; when even the earliest came a step late, or half the delay's room over a block late
   when that is less, it moves a step later and that step is concealed. Either counts as a resync,
   and either is a splice in the source's `delay()`, since it moves the echo and not the latency.
+  Each stream it anchors counts in `delay()`'s `streams`, so the echo canceller starts its drift
+  over with it.
   Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
   keeps the FIFO at one frame.
 - A new SSRC, a gap over a second on either clock, or `resetSlot` starts a new stream: the

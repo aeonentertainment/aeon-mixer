@@ -9,7 +9,7 @@ The canceller learns the drift itself. A delay-locked loop reads how far its fil
 trails the echo and moves the reference by that and by the rate it has learned, reading the master
 between frames with a 16-tap windowed sinc. The capture slot keeps its splices and says how many it
 has made, and a phone's jitter buffer says the same of its skew corrections: a source hands the
-canceller a `SourceDelay`, its latency and its splices so far. A splice of a sample slides every
+canceller a `SourceDelay`, its latency, its splices so far and the streams it has started. A splice of a sample slides every
 window the filter holds by one, in the block it happens; a longer one reads them all again. Nothing changes
 on the mic path.
 
@@ -128,6 +128,12 @@ sets is where the delay ends up.
 
 ## What this does not do
 
+- **Carry a phone's drift across a new stream.** A phone that reconnects, or pauses for a second,
+  starts a stream its jitter buffer anchors at the opening delay, and the echo is back where the
+  latency says, however far the last stream had drifted. The source counts its streams, and the
+  canceller starts its drift over on each, keeping the rate. In the kernel test, a phone 100 ppm
+  fast that reconnects after 15 s comes back within 2.6 dB of one that never did; without the
+  count it took out between 1.1 dB louder and 2.8 dB down for the seven seconds after.
 - **Measure a phone.** A jitter buffer that steps its delay reports it in its latency, as before, and
   its skew corrections now report as splices: each drops or conceals a step, 120 frames on 2.5 ms
   frames, and the playout delay holds. Unreported, the loop would carry its offset across a step
