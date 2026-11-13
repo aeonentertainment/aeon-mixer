@@ -98,14 +98,24 @@ as well as at its own lag over one syllable, and without the second test an echo
 was taken for one 711 early. While it looks, under half a second, the slot passes untouched,
 and `stats()` keeps the path it had. A frame counts only when the estimate holds at least a tenth of the mic's
 energy: a perfect estimate 10 dB under the mic correlates at 0.32, under the 0.5 the peak needs.
-So a silent intro or break, or a master holding only the slot's own voice, counts for nothing,
-and the search waits it out with the slot passing untouched; after 10 s of it, what was summed is
-forgotten and the next frame that counts starts afresh, since the drift's rate, learned to 1%,
-moves the reference half a frame in that time at 100 ppm. Spending its budget on such frames, a
-phone back a quarter packet off during a silent intro took out 10.6 dB in the second ending 2 s
-after the backing returned, against 16.7 before it stopped; waiting, 14.4 to 14.7. A second of
-counted frames without a clear peak leaves the filter where it was for the finder to judge, as
-before. The search reaches 21 ms either way: a block's rounding, and
+An estimate under -70 dBFS is silence: a silent intro or break, or a master holding only the
+slot's own voice. The search waits silence out with the slot passing untouched, however long it
+lasts; after 10 s of it, what was summed is forgotten and the next frame that counts starts
+afresh, since the drift's rate, learned to 1%, moves the reference half a frame in that time at
+100 ppm. Spending its budget on silence, a phone back a quarter packet off during a silent intro
+took out 10.6 dB in the second ending 2 s after the backing returned, against 16.7 before it
+stopped; waiting, 14.4 to 14.7.
+
+Every search ends once the master has reached the mic for 2 s, counted or not, and silence does
+not run that clock down, so no stretch of silence keeps a search open past it. The slowest search
+in these tests named its lag half a second after the master reached the mic. A mic far louder
+than the filter's estimate never counts: a phone picked up off the table, a new input gain, a room
+singing along. With no end, it kept the slot untouched for good. A search that ends without a lag
+starts the filter over, since what it holds is not the room the mic hears, or not at that level:
+an adapted filter under a mic 15 dB over its estimate holds in double talk for good, and took out
+1.6 dB from the search's end on. Learning afresh, a phone back 15 dB louder took out 14.6 dB in
+the second ending 4 s after its return, against 12.1 for the same room learned from nothing in
+its second second. A search that ran out starts again only with a new stream. The search reaches 21 ms either way: a block's rounding, and
 three quarters of a 20 ms packet.
 
 On the offline driver, through Opus and the jitter buffer, a phone whose new stream lands a

@@ -15,17 +15,24 @@ pub const REACH: usize = 8 * FRAME;
 const PARTITIONS: usize = 2 * REACH / FRAME;
 /// Heard frames summed before the peak is judged: 85 ms.
 const LEAST_HEARD: u32 = 32;
-/// Heard frames after which an echo still not found is not the filter's: a second.
-const MOST_HEARD: u32 = 375;
 /// A frame is heard only when the filter's estimate, the learned path's echo of the master, holds
 /// at least this share of the mic's energy: 10 dB under it. The peak needs a normalised
 /// correlation of `LIKE`, and a perfect estimate 10 dB under the mic reaches only 0.32, so a
-/// quieter one dilutes the sum and cannot name the lag. A silent intro or a break, or a master
-/// that holds only the mic's own voice, which the estimate leaves out, is heard as nothing, and
-/// the search waits it out with the slot passing untouched.
+/// quieter one dilutes the sum and cannot name the lag.
 const ESTIMATE_SHARE: f32 = 0.1;
-/// Frames in a row not heard after which what was summed is forgotten, and the next frame heard
-/// starts the search afresh: 10 s. The reference moves on at the drift's learned rate meanwhile,
+/// An estimate under 10 steps RMS, -70 dBFS, is a master that reaches no mic: 10 dB under the
+/// quietest room floor these tests use. A silent intro or a break, or a master that holds only
+/// the mic's own voice, which the estimate leaves out, is silence, and the search waits it out
+/// with the slot passing untouched, however long it lasts.
+const QUIETEST_ESTIMATE: f32 = 100.0 * FRAME as f32;
+/// Frames since `begin` that are not silence, heard or not, after which a search that has not
+/// named the lag ends: 2 s. The slowest search in these tests named its lag 0.5 s after the
+/// master reached the mic. A mic that hears the room far louder than the filter learned, as a
+/// phone picked up does, is never heard, and would keep the slot untouched for good; so it
+/// passes untouched for 2 s at most, and silence between never adds to that.
+const MOST_AUDIBLE: u32 = 750;
+/// Frames of silence in a row after which what was summed is forgotten, and the next frame heard
+/// starts the sums afresh: 10 s. The reference moves on at the drift's learned rate meanwhile,
 /// learned to 1% (decision 0022), so at 100 ppm a sum held over 10 s of silence sits half a frame
 /// from the frames after it, and one held longer blurs the peak.
 const FORGET_AFTER: u32 = 3750;
@@ -48,7 +55,8 @@ pub enum Search {
     /// The echo arrives this many frames after the estimate: as many as it was read early is
     /// where the old stream had it.
     Found(f64),
-    /// A second heard and no lag stands out: the filter's room is not the one the mic hears.
+    /// The master reached the mic for `MOST_AUDIBLE` frames and no lag stood out: the filter's
+    /// room is not the one the mic hears, or not at the level it hears it.
     Lost,
 }
 
@@ -69,8 +77,11 @@ pub struct Realign {
     correlation: [f32; 2 * REACH],
     last_mic: f32,
     heard: u32,
-    /// Frames in a row not heard.
-    unheard: u32,
+    /// Frames since `begin` that were not silence. `forget` keeps it, so silence between them
+    /// never keeps a search open.
+    audible: u32,
+    /// Frames of silence in a row.
+    silent: u32,
     mic_energy: f32,
     estimate_energy: f32,
     looking: bool,
@@ -89,7 +100,8 @@ impl Realign {
             correlation: [0.0; 2 * REACH],
             last_mic: 0.0,
             heard: 0,
-            unheard: 0,
+            audible: 0,
+            silent: 0,
             mic_energy: 0.0,
             estimate_energy: 0.0,
             looking: false,
@@ -101,6 +113,7 @@ impl Realign {
         self.windows.fill(SILENT);
         self.estimate = [0.0; WINDOW];
         self.last_mic = 0.0;
+        self.audible = 0;
         self.forget();
         self.looking = true;
     }
@@ -108,7 +121,7 @@ impl Realign {
     fn forget(&mut self) {
         self.sums.fill(SILENT);
         self.heard = 0;
-        self.unheard = 0;
+        self.silent = 0;
         self.mic_energy = 0.0;
         self.estimate_energy = 0.0;
     }
@@ -122,8 +135,8 @@ impl Realign {
     }
 
     /// One frame: `estimate` is the filter's echo, pre-emphasised and read early, and `mic` what
-    /// the slot heard, both on the 16-bit scale. A frame where either is too quiet to judge
-    /// counts for nothing.
+    /// the slot heard, both on the 16-bit scale. A frame of silence counts for nothing, and one
+    /// whose estimate is too quiet against the mic counts only toward `MOST_AUDIBLE`.
     pub fn hear(&mut self, estimate: &[f32; FRAME], mic: &[f32; FRAME]) -> Search {
         self.estimate.copy_within(FRAME.., 0);
         self.estimate[FRAME..].copy_from_slice(estimate);
@@ -137,15 +150,19 @@ impl Realign {
         }
         let emphasised: f32 = self.mic[FRAME..].iter().map(|s| s * s).sum();
         let estimated: f32 = estimate.iter().map(|s| s * s).sum();
-        if energy < QUIETEST_MIC || estimated < ESTIMATE_SHARE * emphasised {
-            self.unheard += 1;
-            if self.unheard >= FORGET_AFTER {
+        if energy < QUIETEST_MIC || estimated < QUIETEST_ESTIMATE {
+            self.silent += 1;
+            if self.silent >= FORGET_AFTER {
                 self.forget();
             }
             return Search::Looking;
         }
+        self.silent = 0;
+        self.audible += 1;
+        if estimated < ESTIMATE_SHARE * emphasised {
+            return self.verdict(None);
+        }
         self.heard += 1;
-        self.unheard = 0;
         self.mic_energy += emphasised;
         self.estimate_energy += estimated;
         self.fft.forward(&self.mic, &mut self.spectrum);
@@ -154,12 +171,14 @@ impl Realign {
                 *sum += w.conj() * m;
             }
         }
-        if self.heard < LEAST_HEARD {
-            return Search::Looking;
-        }
-        let verdict = match self.peak() {
+        let lag = if self.heard < LEAST_HEARD { None } else { self.peak() };
+        self.verdict(lag)
+    }
+
+    fn verdict(&mut self, lag: Option<f64>) -> Search {
+        let verdict = match lag {
             Some(lag) => Search::Found(lag),
-            None if self.heard >= MOST_HEARD => Search::Lost,
+            None if self.audible >= MOST_AUDIBLE => Search::Lost,
             None => Search::Looking,
         };
         self.looking = verdict == Search::Looking;

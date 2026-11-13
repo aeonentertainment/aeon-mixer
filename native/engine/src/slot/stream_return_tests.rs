@@ -30,8 +30,9 @@ const RECOVERS_IN: f64 = 2.0;
 /// ...within this much of what it took out in the second before the phone stopped, as after a
 /// source gone silent.
 const USUAL_WITHIN_DB: f32 = 3.0;
-/// No silence in the backing.
-const NO_BREAK: Range<usize> = 0..0;
+/// A phone back with a room far louder than it learned has this long: a search's 2 s, and two
+/// more to learn the room again.
+const LOUDER_RECOVERS_IN: f64 = 4.0;
 /// The quickest a stream's packets reach the mixer here, 1.3 ms.
 const QUICKEST: usize = BLOCK / 2;
 
@@ -134,12 +135,32 @@ struct Run {
     paths: Vec<Option<u32>>,
 }
 
+/// What happens around the phone.
+#[derive(Clone)]
+struct Scene {
+    frame: usize,
+    off: Off,
+    /// The backing is silent over this.
+    quiet: Range<usize>,
+    /// Until this frame the room's echo is this many dB quieter, as a phone further from the
+    /// speakers hears it.
+    quieter: Option<(usize, f32)>,
+    end: usize,
+}
+
+impl Scene {
+    fn new(frame: usize, off: Off) -> Self {
+        Self { frame, off, quiet: 0..0, quieter: None, end: END }
+    }
+}
+
 /// A phone in a living room, 10 ms and 10 dB down with a 300 ms tail, hearing a karaoke room's
-/// backing through a slot with the canceller on. The backing is silent over `quiet`, and the run
-/// ends three seconds after both the return and the silence. The backing plays hard right and
-/// the slot hard left, so the master's left is the slot alone.
-fn run(frame: usize, off: Off, quiet: Range<usize>) -> Run {
-    let end = END.max(quiet.end + 3 * SECOND);
+/// backing through a slot with the canceller on. The backing plays hard right and the slot hard
+/// left, so the master's left is the slot alone.
+fn run(scene: Scene) -> Run {
+    let Scene { frame, off, quiet, quieter, end } = scene;
+    let (quieter_until, gain) =
+        quieter.map_or((0, 1.0), |(until, db)| (until, 10f32.powf(-db / 20.0)));
     let mut far: Vec<f32> = at_db(talker(end, 110.0, 3), -18.0)
         .iter()
         .zip(&at_db(pink_noise(end, 7), -26.0))
@@ -178,6 +199,7 @@ fn run(frame: usize, off: Off, quiet: Range<usize>) -> Run {
                     .iter()
                     .filter_map(|&(lag, gain)| Some(gain * played.get(t.checked_sub(lag)?)?))
                     .sum();
+                let echo = if t < quieter_until { gain * echo } else { echo };
                 *sample = echo + floor[t % floor.len()];
             }
             phone.hear(&heard);
@@ -226,7 +248,7 @@ fn a_phone_back_as_a_new_stream_off_its_old_alignment_has_its_echo_cancelled_aga
         .into_iter()
         .flat_map(|frame| offs.iter().map(move |&off| (frame, off)))
         .map(|(frame, off)| {
-            let run = run(frame, off, NO_BREAK);
+            let run = run(Scene::new(frame, off));
             let usual = removed(&run, 5.0, 6.0);
             let back = removed(&run, return_at + RECOVERS_IN - 1.0, return_at + RECOVERS_IN);
             let path = |at: f64| run.paths[(at * SECOND as f64) as usize / BLOCK];
@@ -262,7 +284,7 @@ fn a_phone_back_as_a_new_stream_off_its_old_alignment_has_its_echo_cancelled_aga
 fn a_phone_back_as_a_new_stream_reports_its_echo_on_every_block() {
     let learned = 5 * SECOND / BLOCK;
     for off in [Off::Later(1, 4), Off::Earlier(1, 4)] {
-        let run = run(120, off, NO_BREAK);
+        let run = run(Scene::new(120, off));
         let lost: Vec<usize> =
             (learned..run.paths.len()).filter(|&b| run.paths[b].is_none()).collect();
         assert!(lost.is_empty(), "{off:?}: no findings at blocks {lost:?}");
@@ -279,10 +301,34 @@ fn a_phone_back_during_a_silent_backing_has_its_echo_found_when_the_backing_retu
     let quiet = RETURNS - SECOND..RETURNS + 3 * SECOND;
     let plays_at = quiet.end as f64 / SECOND as f64;
     for off in [Off::Later(1, 4), Off::Earlier(1, 4)] {
-        let run = run(120, off, quiet.clone());
+        let scene =
+            Scene { quiet: quiet.clone(), end: quiet.end + 3 * SECOND, ..Scene::new(120, off) };
+        let run = run(scene);
         let usual = removed(&run, 5.0, 6.0);
         let back = removed(&run, plays_at + RECOVERS_IN - 1.0, plays_at + RECOVERS_IN);
         println!("{off:?}: {usual:.1} dB out before, {back:.1} in the second to 2 s after");
         assert!(back >= usual - USUAL_WITHIN_DB, "{off:?}: {back:.1} dB out, {usual:.1} before");
     }
+}
+
+// A phone that learned a room from the table, 15 dB quieter than the living room, comes back
+// picked up, hearing the living room itself, with the backing playing. The filter's estimate is
+// too quiet against the mic for any lag to stand out, so the search ends once the master has
+// reached the mic for 2 s, and the filter learns the room afresh. Adapted, it would have held in
+// double talk for good, the mic 15 dB over its estimate. In the second that ends 4 s after the
+// return it takes out at least what learning the living room from nothing takes out in its own
+// second second.
+#[test]
+fn a_phone_back_with_its_echo_much_louder_has_it_cancelled_again() {
+    let scene = Scene { end: RETURNS + 6 * SECOND, ..Scene::new(120, Off::Later(0, 4)) };
+    let learning = removed(&run(scene.clone()), 1.0, 2.0);
+    let back = run(Scene { quieter: Some((STOPS, 15.0)), ..scene });
+    let usual = removed(&back, 5.0, 6.0);
+    let from = RETURNS as f64 / SECOND as f64 + LOUDER_RECOVERS_IN - 1.0;
+    let back = removed(&back, from, from + 1.0);
+    println!(
+        "{usual:.1} dB out before, {back:.1} in the second to {LOUDER_RECOVERS_IN} s after the \
+         return; learning the room from nothing, {learning:.1} in its second second"
+    );
+    assert!(back >= learning, "{back:.1} dB out, {learning:.1} learning from nothing");
 }
