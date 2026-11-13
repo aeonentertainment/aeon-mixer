@@ -587,37 +587,59 @@ fn a_canceller_turned_off_after_learning_is_bit_for_bit_again() {
     assert_eq!(report.findings(), None);
 }
 
-// The guard sits ahead of the corrector and the voice, so what they do to the singer reaches it
-// only through the room. With correction at full strength and the voice two formant semitones
-// bright, the 3 dB loop above never runs away: the corrector's moving pitch and the voice's
-// formant filter break its coherence. So this loop is 6 dB over unity at 1 kHz, runs to the
-// clipper unguarded, and guarded is caught before it is ever louder than -20 dBFS.
-#[test]
-fn the_guard_catches_a_howl_with_the_corrector_and_the_voice_on() {
-    let effects = EffectParams {
+/// One room with correction at full strength and the voice two formant semitones bright, a loop
+/// 6 dB over unity at 1 kHz through an 80 ms trip: whether the guard ever caught it, and the
+/// loudest the howl came out at, in dBFS. `seed` sets the singer's pitch, from 140 to 240 Hz, the
+/// singer and the room's noise.
+fn correcting_room(seed: u32) -> (bool, f32) {
+    let frames = 10 * SECOND;
+    let mut scene =
+        Scene::new(at_db(pink_noise(frames, 7 + seed / 6), -40.0), vec![(80 * 48, 0.7)]);
+    scene.resonance = Some(peak(1000.0, 8.0, 15.0));
+    let singer = at_db(talker(frames, 140.0 + 20.0 * f64::from(seed % 6), 9 + seed), -26.0);
+    scene.singer.copy_from_slice(&singer);
+    scene.echo_cancel = false;
+    scene.effects = EffectParams {
         corrector: CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 },
         voice: VoiceParams { enabled: true, formant_semitones: 2.0 },
         ..EffectParams::default()
     };
-    let frames = 10 * SECOND;
-    let louder = vec![(80 * 48, 0.7)];
-    let mut unguarded = ringing_scene(frames);
-    unguarded.path = louder.clone();
-    unguarded.effects = effects;
-    let unguarded = howl_levels(&unguarded.run().out);
-    let loud = unguarded.iter().position(|db| *db > -20.0).expect("the loop ran away");
-    assert!(unguarded.iter().any(|db| *db > -6.0), "the loop never reached the clipper");
-    let mut scene = ringing_scene(frames);
-    scene.path = louder;
-    scene.effects = effects;
     scene.howl_guard = true;
     let run = scene.run();
-    let caught_ms = run.first_catch.expect("caught") * 1000 / SECOND;
     let loudest = howl_levels(&run.out).into_iter().fold(f32::MIN, f32::max);
-    println!(
-        "unguarded, louder than -20 dBFS at {} ms; caught at {caught_ms} ms, at most {loudest:.1} dBFS",
-        loud * 50
-    );
-    assert!(caught_ms < loud * 50, "caught at {caught_ms} ms");
-    assert!(loudest < -20.0, "reached {loudest:.1} dBFS");
+    (run.first_catch.is_some(), loudest)
+}
+
+// With correction and a +2 voice on, a loop 6 dB over unity runs away, and the corrector moves the
+// howl as it grows. One room is one draw of a chaotic loop: the singer, the noise and each
+// platform's rounding decide to a tenth of a dB when the guard sees it, so a single room passes or
+// fails by chance. The guard is held to a rate over 96 seeded rooms instead. Over 480 rooms on
+// macOS, the guard before this one let 46 % of them pass -20 dBFS and never caught 1.7 %; this one
+// lets 20 % pass and catches every one. Of these 96 it lets 17 pass against 38. The bound, 33 of
+// 96, sits 3.6 standard deviations over 20 % and 2.2 under the old guard's 46 %. One room in 96
+// may go uncaught: 1 of the 480 does with a corrector that reads every 5 ms.
+#[test]
+fn the_guard_catches_howls_with_the_corrector_and_the_voice_on() {
+    const ROOMS: u32 = 96;
+    const MOST_LOUD: usize = 33;
+    const MOST_UNCAUGHT: usize = 1;
+    const THREADS: u32 = 8;
+    let rooms: Vec<(bool, f32)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..THREADS)
+            .map(|worker| {
+                scope.spawn(move || {
+                    (1..=ROOMS)
+                        .filter(|seed| seed % THREADS == worker)
+                        .map(correcting_room)
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers.into_iter().flat_map(|worker| worker.join().expect("a room panicked")).collect()
+    });
+    let loud = rooms.iter().filter(|(_, loudest)| *loudest > -20.0).count();
+    let uncaught = rooms.iter().filter(|(caught, _)| !caught).count();
+    println!("{loud} of {ROOMS} rooms louder than -20 dBFS, {uncaught} never caught");
+    assert!(uncaught <= MOST_UNCAUGHT, "{uncaught} rooms never caught");
+    assert!(loud <= MOST_LOUD, "{loud} of {ROOMS} rooms louder than -20 dBFS");
 }

@@ -34,6 +34,79 @@ fn a_voice_passes_untouched() {
     assert!(out.iter().zip(&voice).all(|(o, v)| o.to_bits() == v.to_bits()));
 }
 
+/// A melody of `notes`, each a MIDI note and its level in dBFS, held `note_ms` with `breath_ms`
+/// of silence after it: `harmonics` gives each partial's level against the fundamental, in dB,
+/// and `vibrato_cents` a 5.5 Hz vibrato's depth either way.
+fn melody(
+    notes: &[(f32, f32)],
+    note_ms: usize,
+    breath_ms: usize,
+    harmonics: &[f32],
+    vibrato_cents: f32,
+) -> Vec<f32> {
+    let rate = RATE as usize;
+    let (note, breath) = (note_ms * rate / 1000, breath_ms * rate / 1000);
+    let mut out = Vec::with_capacity(notes.len() * (note + breath));
+    let mut phase = 0.0f32;
+    for &(midi, level_db) in notes {
+        let amplitude = 10f32.powf(level_db / 20.0);
+        for i in 0..note {
+            let t = i as f32 / RATE as f32;
+            let cents = vibrato_cents * (std::f32::consts::TAU * 5.5 * t).sin();
+            let hz = 440.0 * 2f32.powf((midi - 69.0 + cents / 100.0) / 12.0);
+            phase = (phase + hz / RATE as f32).fract();
+            // Each note fades in and out over 10 ms, as a voice does
+            let edge = (i.min(note - i) as f32 / (0.01 * RATE as f32)).min(1.0);
+            let partials: f32 = std::iter::once(0.0)
+                .chain(harmonics.iter().copied())
+                .enumerate()
+                .map(|(h, db)| {
+                    10f32.powf(db / 20.0) * (std::f32::consts::TAU * (h + 1) as f32 * phase).sin()
+                })
+                .sum();
+            out.push(amplitude * edge * partials);
+        }
+        out.resize(out.len() + breath, 0.0);
+    }
+    out
+}
+
+// A whistled phrase is a tone with no harmonic at all, and it may climb a semitone a note while it
+// swells. E7 to B7 a semitone at a time, legato, 300 ms notes with 20 ms between, from -36 dBFS up
+// 2 dB a note to -22, is a melody, not a howl, and passes bit for bit. Followed through each
+// semitone it grew 6 dB in three notes and was ducked twice.
+#[test]
+fn a_whistled_melody_climbing_and_swelling_is_left_alone() {
+    let notes: Vec<(f32, f32)> =
+        (0..8).map(|n| (100.0 + n as f32, -36.0 + 2.0 * n as f32)).collect();
+    let whistle = melody(&notes, 300, 20, &[], 0.0);
+    let (out, guard) = guarded(whistle.clone());
+    assert_eq!(guard.catches(), 0, "a whistled melody was ducked");
+    assert!(out.iter().zip(&whistle).all(|(o, w)| o.to_bits() == w.to_bits()));
+}
+
+// The bug hunt's case: E7 at -30 dBFS for 400 ms, a 20 ms breath, then F7 6 dB louder. Two notes,
+// each steady, are not a loop running away.
+#[test]
+fn a_louder_next_note_a_semitone_up_is_left_alone() {
+    let whistle = melody(&[(100.0, -30.0), (101.0, -24.0)], 400, 20, &[], 0.0);
+    let (_, guard) = guarded(whistle);
+    assert_eq!(guard.catches(), 0, "the louder second note was ducked");
+}
+
+// A soprano's high vowel has its second harmonic only 15 dB down, a third 20 dB down, and a
+// 5.5 Hz vibrato 25 cents either way. A5 to E6 a semitone a note, legato, 400 ms notes with 20 ms
+// between, from -30 dBFS up 2 dB a note to -16, is left alone. At A5 a semitone is about a bin, so
+// the guard that followed a bin at a time ducked this too.
+#[test]
+fn a_soprano_climbing_and_swelling_is_left_alone() {
+    let notes: Vec<(f32, f32)> =
+        (0..8).map(|n| (81.0 + n as f32, -30.0 + 2.0 * n as f32)).collect();
+    let soprano = melody(&notes, 400, 20, &[-15.0, -20.0], 25.0);
+    let (_, guard) = guarded(soprano);
+    assert_eq!(guard.catches(), 0, "a soprano's phrase was ducked");
+}
+
 // A steady tone, a whistle or a held pure note, is not running away either. The guard tells a
 // howl by its growth, so a tone that holds still at any level is left alone.
 #[test]
@@ -68,6 +141,147 @@ fn a_tone_that_runs_away_is_ducked_and_ducked_again() {
     let ducked = db(rms(&out[after.clone()])) - db(rms(&tone[after]));
     assert!((ducked + 12.0).abs() < 0.5, "ducked by {ducked:.1} dB");
     assert!(guard.catches() > 1, "caught {} times", guard.catches());
+}
+
+// A pitch corrector that hears a howl retunes it, so a loop through a correcting slot can climb
+// a semitone at a time while it grows. The guard follows it across each step, more than a bin at
+// 1 kHz, and catches it as it would a howl on one pitch: within 400 ms, before it passes -30 dBFS.
+#[test]
+fn a_howl_a_corrector_moves_a_semitone_at_a_time_is_caught() {
+    let frames = 2 * RATE as usize;
+    let level = |i: usize| -50.0 + 25.0 * i as f32 / RATE as f32;
+    let step = RATE as usize / 10;
+    let mut phase = 0.0f32;
+    let tone = (0..frames)
+        .map(|i| {
+            let hz = 1000.0 * 2f32.powf((i / step) as f32 / 12.0);
+            phase = (phase + hz / RATE as f32).fract();
+            10f32.powf(level(i) / 20.0) * (std::f32::consts::TAU * phase).sin()
+        })
+        .collect();
+    let (_, catches) = guarded_catching(tone);
+    let caught = *catches.first().expect("caught");
+    let caught_ms = caught as f32 * 1000.0 / RATE as f32;
+    println!("caught at {caught_ms:.0} ms, at {:.1} dBFS", level(caught));
+    assert!(caught_ms < 400.0 && level(caught) < -30.0, "caught at {caught_ms:.0} ms");
+}
+
+// Through a correcting slot a howl can lose its shape for part of each trip round the loop, the
+// moments the corrector moves it. A tone that grows as a 2 dB loop does but drops out for 55 ms
+// of every 100, three analyses at a time, is still one tone, caught within 600 ms before it passes
+// -30 dBFS.
+#[test]
+fn a_howl_that_drops_out_each_trip_is_caught() {
+    let frames = 2 * RATE as usize;
+    let level = |i: usize| -50.0 + 25.0 * i as f32 / RATE as f32;
+    let trip = RATE as usize / 10;
+    let gap = trip * 55 / 100;
+    let tone = sine(1200.0, frames, level)
+        .into_iter()
+        .enumerate()
+        .map(|(i, sample)| if i % trip < trip - gap { sample } else { 0.0 })
+        .collect();
+    let (_, catches) = guarded_catching(tone);
+    let caught = *catches.first().expect("caught");
+    let caught_ms = caught as f32 * 1000.0 / RATE as f32;
+    println!("caught at {caught_ms:.0} ms, at {:.1} dBFS", level(caught));
+    assert!(caught_ms < 600.0 && level(caught) < -30.0, "caught at {caught_ms:.0} ms");
+}
+
+// A howl can start from a note a tone already held: a whistle at 1.2 kHz held 500 ms at -40 dBFS,
+// then a loop taking it a semitone up and growing 25 dB a second from there. The step starts the
+// new note's track at once, so the howl is caught within 400 ms of it, before it passes -30 dBFS.
+#[test]
+fn a_howl_that_starts_from_a_held_note_is_caught() {
+    let rate = RATE as usize;
+    let step = rate / 2;
+    let level =
+        |i: usize| if i < step { -40.0 } else { -40.0 + 25.0 * (i - step) as f32 / RATE as f32 };
+    let mut phase = 0.0f32;
+    let tone = (0..2 * rate)
+        .map(|i| {
+            let hz = if i < step { 1200.0 } else { 1200.0 * 2f32.powf(1.0 / 12.0) };
+            phase = (phase + hz / RATE as f32).fract();
+            10f32.powf(level(i) / 20.0) * (std::f32::consts::TAU * phase).sin()
+        })
+        .collect();
+    let (_, catches) = guarded_catching(tone);
+    let caught = *catches.first().expect("caught");
+    let after_ms = (caught - step) as f32 * 1000.0 / RATE as f32;
+    println!("caught {after_ms:.0} ms after the step, at {:.1} dBFS", level(caught));
+    assert!(after_ms < 400.0 && level(caught) < -30.0, "caught {after_ms:.0} ms after the step");
+}
+
+// A sung vibrato is wider than the quarter semitone a note is held to: 5.5 Hz at 60 and at 100
+// cents either way. A soprano's legato phrase with it, A5 to E6 a semitone a note, 400 ms notes
+// with 20 ms between, from -30 dBFS up 2 dB a note, is still a melody and is left alone.
+#[test]
+fn a_soprano_with_a_wide_vibrato_is_left_alone() {
+    let notes: Vec<(f32, f32)> =
+        (0..8).map(|n| (81.0 + n as f32, -30.0 + 2.0 * n as f32)).collect();
+    for cents in [60.0, 100.0] {
+        let (_, guard) = guarded(melody(&notes, 400, 20, &[-15.0, -20.0], cents));
+        assert_eq!(guard.catches(), 0, "a soprano with a {cents} cent vibrato was ducked");
+    }
+}
+
+/// A major scale up an octave from `tonic`, one MIDI note a step, `step_db` louder each note from
+/// `from_db`.
+fn scale_run(tonic: f32, from_db: f32, step_db: f32) -> Vec<(f32, f32)> {
+    [0.0, 2.0, 4.0, 5.0, 7.0, 9.0, 11.0, 12.0]
+        .iter()
+        .enumerate()
+        .map(|(n, degree)| (tonic + degree, from_db + step_db * n as f32))
+        .collect()
+}
+
+// A soprano's melisma: sixteenths at 120 bpm, 125 ms a note, and at 160 bpm, 94 ms, a scale run up
+// an octave from A5, legato, from -30 dBFS up 1 dB a note, its second harmonic 15 dB down and its
+// third 20. Notes that short never hold a pitch long enough to start afresh, so the guard follows
+// the run, and a run climbs in steps, not at a loop's rate. It is left alone.
+#[test]
+fn a_soprano_melisma_getting_louder_is_left_alone() {
+    for note_ms in [125, 94] {
+        let run = melody(&scale_run(81.0, -30.0, 1.0), note_ms, 0, &[-15.0, -20.0], 0.0);
+        let (_, guard) = guarded(run);
+        assert_eq!(guard.catches(), 0, "a melisma of {note_ms} ms notes was ducked");
+    }
+}
+
+// The same run whistled, C7 to C8, 125 ms and 94 ms a note, from -36 dBFS up 1 dB a note, with no
+// harmonic at all, is left alone.
+#[test]
+fn a_whistled_run_getting_louder_is_left_alone() {
+    for note_ms in [125, 94] {
+        let run = melody(&scale_run(96.0, -36.0, 1.0), note_ms, 0, &[], 0.0);
+        let (_, guard) = guarded(run);
+        assert_eq!(guard.catches(), 0, "a whistled run of {note_ms} ms notes was ducked");
+    }
+}
+
+// The guard's known limit: a run it follows note to note, where no note is held long enough to
+// start afresh, and its crescendo counted across the notes. A whistled chromatic run E7 to B7 in
+// 94 ms notes, from -36 dBFS up 1 dB a note, is ducked 12 dB once, 682 ms in, and 2 dB a note is
+// ducked twice, to 24 dB, from 309 ms. A 50 ms grace note a semitone under a phrase climbing E7 to
+// B7 in 250 ms notes, up 2 dB a note, is followed into the whole phrase and ducked once, 832 ms in.
+// The guard before ducked none of these, and the issue for real rooms to settle is #139. When a
+// change stops these ducks, this test says so and decision 0020's limit is rewritten with it.
+#[test]
+fn a_fast_run_or_a_phrase_after_a_grace_note_is_ducked() {
+    let ducks = |signal: Vec<f32>| {
+        let (_, catches) = guarded_catching(signal);
+        catches.iter().map(|frame| frame * 1000 / RATE as usize).collect::<Vec<_>>()
+    };
+    let run = |step_db: f32| -> Vec<(f32, f32)> {
+        (0..8).map(|n| (100.0 + n as f32, -36.0 + step_db * n as f32)).collect()
+    };
+    let one_db = ducks(melody(&run(1.0), 94, 0, &[], 0.0));
+    let two_db = ducks(melody(&run(2.0), 94, 0, &[], 0.0));
+    let mut phrase = melody(&[(99.0, -36.0)], 50, 0, &[], 0.0);
+    phrase.extend(melody(&run(2.0), 250, 0, &[], 0.0));
+    let grace = ducks(phrase);
+    println!("ducked at {one_db:?}, {two_db:?} and {grace:?} ms");
+    assert_eq!((one_db.len(), two_db.len(), grace.len()), (1, 2, 1));
 }
 
 // Ducking, the guard is a gain and nothing more: a click after a catch leaves on the very sample

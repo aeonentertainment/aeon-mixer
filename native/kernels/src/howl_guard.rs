@@ -102,6 +102,11 @@ impl HowlGuard {
     fn follow(&mut self, peak: Option<Peak>) -> bool {
         if let Some(track) = &mut self.track {
             match peak {
+                // A new note starts its own track at once, not after the old one has gone unseen
+                Some(peak) if track.continues(&peak) && track.is_new_note(&peak) => {
+                    self.track = Some(Track::new(peak));
+                    return false;
+                }
                 Some(peak) if track.continues(&peak) => return track.extend(peak),
                 _ if track.miss() => return false,
                 _ => self.track = None,
