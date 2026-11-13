@@ -867,8 +867,9 @@ ring into the jitter buffer at the top of each block.
   reports. From the fifth second it takes out within 1 dB of the same mic on the output's clock at
   a 128-frame input period, and within 3.3 dB at 480, in the second that holds a correction. A
   128-frame input's whole-period correction, every 27 s at 100 ppm, costs its second 6 to 7 dB. A
-  lag the delay finder names is judged only once the source has gone three seconds without a
-  splice.
+  lag the delay finder names is judged only once the source's recent splices, halving every three
+  seconds, come to less than 64 frames: a 128-frame correction holds it about three seconds, and a
+  32-frame one or a finer step's few frames never do.
   Decision [0022](decisions/0022-following-a-mic-on-its-own-clock.md) has the numbers.
 - A slot can be recorded, so a problem heard in a real room can be replayed offline (8.9). With
   `recordSlot` on, the slot's receiver hands every datagram it reads, RTCP and all, to a `Tap`

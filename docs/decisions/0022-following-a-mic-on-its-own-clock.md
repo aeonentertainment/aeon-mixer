@@ -61,8 +61,13 @@ named lags up to 259 frames from where the splices put the path, more than the 1
 takes for the same path, and the filter started over: up to 26.5 dB under the same mic on the
 output's clock, and more than 3 dB under for eight seconds. The finder stayed that far off for up
 to two seconds, and 1.6 s of waiting was not enough. So the canceller judges a lag the finder names
-only once the source has gone three seconds without a splice, and a lag named meanwhile is judged
-then, not dropped.
+only once the source's recent splices, halving every three seconds, come to less than 64 frames,
+and a lag named meanwhile is judged then, not dropped. A 128-frame correction holds the finder about
+three seconds. A 480-frame mic's 32-frame corrections never hold it, and neither do the few frames
+a second of a finer step, such as a 100-frame mic's under 128-frame callbacks. Held for three
+seconds after every splice instead, a source that spliced 4 frames every 0.8 s never had a new path
+found: its echo came out 0 to 1 dB down for the eight seconds after its path moved, where it now
+comes out 17.6 dB down by the ninth second.
 
 ## The loop
 
