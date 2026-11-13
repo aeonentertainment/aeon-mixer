@@ -45,6 +45,8 @@ pub trait Source: Send {
 pub(crate) mod fixtures {
     use std::f32::consts::TAU;
 
+    use rtrb::Producer;
+
     use super::Source;
     use crate::block::RATE;
 
@@ -85,6 +87,42 @@ pub(crate) mod fixtures {
     impl Source for Panics {
         fn pull(&mut self, _out: &mut [f32]) {
             panic!("a source misbehaved");
+        }
+    }
+
+    /// A source with a tap on what it hands the slot: what the slot plays with the canceller off,
+    /// which hands its source over bit for bit.
+    pub struct Tapped {
+        pub inner: Box<dyn Source>,
+        pub handed: Producer<f32>,
+    }
+
+    impl Source for Tapped {
+        fn pull(&mut self, out: &mut [f32]) {
+            self.inner.pull(out);
+            for sample in out.iter() {
+                let _ = self.handed.push(*sample);
+            }
+        }
+
+        fn reset(&mut self) {
+            self.inner.reset();
+        }
+
+        fn restart(&mut self) {
+            self.inner.restart();
+        }
+
+        fn keeps_its_sender(&self) -> bool {
+            self.inner.keeps_its_sender()
+        }
+
+        fn latency_frames(&self) -> u32 {
+            self.inner.latency_frames()
+        }
+
+        fn delay(&self) -> kernels::SourceDelay {
+            self.inner.delay()
         }
     }
 }

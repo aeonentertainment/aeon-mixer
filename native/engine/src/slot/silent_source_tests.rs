@@ -4,8 +4,9 @@
 
 use assert_no_alloc::{assert_no_alloc, permit_alloc};
 use kernels::fixtures::{at_db, db, pink_noise, rms, room, talker};
-use rtrb::{Producer, RingBuffer};
+use rtrb::RingBuffer;
 
+use super::source::fixtures::Tapped;
 use super::*;
 use crate::backing::{Backing, Planar, Stems, Transport};
 use crate::command::event_ring;
@@ -94,42 +95,6 @@ impl Feed {
             }
             Self::Capture(_) | Self::Push(_) => {}
         }
-    }
-}
-
-/// A source with a tap on what it hands the slot: what the slot plays with the canceller off,
-/// which hands its source over bit for bit.
-struct Tapped {
-    inner: Box<dyn Source>,
-    handed: Producer<f32>,
-}
-
-impl Source for Tapped {
-    fn pull(&mut self, out: &mut [f32]) {
-        self.inner.pull(out);
-        for sample in out.iter() {
-            let _ = self.handed.push(*sample);
-        }
-    }
-
-    fn reset(&mut self) {
-        self.inner.reset();
-    }
-
-    fn restart(&mut self) {
-        self.inner.restart();
-    }
-
-    fn keeps_its_sender(&self) -> bool {
-        self.inner.keeps_its_sender()
-    }
-
-    fn latency_frames(&self) -> u32 {
-        self.inner.latency_frames()
-    }
-
-    fn delay(&self) -> kernels::SourceDelay {
-        self.inner.delay()
     }
 }
 

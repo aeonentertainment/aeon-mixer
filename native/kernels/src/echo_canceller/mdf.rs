@@ -264,6 +264,34 @@ impl Mdf {
         }
     }
 
+    /// The filter's estimate of the echo of everything but the mic's own voice, this frame,
+    /// pre-emphasised, into `echo`, learning nothing and cancelling nothing: `out` is `mic`. For
+    /// a reference whose alignment is in question, which `refill` sets right once it is known.
+    /// The mic's own voice is left out because it is the mic itself, played back: it would
+    /// correlate with the mic at every lag the room has.
+    pub fn predict(
+        &mut self,
+        mic: &[f32; FRAME],
+        reference: &[f32; WINDOW],
+        others: &[f32; WINDOW],
+        echo: &mut [f32; FRAME],
+        out: &mut [f32; FRAME],
+    ) -> Frame {
+        self.x.rotate_right(1);
+        self.fft.forward(reference, &mut self.x[0]);
+        self.others.rotate_right(1);
+        self.fft.forward(others, &mut self.others[0]);
+        spectral_mul_accum(&self.others[..self.partitions], &self.foreground, &mut self.big_y);
+        self.fft.inverse(&self.big_y, &mut self.e);
+        echo.copy_from_slice(&self.e[FRAME..]);
+        out.copy_from_slice(mic);
+        let s = &mut self.state;
+        s.mem_d = mic[FRAME - 1];
+        s.mem_e = mic[FRAME - 1];
+        self.big_e = SILENT;
+        Frame { adapted: s.adapted, reset: false, unheard: true }
+    }
+
     /// Lets the filter run without learning for `frames` frames: while the reference may be
     /// misaligned, what it would learn is wrong.
     pub fn hold(&mut self, frames: u32) {
