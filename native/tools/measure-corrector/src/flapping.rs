@@ -21,8 +21,13 @@ pub struct Flapping {
     pub drops: usize,
     /// Correction taking the note back.
     pub returns: usize,
-    /// Of the drops, those whose reading failed the voicing gate: unsure, or under 82 Hz.
-    pub drops_at_the_gate: usize,
+    /// Drops by the reading they came at: confidence under the corrector's bar, a sure reading
+    /// under 82 Hz, and a sure reading the gate passes, where the corrector's own reading or its
+    /// hold let go. The corrector votes with its own readings, which may not be the published one,
+    /// so the split says what a host saw, not why the kernel decided.
+    pub drops_unsure: usize,
+    pub drops_low: usize,
+    pub drops_sure: usize,
     /// Readings inside notes that fail the gate, whether or not correction let go on them.
     pub unsure_readings: usize,
 }
@@ -52,7 +57,13 @@ pub fn measure(readings: &[Point], engaged: &[bool], notes: &[MeantNote]) -> Fla
             match (was_acting, acting) {
                 (true, false) => {
                     flapping.drops += 1;
-                    flapping.drops_at_the_gate += usize::from(!passes_gate(point));
+                    if point.confidence < VOICED_CONFIDENCE {
+                        flapping.drops_unsure += 1;
+                    } else if point.hz < LOWEST_CORRECTED_HZ {
+                        flapping.drops_low += 1;
+                    } else {
+                        flapping.drops_sure += 1;
+                    }
                 }
                 (false, true) => flapping.returns += 1,
                 (true, true) | (false, false) => {}
@@ -72,7 +83,9 @@ impl Flapping {
             "acting_pct": share(self.acting, self.readings),
             "switches_per_second": per_second(self.drops + self.returns),
             "drops_per_second": per_second(self.drops),
-            "drops_at_the_gate_pct": share(self.drops_at_the_gate, self.drops),
+            "drops_unsure_pct": share(self.drops_unsure, self.drops),
+            "drops_under_82_hz_pct": share(self.drops_low, self.drops),
+            "drops_at_a_sure_reading_pct": share(self.drops_sure, self.drops),
             "unsure_readings_per_second": per_second(self.unsure_readings),
         })
     }
@@ -114,7 +127,7 @@ mod tests {
         let flapping = measure(&readings, &engaged, &notes);
         assert!((flapping.note_seconds - 2.0).abs() < 1e-9);
         assert_eq!((flapping.drops, flapping.returns), (3, 3));
-        assert_eq!(flapping.drops_at_the_gate, 2);
+        assert_eq!((flapping.drops_unsure, flapping.drops_low, flapping.drops_sure), (2, 0, 1));
         assert_eq!(flapping.unsure_readings, 6);
     }
 }

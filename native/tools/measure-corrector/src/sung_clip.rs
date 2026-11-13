@@ -113,7 +113,8 @@ pub fn load_take(name: &str, wav: &Path, guide: &Path) -> Result<(SungClip, f64)
     let samples = decode_mono(wav)?;
     let text = std::fs::read_to_string(guide).map_err(|e| format!("{}: {e}", guide.display()))?;
     let (key, notes) = parse_guide_json(&text)?;
-    let offset = best_offset_ms(&samples, &notes, 3000.0);
+    let offset = best_offset_ms(&samples, &notes, 3000.0)
+        .ok_or_else(|| format!("{name}: too little singing to line up with its guide"))?;
     let notes = notes
         .into_iter()
         .map(|note| MeantNote {
@@ -134,8 +135,9 @@ const OFFSET_STEP_MS: f64 = 10.0;
 
 /// Where in the take `notes` line up best, in 10 ms steps: the offset with the lowest median miss
 /// over the notes that have singing under them, weighing notes covered so an empty stretch of the
-/// take cannot win by having one lucky note.
-pub fn best_offset_ms(samples: &[f32], notes: &[MeantNote], search_ms: f64) -> f64 {
+/// take cannot win by having one lucky note. None when no offset has singing under a note to
+/// score, as for a take with almost no voice in it.
+pub fn best_offset_ms(samples: &[f32], notes: &[MeantNote], search_ms: f64) -> Option<f64> {
     let points = crate::contour::read(samples, 0);
     let voiced: Vec<_> = points.iter().filter(|point| point.voiced()).collect();
     let steps = (search_ms / OFFSET_STEP_MS) as i64;
@@ -151,7 +153,7 @@ pub fn best_offset_ms(samples: &[f32], notes: &[MeantNote], search_ms: f64) -> f
                 misses.push(cents_off_class(point.midi(), f64::from(note.midi)).abs());
             }
         }
-        if misses.len() < voiced.len() / 4 {
+        if misses.is_empty() || misses.len() < voiced.len() / 4 {
             continue;
         }
         scores.push((offset, median(&misses)));
@@ -163,10 +165,8 @@ pub fn best_offset_ms(samples: &[f32], notes: &[MeantNote], search_ms: f64) -> f
 /// score is a run, not a point: the middle of that run is where the notes line up. The run grows
 /// from the lowest score both ways through unbroken offsets, so a near-tie elsewhere cannot take it
 /// and it never spans an offset the coverage check turned away.
-fn centre_of_lowest_run(scores: &[(f64, f64)]) -> f64 {
-    let Some(best) = (0..scores.len()).min_by(|&a, &b| scores[a].1.total_cmp(&scores[b].1)) else {
-        return 0.0;
-    };
+fn centre_of_lowest_run(scores: &[(f64, f64)]) -> Option<f64> {
+    let best = (0..scores.len()).min_by(|&a, &b| scores[a].1.total_cmp(&scores[b].1))?;
     let tied = |index: usize| scores[index].1 <= scores[best].1 + TIED_CENTS;
     let joined = |a: usize, b: usize| scores[b].0 - scores[a].0 <= OFFSET_STEP_MS;
     let mut low = best;
@@ -177,7 +177,7 @@ fn centre_of_lowest_run(scores: &[(f64, f64)]) -> f64 {
     while high + 1 < scores.len() && tied(high + 1) && joined(high, high + 1) {
         high += 1;
     }
-    (scores[low].0 + scores[high].0) / 2.0
+    Some((scores[low].0 + scores[high].0) / 2.0)
 }
 
 #[cfg(test)]
@@ -201,8 +201,17 @@ mod tests {
                 .find(|note| note.start_ms <= sung && sung < note.end_ms)
                 .map_or(0.0, |note| 440.0 * 2f64.powf((f64::from(note.midi) - 69.0) / 12.0))
         });
-        let offset = best_offset_ms(&samples, &notes, 1000.0);
+        let offset = best_offset_ms(&samples, &notes, 1000.0).expect("a take with singing");
         assert!((offset - 500.0).abs() <= 30.0, "found the take at {offset} ms");
+    }
+
+    // A take with no voice in it has nothing to line up, so it has no offset at all rather than
+    // the first one tried
+    #[test]
+    fn a_silent_take_has_no_offset() {
+        let notes = [MeantNote { midi: 57, start_ms: 200.0, end_ms: 700.0 }];
+        assert_eq!(best_offset_ms(&vec![0.0; 48_000], &notes, 3000.0), None);
+        assert_eq!(centre_of_lowest_run(&[]), None);
     }
 
     // Tied offsets mean a held note fits anywhere along them: the middle of the run that holds the
@@ -211,12 +220,12 @@ mod tests {
     #[test]
     fn the_offset_is_the_middle_of_the_lowest_unbroken_run() {
         let tied = [(-20.0, 9.0), (-10.0, 3.0), (0.0, 3.0), (10.0, 3.5), (20.0, 3.2), (30.0, 9.0)];
-        assert_eq!(centre_of_lowest_run(&tied), 5.0);
+        assert_eq!(centre_of_lowest_run(&tied), Some(5.0));
         let apart = [(-30.0, 3.0), (-20.0, 3.0), (40.0, 3.0), (50.0, 3.0)];
-        assert_eq!(centre_of_lowest_run(&apart), -25.0);
+        assert_eq!(centre_of_lowest_run(&apart), Some(-25.0));
         // A chorus sung twice fits a wrong offset nearly as well: the true minimum's run wins
         let near_tie = [(-200.0, 10.6), (-190.0, 12.0), (50.0, 10.0), (60.0, 10.0), (70.0, 10.2)];
-        assert_eq!(centre_of_lowest_run(&near_tie), 60.0);
+        assert_eq!(centre_of_lowest_run(&near_tie), Some(60.0));
     }
 
     #[test]
