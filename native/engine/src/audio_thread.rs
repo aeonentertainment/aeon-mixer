@@ -424,7 +424,7 @@ mod tests {
         const OPENED: u32 = 480;
         const MOVED: u32 = 1_440;
         const BEFORE_STORE: usize = 3;
-        let notes: [(u64, u64); 2] = [(24_100, 36_100), (72_100, 120_100)];
+        let notes = [(24_100, 36_100), (72_100, 120_100)];
         let blocks = |seconds: usize| seconds * SECOND / BLOCK;
 
         let (mut audio, mut controls) = AudioThread::new();
