@@ -127,9 +127,13 @@ sets is where the delay ends up.
 
 ## What this does not do
 
-- **A phone.** A jitter buffer that steps its delay reports it in its latency, as before. A phone on
-  its own clock drifts between steps, and the loop follows that drift as it does a house mic's, but
-  no test here measures a phone's drift.
+- **Measure a phone.** A jitter buffer that steps its delay reports it in its latency, as before, and
+  its skew corrections now report as splices: each drops or conceals a step, 120 frames on 2.5 ms
+  frames, and the playout delay holds. Unreported, the loop would carry its offset across a step
+  that sits inside what the finder takes for the same path; in the kernel test that left the slot
+  2.3 to 3.3 dB louder than it went in, and reported it costs 0.2 dB. A phone on its own clock
+  drifts between steps, and the loop follows that as it does a house mic's, but no test here runs a
+  phone's drift through its jitter buffer and the canceller together.
 - **A splice in the canceller's own block.** The sweep inside a spliced block stays. A 480-frame
   input's 32-frame correction costs its second up to 3.3 dB, every 6.7 s at 100 ppm. A 128-frame
   input's whole-period correction costs its second 6.2 to 7.1 dB, every 27 s at 100 ppm and 13 s at

@@ -772,7 +772,8 @@ ring into the jitter buffer at the top of each block.
   2.5 ms as the delay holds when a frame is longer. When every packet came at least a step early,
   or the earliest did once the delay has fallen, the anchor moves a step earlier and that step is
   dropped; when even the earliest came a step late, or half the delay's room over a block late
-  when that is less, it moves a step later and that step is concealed. Either counts as a resync.
+  when that is less, it moves a step later and that step is concealed. Either counts as a resync,
+  and either is a splice in the source's `delay()`, since it moves the echo and not the latency.
   Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
   keeps the FIFO at one frame.
 - A new SSRC, a gap over a second on either clock, or `resetSlot` starts a new stream: the
