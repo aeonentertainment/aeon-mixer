@@ -23,7 +23,8 @@ pub struct SlotStats {
     /// RFC 3550 interarrival jitter, in milliseconds.
     pub jitter_ms: f32,
     /// The delay the stream's earliest packets wait now, in milliseconds. Zero for a `push` slot,
-    /// which has no jitter buffer.
+    /// which has no jitter buffer. For a `capture` slot, how long its mic's samples wait from the
+    /// input to the pull, the input's period included.
     pub playout_delay_ms: f32,
 }
 

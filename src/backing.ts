@@ -11,6 +11,26 @@ import { finiteIn, integerIn } from "./validate.ts";
 
 export type BackingConfig = NonNullable<MixerConfig["backing"]>;
 
+/**
+ * `config` checked, before anything opens: a mixer runs this ahead of its native mixer, so bad
+ * backing settings reject `createMixer` with no port bound and no input held.
+ */
+export function backingSettings(config: BackingConfig) {
+  return {
+    input: toInput(config),
+    stopAtFrames:
+      config.stopAtMs === undefined
+        ? undefined
+        : msToFrames(finiteIn("stopAtMs", config.stopAtMs, 0, Number.MAX_SAFE_INTEGER)),
+    stemGains: {
+      instrumental: finiteIn("stemGains.instrumental", config.stemGains.instrumental, 0, 4),
+      guide: finiteIn("stemGains.guideVocals", config.stemGains.guideVocals, 0, 4),
+    },
+  };
+}
+
+export type BackingSettings = ReturnType<typeof backingSettings>;
+
 /** `stopAtMs` fades the stems out over this before falling silent: docs/design.md section 4. */
 export const STOP_FADE_MS = 3000;
 
@@ -45,26 +65,20 @@ export class Backing {
   readonly #graph: NativeMixer;
 
   /**
-   * Checks `config` and starts its render on the worker thread. The stems move into `graph` as
+   * Starts the render of checked `settings` on the worker thread. The stems move into `graph` as
    * soon as the job is done, so a render that fails is reported then and not at `start`.
    */
   constructor(
     host: RenderHost,
-    config: BackingConfig,
+    settings: BackingSettings,
     graph: NativeMixer,
     report: { progress(fraction: number): void; failed(error: Error): void },
   ) {
     this.#graph = graph;
-    const input = toInput(config);
+    const { input, stopAtFrames, stemGains } = settings;
     this.speed = input.speed;
-    this.stopAtFrames =
-      config.stopAtMs === undefined
-        ? undefined
-        : msToFrames(finiteIn("stopAtMs", config.stopAtMs, 0, Number.MAX_SAFE_INTEGER));
-    this.#stemGains = {
-      instrumental: finiteIn("stemGains.instrumental", config.stemGains.instrumental, 0, 4),
-      guide: finiteIn("stemGains.guideVocals", config.stemGains.guideVocals, 0, 4),
-    };
+    this.stopAtFrames = stopAtFrames;
+    this.#stemGains = stemGains;
     this.#render = host.native.startRender(input);
     // The final 1 is announced once `rendered` has settled, so a host that starts the mixer from
     // its renderProgress listener finds the stems ready

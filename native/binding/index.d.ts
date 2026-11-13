@@ -25,15 +25,22 @@ export declare class Engine {
    */
   constructor(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void)
   /**
-   * Builds a mixer with one slot per kind, in order: `"rtp"`, `"l16"` or `"push"`. The rtp
-   * and l16 slots bind their ports here and report them through `Mixer.port`; a return stream
-   * gets its socket and send task here too.
+   * Builds a mixer with one slot per input, in order: `"rtp"`, `"l16"`, `"push"` or
+   * `"capture"`. The rtp and l16 slots bind their ports here and report them through
+   * `Mixer.port`, the capture slots start their inputs here, and a return stream gets its socket
+   * and send task here too.
    */
-  createMixer(kinds: Array<string>, rtpReturn?: RtpReturnInput | undefined | null): Mixer
+  createMixer(slots: Array<SlotInput>, rtpReturn?: RtpReturnInput | undefined | null): Mixer
   /** The output playing now. After a move the events thread sends the same as `outputChanged`. */
   get output(): OutputInfo
   /** The outputs this OS offers, the default marked. Empty on the offline and timer clocks. */
   outputs(): Array<OutputEntry>
+  /**
+   * The inputs this OS offers, the default marked: the devices a `capture` slot may name. Empty
+   * on the offline clock, which opens none. A box on the timer clock plays nothing locally but
+   * may still have a mic plugged in.
+   */
+  inputs(): Array<OutputEntry>
   /** Offline clock only: renders `blocks` blocks and returns them as interleaved stereo. */
   pump(blocks: number): Float32Array
   /** Writes one slot of the snapshot and publishes the whole of it. */
@@ -74,7 +81,7 @@ export declare class Engine {
 export declare class Mixer {
   /** Moves a finished render's stems into the graph as its backing path, before `swap`. */
   installBacking(render: BackingRender): void
-  /** The UDP port a slot listens on, or null for a push slot. */
+  /** The UDP port a slot listens on, or null for a push or capture slot. */
   port(index: number): number | null
   /**
    * Hands interleaved stereo PCM to a push slot, which folds it to mono as every slot is
@@ -215,6 +222,16 @@ export interface RtpReturnInput {
 export interface RtpReturnStats {
   /** Blocks the audio thread dropped because the network thread had not drained the ring. */
   droppedBlocks: number
+}
+
+/**
+ * One slot as `createMixer` asks for it. `device` and `channel` belong to a `capture` slot: an id
+ * from `inputs`, or the default input, and the device's channel from 0.
+ */
+export interface SlotInput {
+  kind: string
+  device?: string
+  channel?: number
 }
 
 export interface SlotParamsInput {

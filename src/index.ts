@@ -9,6 +9,7 @@ export type {
   MixerEvents,
   OpenEngineOptions,
   OutputInfo,
+  SlotConfig,
   SlotEffect,
   SlotSettings,
   SlotStats,

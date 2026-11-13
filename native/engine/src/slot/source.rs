@@ -9,6 +9,22 @@ pub trait Source: Send {
     /// `ResetSlot`: forget the stream and treat the next audio as a new singer.
     fn reset(&mut self) {}
 
+    /// A move to another output: what the source holds was paced by the clock that stopped, and
+    /// the move's gap waited in it. Unless the source says otherwise, that is a reset.
+    fn restart(&mut self) {
+        self.reset();
+    }
+
+    /// Whether the source hears one device for the slot's whole life, so that `ResetSlot` brings no
+    /// new sender and leaves the slot's echo stages and levels the path they have learned.
+    fn keeps_its_sender(&self) -> bool {
+        false
+    }
+
+    /// The output moved to a device whose callback takes `callback_frames` at a wake. Only a source
+    /// whose ring the output's wakes shape needs it.
+    fn output_moved(&mut self, _callback_frames: u32) {}
+
     /// How long ago the singer sang what `pull` hands over: the mic path's delay up to this
     /// slot, such as a jitter buffer's playout delay and a decoder's frame. The guide clock
     /// subtracts it (docs/design.md section 3).
