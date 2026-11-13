@@ -6,6 +6,9 @@ Every corrector number came through GStreamer's `aeonpitch`, and the row that de
 correction sounds good had never run. `native/tools/measure-corrector` is what #44, #45, #46, #49 and #50
 are judged against, so what it can and cannot say spans them all.
 
+The corrector's numbers below are from before [decision 0010](0010-pitch-reading.md) changed how it
+reads pitch. The method stands.
+
 ## Reaching the engaged corrector
 
 The tool builds its slots with `Slot::new`, the slot singers get, so what it measures is what ships.
