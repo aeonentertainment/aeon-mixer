@@ -188,7 +188,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | Opus frames accepted | 2.5, 5, 10, 20 ms                            | the phone's native module sends short frames; mediasoup sends 20       |
 | Return branch        | 10 ms Opus frames, in-band FEC on            | what the display's jitter buffer is tuned for today                    |
 | Level event          | 10 Hz, RMS and peak over 100 ms              | the device maps words at 5 Hz                                          |
-| Pitch event          | every 10 ms, batched per events-thread drain | the detector's own cadence                                             |
+| Pitch event          | every 10 ms, batched per events-thread drain | every second reading, as much as the display and the score use         |
 
 | Ramp                       | Length                            |
 | -------------------------- | --------------------------------- |
@@ -408,7 +408,7 @@ pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the f
 pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples()
 pub struct Stretch;         // new(channels, rate, preset), set_transpose_semitones(f32), process(planar in, planar out), latency_frames()
 pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
-pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
+pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: one window of the corrector's reader
 pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
 pub struct EchoHistory;     // new(), push(left, right) folds a block to mono, read(lag, out): the frames ending `lag` before the next one
 pub struct EchoCanceller;   // new(rate), process(history, own, source_latency_frames, block) in place, reset(), findings() -> Option<EchoFindings>; adds no delay
@@ -911,8 +911,9 @@ within 5 cents after the crossfade.
 
 ### 8.6 Kernels and slot effects: `kernels/`, `engine/src/slot/effects/`
 
-The C++ leaves and the Rust stages that drive them. The corrector's sources come from Aeon
-Karaoke's `lib/dsp/pitch-corrector` at a named commit, with its vendored FFT. The stretcher is
+The C++ leaves and the Rust stages that drive them. The corrector's sources start from Aeon
+Karaoke's `lib/dsp/pitch-corrector` at a named commit, with its vendored FFT; `PitchReader` and the
+period refinement are ours, [decision 0010](decisions/0010-pitch-reading.md). The stretcher is
 signalsmith-stretch. The reverb is a Rust port of Freeverb. The voice shifter is Rust of our own,
 [decision 0004](decisions/0004-voice-shifter.md) has why and its delay bound. Each C++ kernel gets
 an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
@@ -922,8 +923,14 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
 - At strength zero the corrector is bypassed with no delay and still reads pitch. Its readings
   then carry no target and no error, since nothing pulls.
-- A reading carries the note the follower set for the run it closes and the kernel's error at
-  that reading, so the target and the error a host shows are the ones the shifter acts on.
+- A reading carries the note the follower set for the run it closes and the error of that reading
+  against the class nearest it, so a host's pitch and error always come from one reading. The
+  shifter acts on its own newer reading. An error is 0 while unvoiced and when that reading is under
+  the corrector's bar.
+- The corrector reads every 5 ms from the shortest window that holds the voice and steers from
+  where the voice is now. A published reading is still the longest window's, every 10 ms at its
+  centre, so readings stay evenly spaced and in order whichever window steers.
+  [Decision 0010](decisions/0010-pitch-reading.md) has the numbers.
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
   growing, following it through a corrector's move and a moment unseen. Decision

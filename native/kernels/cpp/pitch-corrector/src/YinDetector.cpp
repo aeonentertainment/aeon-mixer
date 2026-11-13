@@ -28,6 +28,7 @@ struct YinDetector::State {
   std::vector<float> autocorrelation;
   std::vector<float> difference;
   std::vector<float> trueDifference;
+  std::vector<float> perPair;
   std::vector<std::complex<float>> spectrum;
 
   State(double rate, int windowSamples, float minHz, float maxHz)
@@ -40,6 +41,7 @@ struct YinDetector::State {
         autocorrelation(size_t(2 * windowSamples)),
         difference(size_t(tauMax) + 2),
         trueDifference(size_t(tauMax) + 2),
+        perPair(size_t(tauMax) + 2),
         spectrum(size_t(windowSamples)) {}
 };
 
@@ -78,6 +80,7 @@ Pitch YinDetector::analyze(const float *x) {
   float trueRunning = 0;
   s.difference[0] = 1;
   s.trueDifference[0] = 1;
+  s.perPair[0] = 0;
   for (int tau = 1; tau <= s.tauMax; ++tau) {
     head += x[tau - 1] * x[tau - 1];
     tail += x[n - tau] * x[n - tau];
@@ -85,6 +88,7 @@ Pitch YinDetector::analyze(const float *x) {
     const float trueD = std::max(0.0f, d - tail);
     running += d;
     trueRunning += trueD;
+    s.perPair[size_t(tau)] = trueD / float(n - tau);
     s.difference[size_t(tau)] = running > 0 ? d * float(tau) / running : 1;
     s.trueDifference[size_t(tau)] = trueRunning > 0 ? trueD * float(tau) / trueRunning : 1;
   }
@@ -98,16 +102,19 @@ Pitch YinDetector::analyze(const float *x) {
     tau = int(std::min_element(s.difference.begin() + s.tauMin, s.difference.begin() + s.tauMax) - s.difference.begin());
   }
 
-  // Parabola through the dip and its neighbours, for a period finer than one sample
-  const float at = s.difference[size_t(tau)];
+  // The tail and the running mean that find the dip also lean it toward shorter periods, by up to
+  // 4 cents in a short window. The difference per paired sample has neither, so the dip's true
+  // bottom and the parabola through it for a period finer than one sample come from that
+  const auto paired = [&s](int at) { return s.perPair[size_t(at)]; };
+  const int confidenceAt = tau;
+  while (tau > s.tauMin && paired(tau - 1) < paired(tau)) --tau;
+  while (tau + 1 <= s.tauMax && paired(tau + 1) < paired(tau)) ++tau;
   float offset = 0;
   if (tau > s.tauMin && tau + 1 <= s.tauMax) {
-    const float before = s.difference[size_t(tau) - 1];
-    const float after = s.difference[size_t(tau) + 1];
-    const float curvature = before - 2 * at + after;
-    if (curvature > 0) offset = std::clamp(0.5f * (before - after) / curvature, -1.0f, 1.0f);
+    const float curvature = paired(tau - 1) - 2 * paired(tau) + paired(tau + 1);
+    if (curvature > 0) offset = std::clamp(0.5f * (paired(tau - 1) - paired(tau + 1)) / curvature, -1.0f, 1.0f);
   }
-  return {float(s.sampleRate / (float(tau) + offset)), std::clamp(1.0f - s.trueDifference[size_t(tau)], 0.0f, 1.0f)};
+  return {float(s.sampleRate / (float(tau) + offset)), std::clamp(1.0f - s.trueDifference[size_t(confidenceAt)], 0.0f, 1.0f)};
 }
 
 }  // namespace aeon::dsp

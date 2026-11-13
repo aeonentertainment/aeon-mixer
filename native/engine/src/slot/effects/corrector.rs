@@ -8,10 +8,11 @@ use crate::slot::guide::Guide;
 /// With no guide every class is a target, so a voice goes to its nearest semitone.
 const CHROMATIC: Target = Target { mask: EVERY_PITCH_CLASS, midi: None };
 
-/// The slot's pitch corrector, following the song's melody guide: Aeon Karaoke's `aeonpitch`
-/// element, ported off GStreamer. It splits a run at every note edge, so the target changes on
-/// the sample the guide names, and at every detector reading, so each one is published. The
-/// slot owns the guide and lends it to each `process`.
+/// The slot's pitch corrector, following the song's melody guide. It starts from Aeon Karaoke's
+/// `aeonpitch` element, ported off GStreamer; how it reads pitch is ours, decision 0010. It splits
+/// a run at every note edge, so the target changes on
+/// the sample the guide names, and at every reading the kernel has to publish. The slot owns the
+/// guide and lends it to each `process`.
 pub struct Corrector {
     kernel: PitchCorrector,
     /// The kernel reads and writes separate buffers; the slot's block is copied through this.
@@ -81,8 +82,8 @@ impl Corrector {
             done += frames;
 
             if frames == until_reading {
-                let pitch = self.kernel.detected();
-                let centre = at + frames as i64 - self.kernel.reading_lag_samples() as i64;
+                let pitch = self.kernel.published();
+                let centre = at + frames as i64 - self.kernel.published_lag_samples() as i64;
                 let position_ms = centre as f64 * 1000.0 / f64::from(RATE);
                 // The kernel read with the target this run set, so the two belong together
                 on_reading(Reading {
@@ -90,7 +91,11 @@ impl Corrector {
                     hz: pitch.hz,
                     confidence: pitch.confidence,
                     target_midi: target.midi.filter(|_| correcting),
-                    error_semitones: if correcting { self.kernel.error_semitones() } else { 0.0 },
+                    error_semitones: if correcting {
+                        self.kernel.published_error_semitones()
+                    } else {
+                        0.0
+                    },
                 });
             }
         }
@@ -160,11 +165,15 @@ mod tests {
         }
     }
 
-    // Readings every 10 ms, each placed at the centre of the window it read
+    // Readings every 10 ms, each placed at the centre of the window it read. The corrector steers
+    // from a short window on A3 and A4 and from the longest through the pause between them; what it
+    // publishes is the longest window's either way, so a reading never lands out of order
     #[test]
     fn readings_come_every_10_ms_at_their_centre() {
         let mut corrector = Corrector::new();
-        let mut voice = tone(57.0, RATE as usize);
+        let mut voice = tone(57.0, 19_200);
+        voice.resize(24_000, 0.0);
+        voice.extend(tone(69.0, RATE as usize - 24_000));
         let mut readings = Vec::with_capacity(200);
         let start = 4_800;
         assert_no_alloc(|| {
@@ -184,9 +193,86 @@ mod tests {
         }
         let heard = readings.last().unwrap();
         assert!(
-            (heard.hz - 220.0).abs() < 0.5 && heard.confidence > 0.9,
-            "read {heard:?} for 220 Hz"
+            (heard.hz - 440.0).abs() < 0.5 && heard.confidence > 0.9,
+            "read {heard:?} for 440 Hz"
         );
+    }
+
+    // A reading's error is against that reading: on a 50 cent vibrato at 5.5 Hz, where a short
+    // window and the published one read the voice 16 ms apart, every sure reading's error is the
+    // guide note less its own pitch, in the singer's octave, to within a thousandth of a semitone
+    #[test]
+    fn a_readings_error_is_against_that_reading() {
+        let guide = Guide {
+            notes: vec![Note { midi: 57, start_frame: 0, end_frame: u64::from(RATE) * 2 }],
+            key_mask: 0,
+        };
+        let mut corrector = Corrector::new();
+        let mut phase = 0.0f64;
+        let mut voice: Vec<f32> = (0..RATE as usize)
+            .map(|i| {
+                let t = i as f64 / f64::from(RATE);
+                let midi = 57.2 + 0.5 * (2.0 * PI * 5.5 * t).sin();
+                phase += 440.0 * 2f64.powf((midi - 69.0) / 12.0) / f64::from(RATE);
+                let sample: f64 =
+                    (1..=12).map(|h| (2.0 * PI * h as f64 * phase).sin() / h as f64).sum();
+                (0.25 * sample) as f32
+            })
+            .collect();
+        let mut readings = Vec::with_capacity(100);
+        assert_no_alloc(|| {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                let frame = (index * BLOCK) as i64;
+                corrector.process(&ON, Some(&guide), frame, 0, block, |r| readings.push(r));
+            }
+        });
+        let sure: Vec<_> = readings.iter().filter(|r| r.confidence >= 0.9).collect();
+        assert!(sure.len() > 80, "{} sure readings", sure.len());
+        for reading in sure {
+            let target = f32::from(reading.target_midi.expect("a guide note"));
+            let against = target - (69.0 + 12.0 * (reading.hz / 440.0).log2());
+            let folded = against - 12.0 * (against / 12.0).round();
+            assert!(
+                (reading.error_semitones - folded).abs() < 1e-3,
+                "at {:.0} ms: error {} for a reading {} off",
+                reading.position_ms,
+                reading.error_semitones,
+                folded
+            );
+        }
+    }
+
+    // With no guide the class a reading is pulled to is the nearest to that reading, so across a
+    // clean step from C4 to D4, in tune on both, no sure reading's error is over 0.7 semitones,
+    // though the corrector steers by a newer reading than the one it publishes. Taking the class
+    // from the steering reading gave 1.93 here, with the step 60 frames into a hop
+    #[test]
+    fn a_step_with_no_guide_keeps_each_errors_class_on_its_reading() {
+        let mut corrector = Corrector::new();
+        let step = RATE as usize / 2 + 60;
+        let mut phase = 0.0f64;
+        let mut voice: Vec<f32> = (0..RATE as usize)
+            .map(|i| {
+                let midi = if i < step { 60.0 } else { 62.0 };
+                phase += 440.0 * 2f64.powf((midi - 69.0) / 12.0) / f64::from(RATE);
+                let sample: f64 =
+                    (1..=12).map(|h| (2.0 * PI * h as f64 * phase).sin() / h as f64).sum();
+                (0.25 * sample) as f32
+            })
+            .collect();
+        let mut readings = Vec::with_capacity(100);
+        assert_no_alloc(|| {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                let frame = (index * BLOCK) as i64;
+                corrector.process(&ON, None, frame, 0, block, |r| readings.push(r));
+            }
+        });
+        let worst = readings
+            .iter()
+            .filter(|r| r.confidence >= 0.9)
+            .map(|r| r.error_semitones.abs())
+            .fold(0.0, f32::max);
+        assert!(worst <= 0.7, "a sure reading's error reached {worst} semitones across the step");
     }
 
     // The ceiling a host budgets with holds on the lowest voice the corrector takes, pulled as far

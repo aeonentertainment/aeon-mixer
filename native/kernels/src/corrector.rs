@@ -3,12 +3,13 @@ use std::ptr::NonNull;
 use crate::ffi;
 use crate::pitch::{Pitch, PitchClassMask};
 
-/// Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 10 ms the
-/// detector reads the input; the distance to the nearest class in the target, scaled by the
-/// strength and eased in over the retune time, becomes a transposition a time-domain shifter
-/// applies. The output trails the input by 1.2 ms plus at most 1.125 periods of the voice. At
-/// strength 0 the output is the input itself with no delay, and turning the strength up from or
-/// down to 0 crossfades over 20 ms; the detector reads either way.
+/// Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 5 ms it reads
+/// the input, from the shortest window that can vouch for the voice; the distance from where the
+/// voice is now to the nearest class in the target, scaled by the strength and eased in over the
+/// retune time, becomes a transposition a time-domain shifter applies. The output trails the input
+/// by 1.2 ms plus at most 1.125 periods of the voice. At strength 0 the output is the input itself
+/// with no delay, and turning the strength up from or down to 0 crossfades over 20 ms; it reads
+/// either way. docs/decisions/0010-pitch-reading.md says why.
 ///
 /// The audio thread calls `process`, and `set_target` between calls. Nothing allocates after
 /// `new`.
@@ -56,20 +57,35 @@ impl PitchCorrector {
         unsafe { ffi::aeon_corrector_reset(self.raw.as_ptr()) }
     }
 
-    /// The newest detector reading.
+    /// The newest reading, every 5 ms, of where the voice was at its window's centre.
     pub fn detected(&self) -> Pitch {
         // SAFETY: `raw` is live for as long as `self`
         unsafe { ffi::aeon_corrector_detected(self.raw.as_ptr()) }
     }
 
-    /// Frames until the next reading. A host that publishes every reading processes at most this
-    /// many at a time.
+    /// The newest reading to publish, one every 10 ms: the longest window's, whichever window the
+    /// corrector steered from, so a host's readings stay evenly spaced and in order.
+    pub fn published(&self) -> Pitch {
+        // SAFETY: `raw` is live for as long as `self`
+        unsafe { ffi::aeon_corrector_published(self.raw.as_ptr()) }
+    }
+
+    /// How far a published reading's centre trails the newest sample it read: half the longest
+    /// window.
+    pub fn published_lag_samples(&self) -> usize {
+        // SAFETY: `raw` is live for as long as `self`
+        unsafe { ffi::aeon_corrector_published_lag_samples(self.raw.as_ptr()) as usize }
+    }
+
+    /// Frames until the next reading to publish, one every 10 ms. A host that publishes them
+    /// processes at most this many at a time.
     pub fn frames_until_reading(&self) -> usize {
         // SAFETY: `raw` is live for as long as `self`
         unsafe { ffi::aeon_corrector_frames_until_reading(self.raw.as_ptr()) as usize }
     }
 
-    /// How far a reading's centre trails the newest sample it read: half the detector's window.
+    /// How far the newest reading's centre trails the newest sample it read: half the window it
+    /// took, which follows the voice.
     pub fn reading_lag_samples(&self) -> usize {
         // SAFETY: `raw` is live for as long as `self`
         unsafe { ffi::aeon_corrector_reading_lag_samples(self.raw.as_ptr()) as usize }
@@ -87,6 +103,14 @@ impl PitchCorrector {
     pub fn correcting(&self) -> bool {
         // SAFETY: `raw` is live for as long as `self`
         unsafe { ffi::aeon_corrector_correcting(self.raw.as_ptr()) }
+    }
+
+    /// The published reading's distance to the class it is pulled toward, in semitones and in
+    /// the singer's octave: what a host gets beside that reading. 0 while unvoiced, or when that
+    /// reading is under the bar a voice must clear.
+    pub fn published_error_semitones(&self) -> f32 {
+        // SAFETY: `raw` is live for as long as `self`
+        unsafe { ffi::aeon_corrector_published_error_semitones(self.raw.as_ptr()) }
     }
 
     /// How far the output trails the input now; 0 while bypassed.
@@ -109,7 +133,9 @@ mod tests {
 
     use super::*;
     use crate::pitch::{EVERY_PITCH_CLASS, pitch_class_of};
-    use crate::test_support::{RATE, cents_between, harmonic_tone, median_pitch, midi_hz};
+    use crate::test_support::{
+        RATE, buzz, cents_between, harmonic_tone, median_pitch, midi_hz, sung,
+    };
 
     /// `input` through `corrector` in runs of `block` frames, as a host's buffers would arrive,
     /// under the allocation guard.
@@ -192,6 +218,120 @@ mod tests {
         corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
         corrected(&mut corrector, &vec![0.0; 24_000], 128);
         assert!(!corrector.correcting(), "half a second of silence");
+    }
+
+    /// Every reading of `voice`, 5 ms apart, with the frame it landed on.
+    fn every_reading(corrector: &mut PitchCorrector, voice: &[f32]) -> Vec<(usize, Pitch)> {
+        let mut output = [0.0; 240];
+        let mut readings = Vec::with_capacity(voice.len() / 240);
+        assert_no_alloc(|| {
+            for (index, run) in voice.as_chunks::<240>().0.iter().enumerate() {
+                corrector.process(run, &mut output);
+                readings.push(((index + 1) * 240, corrector.detected()));
+            }
+        });
+        readings
+    }
+
+    // The window follows the voice: the shortest that holds 2.2 periods, so a voice from 82 Hz up
+    // stays in reach of the corrector and a high one is read in a quarter of the time. The error
+    // says the corrector believes the reading as well as making it
+    #[test]
+    fn the_window_is_the_shortest_that_holds_the_voice() {
+        for (hz, lag) in [
+            (82.5, 1024),
+            (98.0, 1024),
+            (110.0, 512),
+            (196.0, 512),
+            (207.0, 256),
+            (440.0, 256),
+            (880.0, 256),
+        ] {
+            let mut corrector = PitchCorrector::new(RATE);
+            corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
+            corrected(&mut corrector, &harmonic_tone(hz, 0.5), 128);
+
+            let read = corrector.detected();
+            assert_eq!(corrector.reading_lag_samples(), lag, "{hz} Hz");
+            assert!(read.confidence > 0.9, "{hz} Hz: confidence {}", read.confidence);
+            assert!(cents_between(f64::from(read.hz), hz).abs() < 0.5, "read {} for {hz}", read.hz);
+            let midi = 69.0 + 12.0 * (hz / 440.0).log2();
+            let error = f64::from(corrector.error_semitones());
+            assert!((error - (midi.round() - midi)).abs() < 0.01, "{hz} Hz: error {error}");
+        }
+    }
+
+    // How long after a voice steps two semitones its reading has settled within 30 cents of the
+    // new note, and stays. The longest window alone answers in 40 ms at every pitch. Readings land
+    // 5 ms apart, so each bound is what was measured and one reading more
+    #[test]
+    fn a_pitch_step_is_read_within_the_voices_own_window() {
+        let step_at = 24_000;
+        for (hz, bound_ms) in [(440.0, 15.0), (220.0, 15.0), (110.0, 20.0), (82.5, 35.0)] {
+            let up = hz * 2f64.powf(2.0 / 12.0);
+            let voice = sung(48_000, &buzz(), |i| if i < step_at { hz } else { up });
+            let readings = every_reading(&mut PitchCorrector::new(RATE), &voice);
+            let last_astray = readings
+                .iter()
+                .rfind(|(_, read)| cents_between(f64::from(read.hz), up).abs() > 30.0)
+                .expect("the old note is astray");
+            let delay_ms = (last_astray.0 + 240 - step_at) as f64 / 48.0;
+            assert!(delay_ms <= bound_ms, "{hz} Hz answered in {delay_ms} ms, bound {bound_ms}");
+        }
+    }
+
+    // A real leap beyond the short windows' say goes to the longest window, which believes it as
+    // soon as the new note fills most of it
+    #[test]
+    fn an_octave_leap_is_believed_within_the_longest_window() {
+        let step_at = 24_000;
+        for (from, to) in [(220.0, 440.0), (440.0, 220.0), (110.0, 220.0)] {
+            let voice = sung(48_000, &buzz(), |i| if i < step_at { from } else { to });
+            let readings = every_reading(&mut PitchCorrector::new(RATE), &voice);
+            let last_astray = readings
+                .iter()
+                .rfind(|(_, read)| cents_between(f64::from(read.hz), to).abs() > 30.0)
+                .expect("the old note is astray");
+            let delay_ms = (last_astray.0 + 240 - step_at) as f64 / 48.0;
+            assert!(delay_ms <= 48.0, "{from} to {to} Hz answered in {delay_ms} ms");
+        }
+    }
+
+    // For a moment a vowel's second harmonic drowns its fundamental, and a short window dips at
+    // half the period. The voice has not leapt an octave, so the reading stays on its note
+    #[test]
+    fn a_moment_of_loud_second_harmonic_does_not_pass_for_an_octave() {
+        let (moment, frames) = (24_000..25_440, 48_000);
+        let plain = sung(frames, &buzz(), |_| 220.0);
+        let loud_second = sung(frames, &[0.15, 1.0], |_| 220.0);
+        let voice: Vec<f32> = (0..frames)
+            .map(|i| if moment.contains(&i) { loud_second[i] } else { plain[i] })
+            .collect();
+        let readings = every_reading(&mut PitchCorrector::new(RATE), &voice);
+        for (frame, read) in readings.iter().filter(|(frame, _)| *frame > 4800) {
+            let cents = cents_between(f64::from(read.hz), 220.0);
+            assert!(cents.abs() < 100.0, "at {frame}: {cents:+.1} cents from 220 Hz");
+        }
+    }
+
+    // On a steady glide of one cent a millisecond, a corrector that believed its reading's centre
+    // would trail by half its window and a hop, each millisecond a cent. Reading where the voice
+    // has gone leaves under a cent at a hard retune, whichever window the voice takes
+    #[test]
+    fn a_glide_is_corrected_where_the_voice_is_now() {
+        for midi in [69, 57, 45] {
+            let centre = midi_hz(f64::from(midi));
+            // Five semitones either side of the note, which the shifter can reach all the way
+            let voice = sung(RATE as usize, &buzz(), |i| {
+                let cents_per_frame = 1.0 / 48.0;
+                centre * 2f64.powf((i as f64 * cents_per_frame - 500.0) / 1200.0)
+            });
+            let mut corrector = PitchCorrector::new(RATE);
+            corrector.set_target(pitch_class_of(midi), 1.0, 0.0);
+            let output = corrected(&mut corrector, &voice, 128);
+            let cents = cents_between(median_pitch(&output, 0.3, 0.7), centre);
+            assert!(cents.abs() < 1.0, "MIDI {midi} came out {cents:+.1} cents off");
+        }
     }
 
     // A new stream on the slot starts clean: nothing of the last singer comes out after a reset
