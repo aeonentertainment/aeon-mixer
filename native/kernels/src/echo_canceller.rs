@@ -191,7 +191,8 @@ impl EchoCanceller {
 
     /// One frame of the mic, in place. `history` holds the master up to the frame before this
     /// one, and `own` the part of it that was this mic's own voice; `source` is where the slot's
-    /// source had its delay for this frame. Until the echo is found the frame passes untouched.
+    /// source had its delay for this frame. Until the echo is found the frame passes untouched,
+    /// and so does a frame whose mic does not hear the room, as a source that stopped hands over.
     pub fn process(
         &mut self,
         history: &EchoHistory,
@@ -291,7 +292,7 @@ impl EchoCanceller {
         for ((echo, mic), out) in self.echo.iter_mut().zip(&self.mic).zip(&self.out) {
             *echo = mic - out;
         }
-        self.drift.follow(&self.echo, &self.out, self.adapted && !talking);
+        self.drift.follow(&self.echo, &self.out, self.adapted && !talking && !frame.unheard);
 
         let mut energies = Meters::default();
         for ((sample, out), reference) in
@@ -309,8 +310,11 @@ impl EchoCanceller {
         smooth(&mut self.meters.out, energies.out);
         smooth(&mut self.meters.echo, energies.echo);
         smooth(&mut self.meters.reference, energies.reference);
-        self.talk.0 += TALK_SMOOTHING * (energies.mic - self.talk.0);
-        self.talk.1 += TALK_SMOOTHING * (energies.echo - self.talk.1);
+        if !frame.unheard {
+            // A mic that does not hear the room says nothing of who is talking in it
+            self.talk.0 += TALK_SMOOTHING * (energies.mic - self.talk.0);
+            self.talk.1 += TALK_SMOOTHING * (energies.echo - self.talk.1);
+        }
     }
 
     fn follow(&mut self, known_frames: u32) -> u32 {

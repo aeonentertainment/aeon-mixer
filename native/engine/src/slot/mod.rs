@@ -12,6 +12,8 @@ pub mod guide;
 mod guide_clock_tests;
 pub mod meter;
 pub mod shared;
+#[cfg(test)]
+mod silent_source_tests;
 pub mod source;
 
 use std::f32::consts::FRAC_PI_4;

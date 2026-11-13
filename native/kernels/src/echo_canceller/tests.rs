@@ -331,3 +331,55 @@ fn a_new_stream_starts_the_drift_over() {
         assert!(anew_reported[second] > still[second] - 3.0, "second {}", second + 1);
     }
 }
+
+// A mic stops hearing the room for three seconds while the master plays on: its source hands over
+// nothing, or only the mic's own floor 60 dB down, as a mic muted at an interface does. Each frame
+// passes untouched, bit for bit, and the filter keeps the path, so the second after the room is
+// heard again it takes out within 3 dB of the second before the mic stopped hearing it.
+#[test]
+fn a_mic_that_stops_hearing_the_room_passes_untouched_and_keeps_the_path() {
+    let frames = 12 * SECOND;
+    let far = far_end(frames);
+    let floor = at_db(pink_noise(frames, 99), -60.0);
+    let echo = through(&far, &room(40 * 48, 0.316, 0.3, 0.25, 11));
+    let unheard = 6 * SECOND..9 * SECOND;
+    for floor_heard in [false, true] {
+        let mic: Vec<f32> = (0..frames)
+            .map(|k| match (unheard.contains(&k), floor_heard) {
+                (true, false) => 0.0,
+                (true, true) => floor[k],
+                (false, _) => echo[k] + floor[k],
+            })
+            .collect();
+        let (out, _) = cancel(&far, &mic, |_| 0);
+        let (before, back) = (removed(&mic, &out, 5.0, 6.0), removed(&mic, &out, 10.0, 11.0));
+        println!("floor heard {floor_heard}: {before:.1} dB out before, {back:.1} after");
+        let untouched = unheard.clone().all(|k| out[k].to_bits() == mic[k].to_bits());
+        assert!(untouched, "floor heard {floor_heard}: touched while unheard");
+        assert!(back >= before - 3.0, "floor heard {floor_heard}: {back:.1} dB, {before:.1}");
+    }
+}
+
+// The room's speakers are turned down 12 or 20 dB at once, 6 s in. The mic carries much less echo
+// than the filter expects, but its shape, so the room is still heard and the filter learns it
+// again: from the second second after, 12 dB or more out, where the floor 60 dB down allows about
+// 17 after the 20 dB drop. Measured, 19.5 and 13.7 at least. Taken for a mic that stopped hearing
+// the room, the filter held the old path: nothing out after the 20 dB drop, and nothing for four
+// seconds after the 12.
+#[test]
+fn a_room_turned_down_at_once_is_learned_again() {
+    let frames = 14 * SECOND;
+    let far = far_end(frames);
+    let floor = at_db(pink_noise(frames, 99), -60.0);
+    let echo = through(&far, &room(40 * 48, 0.316, 0.3, 0.25, 11));
+    for drop_db in [12.0f32, 20.0] {
+        let gain = 10f32.powf(-drop_db / 20.0);
+        let mic: Vec<f32> = (0..frames)
+            .map(|k| if k < 6 * SECOND { echo[k] } else { gain * echo[k] } + floor[k])
+            .collect();
+        let (out, _) = cancel(&far, &mic, |_| 0);
+        let removed = per_second(&mic, &out);
+        println!("turned down {drop_db} dB: {removed:.1?} dB out");
+        assert!(removed[8..].iter().all(|db| *db >= 12.0), "{drop_db} dB: {removed:.1?}");
+    }
+}

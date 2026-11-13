@@ -83,7 +83,7 @@ A singer following the melody 10 cents sharp and 40 ms late is not taken for an 
 
 ## Where the port departs from mdf.c
 
-Three changes, each measured in a test that fails without it:
+Four changes, each measured in a test that fails without it:
 
 - **Where adaptation starts.** mdf.c spreads its first steps across the whole tail, falling ten to
   one, for an echo that could be anywhere in it. The finder has put this one at the front, so the
@@ -96,6 +96,20 @@ Three changes, each measured in a test that fails without it:
 - **The sanity reset.** mdf.c resets a filter whose error stays over the mic's energy for 50
   frames. Its fixed-point build asks for 6 dB over, and its float build, where the shift is a
   no-op, for any excess, which a singer over the echo trips. This uses the fixed-point threshold.
+- **A mic that does not hear the room.** A source that stops, loses its input or is muted hands
+  over silence while the master plays on. mdf.c subtracts its estimate from it, so the slot plays
+  the echo inverted, then resets the filter after 50 frames, and its unadapted rate, highest on a
+  silent mic, soon calls a filter that learned nothing adapted; the double-talk hold then reads
+  every sung frame as talk, and nothing is taken out again. Measured on a phone whose stream
+  stopped: -37.9 dBFS from a source handing over -50.0, and 0.6 dB out a second after it came
+  back. Here a frame whose mic carries under one 16-bit step, or a tenth of the echo the filter
+  expects and less than half its energy along the estimate's shape, passes untouched and teaches
+  the filter nothing. The shape test keeps a room whose speakers are turned down 12 or 20 dB at
+  once learned again as mdf.c learns it, within 0.2 dB; without it the filter held the old path
+  and took nothing out after the 20 dB drop. The shape is judged pre-emphasised, as the filter sees
+  it: judged as heard, a muted mic's floor passed for the echo's shape in some frames, and the
+  turned-down room took out 6 to 12 dB in the three seconds after the drop, against 18 to 20. It
+  costs 0.3 us a block.
 
 ## The howl guard
 
@@ -219,6 +233,7 @@ From the tests on the offline driver, under the allocation guard, and `measure-e
 | The canceller turned off after learning                                                                      | bit for bit from the block it went off                      | exact                          |
 | A loop 6 dB over unity with correction and a +2 voice on, 96 seeded rooms                                    | 19 louder than -20 dBFS, none uncaught                      | 33, and 1                      |
 | A whistled phrase and a soprano climbing a semitone a note, legato and swelling, with a vibrato to 100 cents | not ducked                                                  | none                           |
+| A source silent 3 s as the backing plays: rtp stopped, capture lost, push stopped, muted at mic              | no louder than its source; back to 16.9 to 28.3 dB out      | 0.5 dB; 3 dB under before      |
 
 ## What this does not do
 
