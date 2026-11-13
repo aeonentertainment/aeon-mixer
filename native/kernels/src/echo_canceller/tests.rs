@@ -187,9 +187,10 @@ fn spliced(mic: &[f32], from: usize, count: usize, frames: i64) -> (Vec<f32>, Ve
 }
 
 // A capture slot corrects a 480-frame mic's slip by splicing 32 frames in or out, a frame a
-// block, and says so. The echo moves with each splice, and the canceller slides every window its
-// filter holds with it: the second it happens in loses 1.7 dB of what it takes out, within a
-// tolerance of 3, and every second after is within 0.5 dB of a mic that never spliced.
+// block, and a 128-frame mic's by 128, and says so. The echo moves with each splice, and the
+// canceller slides every window its filter holds with it. The second it happens in loses 1.7 dB
+// of what it takes out for 32 splices, within a tolerance of 3, and 4.0 for 128, within 5; every
+// second after is within 0.5 dB of a mic that never spliced.
 #[test]
 fn the_echo_is_followed_through_a_sources_splices() {
     let frames = 10 * SECOND;
@@ -198,19 +199,21 @@ fn the_echo_is_followed_through_a_sources_splices() {
     let floor = at_db(pink_noise(frames, 99), -60.0);
     let raw: Vec<f32> = through(&far, &path).iter().zip(&floor).map(|(e, f)| e + f).collect();
     let from = 5 * SECOND / FRAME;
-    let through_splices = |frames: i64| {
-        let (mic, totals) = spliced(&raw, from, 32, frames);
+    let through_splices = |count: usize, frames: i64| {
+        let (mic, totals) = spliced(&raw, from, count, frames);
         let delay = |block: usize| SourceDelay { latency_frames: 0, spliced_frames: totals[block] };
         let (out, _) = cancel_spliced(&far, &mic, delay);
         per_second(&mic, &out)
     };
-    let still = through_splices(0);
-    for frames in [1, -1] {
-        let removed = through_splices(frames);
-        println!("{frames}: {removed:.1?} dB out against {still:.1?}");
-        assert!(removed[5] > still[5] - 3.0, "{frames}: the second it splices in");
+    let still = through_splices(0, 0);
+    for (count, frames) in [(32, 1), (32, -1), (128, 1), (128, -1)] {
+        let removed = through_splices(count, frames);
+        println!("{count} x {frames}: {removed:.1?} dB out against {still:.1?}");
+        let within = if count == 32 { 3.0 } else { 5.0 };
+        assert!(removed[5] > still[5] - within, "{count} x {frames}: the second it splices in");
         for second in 6..removed.len() {
-            assert!((removed[second] - still[second]).abs() < 0.5, "{frames}, second {second}");
+            let case = format!("{count} x {frames}, second {second}");
+            assert!((removed[second] - still[second]).abs() < 0.5, "{case}");
         }
     }
 }

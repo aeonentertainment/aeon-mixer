@@ -36,6 +36,12 @@ const LEAD: usize = 64;
 const SETTLE: u32 = 2;
 /// A lag the finder names this close to the one in use is the same path.
 const SAME_PATH: i64 = 2 * LEAD as i64;
+/// Blocks after a source's last splice before a lag the finder names can be a new path, one
+/// second. The finder takes time to follow an echo the source has moved, and while a capture
+/// slot corrected 128 frames it named lags up to 259 frames from where the splices put the path;
+/// taken for a new one, the filter started over and came out up to 26.5 dB under the same mic on
+/// the output's clock, more than 3 dB under for eight seconds.
+const FINDER_SETTLE: u32 = 375;
 /// Once adapted, the filter stops learning while the mic is this many times the energy of the
 /// echo it estimates: a singer over the echo, whose voice the filter would otherwise partly fit
 /// through the backing's own notes. 3 dB, a Geigel detector on energies: 1.5 dB slows the first
@@ -86,6 +92,8 @@ pub struct EchoCanceller {
     drift: Drift,
     /// The source's splices as of the block before.
     spliced: Option<i64>,
+    /// Blocks since the source last spliced.
+    unspliced: u32,
     adapted: bool,
     meters: Meters,
     /// The mic's energy and the echo estimate's, smoothed over about 20 ms.
@@ -127,6 +135,7 @@ impl EchoCanceller {
             alignment: None,
             drift: Drift::default(),
             spliced: None,
+            unspliced: 0,
             adapted: false,
             meters: Meters::default(),
             talk: (0.0, 0.0),
@@ -151,6 +160,7 @@ impl EchoCanceller {
         self.alignment = None;
         self.drift.reset();
         self.spliced = None;
+        self.unspliced = 0;
         self.adapted = false;
         self.meters = Meters::default();
         self.talk = (0.0, 0.0);
@@ -183,6 +193,7 @@ impl EchoCanceller {
         let known = self.follow(source.latency_frames);
         let spliced = source.spliced_frames - self.spliced.unwrap_or(source.spliced_frames);
         self.spliced = Some(source.spliced_frames);
+        self.unspliced = if spliced == 0 { self.unspliced.saturating_add(1) } else { 0 };
         let read_at = self.drift.offset();
         self.drift.shift(spliced as f64);
 
@@ -190,7 +201,8 @@ impl EchoCanceller {
             self.found = found;
             let unknown = lag as i64 - i64::from(known);
             let followed = unknown - self.drift.offset().round() as i64;
-            if self.unknown.is_none_or(|was| (was - followed).abs() > SAME_PATH) {
+            let moved = |was: i64| (was - followed).abs() > SAME_PATH;
+            if self.unknown.is_none_or(|was| self.unspliced >= FINDER_SETTLE && moved(was)) {
                 // A new path: what the filter learned was about another
                 self.unknown = Some(unknown);
                 self.drift.restart();
