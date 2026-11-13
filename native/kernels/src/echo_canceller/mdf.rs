@@ -5,12 +5,13 @@
 //! carries no DC, and the playback buffer, since the reference here is the master the engine
 //! itself rendered.
 //!
-//! Three changes, each explained where it is made: the sanity check's threshold in `process`,
-//! where the adaptation starts in `reset`, and what it adapts on. The echo estimate convolves the
-//! whole reference, but the gradient, and the power that normalises it, see the reference less
-//! the mic's own voice: a singer's voice is in the master they hear, and a filter adapted on it
-//! learns to predict the singer from their own past, which a sung vowel makes easy, and takes
-//! the singer out with the echo.
+//! Four changes, each explained where it is made: the sanity check's threshold in `process`, a
+//! frame whose mic does not hear the room, also in `process`, where the adaptation starts in
+//! `reset`, and what it adapts on. The echo estimate convolves the whole reference, but the
+//! gradient, and the power that normalises it, see the reference less the mic's own voice: a
+//! singer's voice is in the master they hear, and a filter adapted on it learns to predict the
+//! singer from their own past, which a sung vowel makes easy, and takes the singer out with the
+//! echo.
 
 // Copyright (C) 2003-2008 Jean-Marc Valin
 //
@@ -48,6 +49,28 @@ const VAR2_SMOOTH: f32 = 0.7225;
 const VAR1_UPDATE: f32 = 0.5;
 const VAR2_UPDATE: f32 = 0.25;
 const VAR_BACKTRACK: f32 = 4.0;
+/// mdf.c resets a filter that has added echo instead of removing it for this many frames in a row.
+const SCREWED_UP: u32 = 50;
+/// Under one 16-bit step, RMS over the frame, a mic carries nothing at all.
+const QUIETEST_MIC: f32 = FRAME as f32;
+/// Nor does one 30 dB under the echo the filter has expected over the last second: it is at its
+/// own floor. A learned room comes out 25 to 30 dB down, so an echo that faint is already where
+/// cancelling would leave it.
+const AT_ITS_FLOOR: f32 = 1000.0;
+/// Frames, a second, over which that echo is smoothed, so that a quiet bar of the backing does
+/// not bring a muted mic's floor up to it: smoothed over a frame, a -60 dBFS floor came within
+/// 30 dB of it for up to 39 frames at a time.
+const ECHO_SMOOTHING: f32 = 375.0;
+/// A mic carrying a tenth of the echo the filter expects, or less, is quieter than the path...
+const QUIETER: f32 = 10.0;
+/// ...and if under this share of its energy, pre-emphasised, lies along the estimate's, it no
+/// longer has the path's shape either.
+const COHERENT: f32 = 0.5;
+/// The most frames, net of those at the path's level, that a mic quieter than the path and of
+/// another shape passes untouched before the filter takes it for a new path: as many as mdf.c's
+/// sanity check waits. The longest such run any silenced source handed over was 4 frames, a
+/// stopped phone's concealment fading out, so this is twelve times that.
+const ANOTHER_PATH: u32 = SCREWED_UP;
 const N: f32 = WINDOW as f32;
 
 /// mdf.c's state for one mic. Signals are on its 16-bit scale, full scale 32768. The caller
@@ -103,6 +126,11 @@ struct State {
     dvar2: f32,
     mem_d: f32,
     mem_e: f32,
+    /// The echo the filter has expected, smoothed over a second.
+    echo_level: f32,
+    /// Frames the mic has been quieter than the path and of another shape since it was last
+    /// silent, less those it has been at the path's level.
+    unlike_for: u32,
 }
 
 const FRESH: State = State {
@@ -120,6 +148,8 @@ const FRESH: State = State {
     dvar2: 0.0,
     mem_d: 0.0,
     mem_e: 0.0,
+    echo_level: 0.0,
+    unlike_for: 0,
 };
 
 /// What one frame told the caller.
@@ -129,6 +159,9 @@ pub struct Frame {
     pub adapted: bool,
     /// mdf.c's sanity check failed for long enough that the filter was reset.
     pub reset: bool,
+    /// The mic did not hear the room, so the frame passed untouched and the filter learned
+    /// nothing from it.
+    pub unheard: bool,
 }
 
 impl Mdf {
@@ -252,6 +285,8 @@ impl Mdf {
         s.cancel_count += 1;
         let ss = 0.35 / m as f32;
         let ss_1 = 1.0 - ss;
+        // What the last frame took out of its last sample, where this frame's echo goes on from
+        let echo_before = s.mem_d - s.mem_e;
 
         for (input, &sample) in self.input.iter_mut().zip(mic) {
             *input = sample - PREEMPH * s.mem_d;
@@ -272,6 +307,55 @@ impl Mdf {
             self.e[i] = self.input[i] - self.e[i + FRAME];
         }
         let sff = inner(&self.e[..FRAME], &self.e[..FRAME]);
+
+        // A mic that carries nothing of the room, as a source that stopped, lost its input or was
+        // muted hands over, passes untouched for as long as it lasts, and the filter keeps the
+        // path for when the room is heard again. mdf.c subtracts its estimate from the silence and
+        // hands the echo over inverted, then resets the filter after 50 frames, and its unadapted
+        // rate, at its highest on a silent mic, soon calls a filter that learned nothing adapted.
+        // A mic that carries signal much quieter than the path and of another shape may be a
+        // source's concealment fading out, or a phone turned face down onto a new path. It passes
+        // untouched too, but only for a while, and counts toward the sanity check as the frame
+        // mdf.c would have made worse, so a new path is learned as soon as mdf.c would learn it. A
+        // room turned down keeps the path's shape and is learned again as mdf.c does. The levels
+        // are weighed as the slot hears them, since the pre-emphasis would count the edge of a mic
+        // that just stopped as a click; the shape pre-emphasised, as the filter sees it
+        let (mut echo, mut expected, mut along) = (echo_before, 0.0, 0.0);
+        for (&estimate, &input) in self.e[FRAME..].iter().zip(&self.input) {
+            echo = estimate + PREEMPH * echo;
+            expected += echo * echo;
+            along += estimate * input;
+        }
+        let heard = inner(mic, mic);
+        let sdd = inner(&self.input, &self.input);
+        s.echo_level += (expected - s.echo_level) / ECHO_SMOOTHING;
+        let silent = heard < QUIETEST_MIC || AT_ITS_FLOOR * heard < s.echo_level;
+        let quieter = QUIETER * heard < expected;
+        let shape = sdd * inner(&self.e[FRAME..], &self.e[FRAME..]);
+        let unlike = !silent && quieter && along * along < COHERENT * shape;
+        if silent {
+            s.unlike_for = 0;
+        } else if unlike {
+            s.unlike_for += 1;
+        } else if !quieter {
+            s.unlike_for = s.unlike_for.saturating_sub(1);
+        }
+        if silent || (unlike && s.unlike_for <= ANOTHER_PATH) {
+            if unlike && adds_echo(sff, sdd) {
+                s.screwed_up += 1;
+            }
+            let reset = s.screwed_up >= SCREWED_UP;
+            if reset {
+                self.reset();
+            }
+            let s = &mut self.state;
+            out.copy_from_slice(mic);
+            s.mem_d = mic[FRAME - 1];
+            s.mem_e = mic[FRAME - 1];
+            // The next frame's gradient has no error of this one's to follow
+            self.big_e = SILENT;
+            return Frame { adapted: s.adapted, reset, unheard: true };
+        }
 
         if s.adapted {
             adjust_prop(&self.background, &mut self.prop);
@@ -374,7 +458,6 @@ impl Mdf {
         }
         let sey = inner(&self.e[FRAME..], &self.y[FRAME..]);
         let syy = inner(&self.y[FRAME..], &self.y[FRAME..]);
-        let sdd = inner(&self.input, &self.input);
         self.fft.forward(&self.e, &mut self.big_e);
         self.y[..FRAME].fill(0.0);
         self.fft.forward(&self.y, &mut self.big_y);
@@ -387,7 +470,7 @@ impl Mdf {
             // Things have gone really bad
             s.screwed_up += 50;
             out.fill(0.0);
-        } else if sff > 4.0 * sdd + N * 10000.0 {
+        } else if adds_echo(sff, sdd) {
             // Adding echo instead of removing it; see whether it improves. mdf.c's fixed-point
             // build asks for the error to be 6 dB over the mic, and its float build, where the
             // shift is a no-op, for any excess, which a singer over the echo trips
@@ -395,7 +478,7 @@ impl Mdf {
         } else {
             s.screwed_up = 0;
         }
-        if s.screwed_up >= 50 {
+        if s.screwed_up >= SCREWED_UP {
             self.reset();
             frame.reset = true;
             return frame;
@@ -456,6 +539,12 @@ impl Mdf {
         frame.adapted = s.adapted;
         frame
     }
+}
+
+/// mdf.c's sanity check: the error of a frame, `sff`, is over four times the mic's, `sdd`, with
+/// some room for a quiet frame.
+fn adds_echo(sff: f32, sdd: f32) -> bool {
+    sff > 4.0 * sdd + N * 10000.0
 }
 
 fn inner(a: &[f32], b: &[f32]) -> f32 {
