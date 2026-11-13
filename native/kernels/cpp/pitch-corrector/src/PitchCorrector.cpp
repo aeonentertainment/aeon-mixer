@@ -94,10 +94,12 @@ struct PitchCorrector::State {
     if (toPublish) published = reader.longest();
     retarget();
     if (toPublish) {
-      // A host gets the error against the reading it gets, in the singer's own octave
-      const float against = float(targetMidi) - midiOf(published.hz);
+      // A host gets the error of the reading it gets, against the class nearest that reading and
+      // held as the steering class is, so the two always agree; the shifter still steers by its own
       const bool sure = targetMidi != kNoTarget && PitchReader::isVoice(published);
-      publishedError = sure ? against - 12.0f * std::round(against / 12.0f) : 0;
+      const float midi = midiOf(published.hz);
+      const float against = sure ? float(nearestTarget(midi)) - midi : 0;
+      publishedError = against - 12.0f * std::round(against / 12.0f);
     }
   }
 };

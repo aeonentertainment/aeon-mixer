@@ -923,9 +923,10 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
 - At strength zero the corrector is bypassed with no delay and still reads pitch. Its readings
   then carry no target and no error, since nothing pulls.
-- A reading carries the note the follower set for the run it closes, the one the shifter acts on,
-  and the error of that reading against it, so a host's pitch and error always come from one
-  reading. An error is 0 while unvoiced and when that reading is under the corrector's bar.
+- A reading carries the note the follower set for the run it closes and the error of that reading
+  against the class nearest it, so a host's pitch and error always come from one reading. The
+  shifter acts on its own newer reading. An error is 0 while unvoiced and when that reading is under
+  the corrector's bar.
 - The corrector reads every 5 ms from the shortest window that holds the voice and steers from
   where the voice is now. A published reading is still the longest window's, every 10 ms at its
   centre, so readings stay evenly spaced and in order whichever window steers.

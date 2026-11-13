@@ -22,8 +22,10 @@ what the shifter itself delays the output. The note it pulls toward still comes 
 glide does not reach a new note before the voice does. Published readings are the longest window's,
 raw, every 10 ms at its centre, so the display and the score get a measurement at a known position
 that never moves back when the window steering the voice changes. Its error is against that same reading: the
-note the corrector pulls toward less the published pitch, in the singer's own octave, and 0 when the
-reading is under the bar. On today's corrector a reading under the bar within 30 ms of a sure one
+class nearest the published pitch, held as the steering class is, less that pitch, in the singer's
+own octave, and 0 when the reading is under the bar. The shifter still steers by its own newer
+reading; taking the event's class from that one put a clean C4 to D4 step 1.9 semitones out for a
+reading, where this keeps every sure reading within 0.7. On today's corrector a reading under the bar within 30 ms of a sure one
 kept the sure one's error; a host now sees 0 there, as it sees for any reading it would call
 unvoiced. The cadence, the position and every other field are as before.
 

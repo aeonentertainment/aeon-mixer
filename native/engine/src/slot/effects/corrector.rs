@@ -8,8 +8,9 @@ use crate::slot::guide::Guide;
 /// With no guide every class is a target, so a voice goes to its nearest semitone.
 const CHROMATIC: Target = Target { mask: EVERY_PITCH_CLASS, midi: None };
 
-/// The slot's pitch corrector, following the song's melody guide: Aeon Karaoke's `aeonpitch`
-/// element, ported off GStreamer. It splits a run at every note edge, so the target changes on
+/// The slot's pitch corrector, following the song's melody guide. It starts from Aeon Karaoke's
+/// `aeonpitch` element, ported off GStreamer; how it reads pitch is ours, decision 0010. It splits
+/// a run at every note edge, so the target changes on
 /// the sample the guide names, and at every reading the kernel has to publish. The slot owns the
 /// guide and lends it to each `process`.
 pub struct Corrector {
@@ -239,6 +240,39 @@ mod tests {
                 folded
             );
         }
+    }
+
+    // With no guide the class a reading is pulled to is the nearest to that reading, so across a
+    // clean step from C4 to D4, in tune on both, no sure reading's error is over 0.7 semitones,
+    // though the corrector steers by a newer reading than the one it publishes. Taking the class
+    // from the steering reading gave 1.93 here, with the step 60 frames into a hop
+    #[test]
+    fn a_step_with_no_guide_keeps_each_errors_class_on_its_reading() {
+        let mut corrector = Corrector::new();
+        let step = RATE as usize / 2 + 60;
+        let mut phase = 0.0f64;
+        let mut voice: Vec<f32> = (0..RATE as usize)
+            .map(|i| {
+                let midi = if i < step { 60.0 } else { 62.0 };
+                phase += 440.0 * 2f64.powf((midi - 69.0) / 12.0) / f64::from(RATE);
+                let sample: f64 =
+                    (1..=12).map(|h| (2.0 * PI * h as f64 * phase).sin() / h as f64).sum();
+                (0.25 * sample) as f32
+            })
+            .collect();
+        let mut readings = Vec::with_capacity(100);
+        assert_no_alloc(|| {
+            for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                let frame = (index * BLOCK) as i64;
+                corrector.process(&ON, None, frame, 0, block, |r| readings.push(r));
+            }
+        });
+        let worst = readings
+            .iter()
+            .filter(|r| r.confidence >= 0.9)
+            .map(|r| r.error_semitones.abs())
+            .fold(0.0, f32::max);
+        assert!(worst <= 0.7, "a sure reading's error reached {worst} semitones across the step");
     }
 
     // The ceiling a host budgets with holds on the lowest voice the corrector takes, pulled as far
