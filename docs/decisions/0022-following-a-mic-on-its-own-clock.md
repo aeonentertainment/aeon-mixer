@@ -66,8 +66,8 @@ and a lag named meanwhile is judged then, not dropped. A 128-frame correction ho
 three seconds. A 480-frame mic's 32-frame corrections never hold it, and neither do the few frames
 a second of a finer step, such as a 100-frame mic's under 128-frame callbacks. Held for three
 seconds after every splice instead, a source that spliced 4 frames every 0.8 s never had a new path
-found: its echo came out 0 to 1 dB down for the eight seconds after its path moved, where it now
-comes out 17.6 dB down by the ninth second.
+found: for the eight seconds after its path moved, its echo came out between 1.9 dB louder and
+1.3 dB down. Now it comes out 17.6 dB down by the ninth second.
 
 ## The loop
 
