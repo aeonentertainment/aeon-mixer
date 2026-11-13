@@ -299,9 +299,9 @@ fn a_whole_frame_dropped_at_once_is_followed() {
 // A phone 100 ppm fast starts a new stream fifteen seconds in, as it does when it reconnects
 // with a new SSRC, and its jitter buffer anchors it at the opening delay: the echo is back where
 // the latency says, 72 frames from where it had drifted. The source says it started a stream, and
-// the canceller starts its drift over, keeping the rate: from the second after, it takes out
-// within 3 dB of a phone that never reconnected, 2.6 dB under at most. Unreported, it took out
-// between 1.1 dB louder and 2.8 dB down for the seven seconds after.
+// the canceller starts its drift over, keeping the rate, and finds the echo where it landed: from
+// the second after, it takes out within 3 dB of a phone that never reconnected, 0.1 dB under at
+// most. Unreported, it took out between 1.1 dB louder and 2.8 dB down for the seven seconds after.
 #[test]
 fn a_new_stream_starts_the_drift_over() {
     let frames = 22 * SECOND;

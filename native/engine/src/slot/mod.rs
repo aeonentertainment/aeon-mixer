@@ -15,6 +15,8 @@ pub mod shared;
 #[cfg(test)]
 mod silent_source_tests;
 pub mod source;
+#[cfg(test)]
+mod stream_return_tests;
 
 use std::f32::consts::FRAC_PI_4;
 use std::sync::Arc;

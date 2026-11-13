@@ -5,6 +5,7 @@ mod fft;
 mod history;
 mod lowpass;
 mod mdf;
+mod realign;
 #[cfg(test)]
 mod tests;
 
@@ -13,6 +14,7 @@ use delay_finder::DelayFinder;
 use drift::Drift;
 pub use history::EchoHistory;
 use mdf::Mdf;
+use realign::{REACH, Realign, Search};
 
 /// The engine's block, and the canceller's frame: it works in the slot's own blocks, so it holds
 /// nothing back and adds no delay.
@@ -98,7 +100,15 @@ pub struct EchoCanceller {
     known: Known,
     /// The lag the filter's reference is read at now, less the drift's offset.
     alignment: Option<usize>,
+    /// The windows the filter holds were read where a search looked, not where it found the
+    /// echo: the next frame reads them all again. `alignment` stays meanwhile, since `findings`
+    /// reports the path from it.
+    stale: bool,
     drift: Drift,
+    /// Where a new stream's echo landed, while it is looked for, and how far before the path the
+    /// filter reads the master meanwhile.
+    realign: Realign,
+    early: usize,
     /// The source's splices and streams as of the block before.
     spliced: Option<i64>,
     streams: Option<u32>,
@@ -116,6 +126,7 @@ pub struct EchoCanceller {
     mic: [f32; FRAME],
     out: [f32; FRAME],
     echo: [f32; FRAME],
+    estimate: [f32; FRAME],
 }
 
 /// A source's latency as the canceller follows it.
@@ -143,7 +154,10 @@ impl EchoCanceller {
             unknown: None,
             known: Known::default(),
             alignment: None,
+            stale: false,
             drift: Drift::default(),
+            realign: Realign::new(),
+            early: 0,
             spliced: None,
             streams: None,
             recent_splices: 0.0,
@@ -158,6 +172,7 @@ impl EchoCanceller {
             mic: [0.0; FRAME],
             out: [0.0; FRAME],
             echo: [0.0; FRAME],
+            estimate: [0.0; FRAME],
         }
     }
 
@@ -169,7 +184,10 @@ impl EchoCanceller {
         self.unknown = None;
         self.known = Known::default();
         self.alignment = None;
+        self.stale = false;
         self.drift.reset();
+        self.realign.stop();
+        self.early = 0;
         self.spliced = None;
         self.streams = None;
         self.recent_splices = 0.0;
@@ -180,7 +198,7 @@ impl EchoCanceller {
 
     /// None until the echo is found and the filter has adapted to it.
     pub fn findings(&self) -> Option<EchoFindings> {
-        let alignment = self.alignment.filter(|_| self.adapted)?;
+        let alignment = self.alignment.filter(|_| self.adapted)? + self.early;
         let db = |num: f32, den: f32| 10.0 * ((num + 1e-12) / (den + 1e-12)).log10();
         Some(EchoFindings {
             path_frames: ((alignment + LEAD) as f64 + self.drift.offset()).round().max(0.0) as u32,
@@ -210,9 +228,15 @@ impl EchoCanceller {
         let restarted = self.streams.is_some_and(|was| was != source.streams);
         self.streams = Some(source.streams);
         if restarted {
-            // A new stream: the echo is back where the latency says, and the clocks are the same
+            // A new stream: the echo is near where the latency says, wherever the last one had
+            // drifted, and the clocks are the same. Near, since the stream is anchored where its
+            // first packet arrived: the filter still holds the room, and is moved to wherever its
+            // echo landed
             self.drift.restart();
             self.alignment = None;
+            if self.adapted {
+                self.realign.begin();
+            }
         }
         let read_at = self.drift.offset();
         self.drift.shift(spliced as f64);
@@ -229,6 +253,7 @@ impl EchoCanceller {
                 self.unknown = Some(unknown);
                 self.drift.restart();
                 self.mdf.reset();
+                self.realign.stop();
                 self.alignment = None;
                 self.adapted = false;
             }
@@ -236,8 +261,12 @@ impl EchoCanceller {
         let Some(unknown) = self.unknown else { return };
         let most = EchoHistory::reach() - PARTITIONS * FRAME - WINDOW - 1;
         let lag = (unknown + i64::from(known) - LEAD as i64).clamp(FRAME as i64, most as i64);
-        let alignment = lag as usize;
-        if self.alignment == Some(alignment) && spliced.abs() == 1 {
+        // While a new stream's echo is looked for, the filter reads the master as if it had landed
+        // `early` frames early, so that every lag looked for comes after its estimate
+        self.early = if self.realign.looking() { REACH.min(lag as usize - FRAME) } else { 0 };
+        let alignment = lag as usize - self.early;
+        let stale = std::mem::take(&mut self.stale);
+        if self.alignment == Some(alignment) && spliced.abs() == 1 && !stale {
             // A splice moves the echo a sample, and every window the filter holds slides by one.
             // `edge(history, more)` is the pre-emphasised sample `more` older than the one after
             // the newest of window 0, read where the windows were read
@@ -261,7 +290,7 @@ impl EchoCanceller {
                 let others = whole - (edge(own, enters) - edge(own, leaves));
                 (whole, others)
             });
-        } else if self.alignment != Some(alignment) || spliced != 0 {
+        } else if self.alignment != Some(alignment) || spliced != 0 || stale {
             // A jump, of the path the source names or by more than a sample: read every window
             self.alignment = Some(alignment);
             let Self { mdf, raw, own_raw, drift, .. } = self;
@@ -287,7 +316,35 @@ impl EchoCanceller {
             self.mdf.hold(1);
         }
 
-        let frame = self.mdf.process(&self.mic, &self.window, &self.others, &mut self.out);
+        let frame = if self.realign.looking() {
+            let frame = self.mdf.predict(
+                &self.mic,
+                &self.window,
+                &self.others,
+                &mut self.estimate,
+                &mut self.out,
+            );
+            match self.realign.hear(&self.estimate, &self.mic) {
+                Search::Looking => {}
+                Search::Found(after) => {
+                    let moved = after - self.early as f64;
+                    let whole = moved.round();
+                    self.unknown = Some(unknown + whole as i64);
+                    self.drift.shift(moved - whole);
+                    self.stale = true;
+                }
+                Search::Lost => self.stale = true,
+                Search::Outweighed => {
+                    // A room far louder than the filter learned would hold an adapted filter in
+                    // double talk for good, so it learns the room afresh
+                    self.mdf.reset();
+                    self.stale = true;
+                }
+            }
+            frame
+        } else {
+            self.mdf.process(&self.mic, &self.window, &self.others, &mut self.out)
+        };
         self.adapted = frame.adapted;
         for ((echo, mic), out) in self.echo.iter_mut().zip(&self.mic).zip(&self.out) {
             *echo = mic - out;

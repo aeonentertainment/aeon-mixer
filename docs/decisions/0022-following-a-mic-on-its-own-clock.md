@@ -73,11 +73,66 @@ found: for the eight seconds after its path moved, its echo came out between 1.9
 ## A new stream
 
 A phone that reconnects, or pauses for more than a second, starts a stream its jitter buffer
-anchors at the opening delay, and its echo is back where the latency says, however far the last
-stream had drifted. So a source counts the streams it has started, and the canceller starts its
-drift over on each, keeping the rate, since the clocks are the same. In the kernel test a phone
-100 ppm fast that reconnects after 15 s comes back within 2.6 dB of one that never did. Without
-the count, it took out between 1.1 dB louder and 2.8 dB down for the seven seconds after.
+anchors at the opening delay, however far the last stream had drifted. So a source counts the
+streams it has started, and the canceller starts its drift over on each, keeping the rate, since
+the clocks are the same.
+
+The echo is only near where the latency says, though. The buffer anchors a stream a playout delay
+after the block its first packet arrives before, so the echo moves by where that packet fell in
+its block, up to a block, and by however much longer or shorter it took to arrive than the last
+stream's first packet. The room has not moved, so the filter still holds it; only where it reads
+the master is wrong, and a filter that reads it even a few frames off takes out little. Left to
+the filter and the finder, a phone whose new stream landed a quarter, a half or three quarters of
+a packet off took out between 0.9 dB louder and 7 dB down in the second ending two seconds after
+it came back, against 16 to 18 dB before it stopped: a move of 30 to 90 frames falls inside what
+the finder takes for the same path, so nothing moves the filter, and a longer one waits 1.4 to
+1.7 s for the finder to name the new lag and then learns the room afresh.
+
+So on a new stream the canceller looks for where the echo landed. It runs the filter without
+learning, reading the master 21 ms early, and cross-correlates the filter's estimate of the echo
+of everything but the slot's own voice with what the mic hears. The slot's own voice is the mic
+itself played back and correlates with it at every lag. The peak, once it leads every lag more
+than 16 frames from it twofold, is the move to a fraction of a frame; the filter then reads the
+master there and cancels at once. A voice correlates with itself a few pitch periods away nearly
+as well as at its own lag over one syllable, and without the second test an echo 30 frames early
+was taken for one 711 early. While it looks, under half a second, the slot passes untouched,
+and `stats()` keeps the path it had. A frame counts only when the estimate holds at least a tenth of the mic's
+energy: a perfect estimate 10 dB under the mic correlates at 0.32, under the 0.5 the peak needs.
+An estimate under -70 dBFS is silence: a silent intro or break, or a master holding only the
+slot's own voice. The search waits silence out with the slot passing untouched, however long it
+lasts; after 10 s of it, what was summed is forgotten and the next frame that counts starts
+afresh, since the drift's rate, learned to 1%, moves the reference half a frame in that time at
+100 ppm. Spending its budget on silence, a phone back a quarter packet off during a silent intro
+took out 10.6 dB in the second ending 2 s after the backing returned, against 16.7 before it
+stopped; waiting, 14.4 to 14.7.
+
+Every search ends once the master has reached the mic for 2 s, counted or not, and silence does
+not run that clock down, so no stretch of silence keeps a search open past it. The slowest search
+in these tests named its lag half a second after the master reached the mic. A mic far louder
+than the filter's estimate never counts: a phone picked up off the table, a new input gain, a room
+singing along. With no end, it kept the slot untouched for good. A search that ends without a lag
+keeps the filter, unless fewer frames were heard than a peak needs to be judged, 85 ms of them:
+then the mic outweighed the estimate throughout, as a room far louder than the filter learned
+does, and the filter starts over. A room 15 dB louder left 3 of 750 frames heard; a note held
+17 dB over the echo for the whole search, 72, and one 9 dB over, 382. An
+adapted filter under a mic 15 dB over its estimate holds in double talk for good, and took out
+1.6 dB from the search's end on. Learning afresh, a phone back 15 dB louder took out 14.6 dB in
+the second ending 4 s after its return, against 12.1 for the same room learned from nothing in
+its second second. A singer over the return is told apart by the frames it leaves heard: a held
+note 9 or 17 dB over the echo for the whole search kept the room, and took out 17.7 dB from a
+quarter second after the note, against 16.8 before the stop. Starting over on any search without
+a lag threw that room away: 10.1 dB, with no findings for 0.69 s. A search that ran out starts
+again only with a new stream. The search reaches 21 ms either way: a block's rounding, and
+three quarters of a 20 ms packet.
+
+On the offline driver, through Opus and the jitter buffer, a phone whose new stream lands a
+quarter, a half or three quarters of a packet later or earlier, on 2.5 ms and 20 ms packets, takes
+out 17.1 to 17.9 dB in the second ending two seconds after it came back, against 16.3 and 17.8
+before it stopped; each move is found within 0.4 of a frame. In the kernel test, a phone 100 ppm
+fast that reconnects after 15 s comes back within 0.1 dB of one that never did, against 2.6 on
+the drift restart alone. The second it reconnects in costs 3.3 dB more, 9.5 dB out against 12.8,
+for the time it passes untouched. Without the count, it took out between 1.1 dB
+louder and 2.8 dB down for the seven seconds after.
 
 ## The loop
 
@@ -131,6 +186,10 @@ sets is where the delay ends up.
 - **Delay:** none. The mic path is untouched; the sinc reads the reference, which is never heard.
 - **CPU:** 39.8 us a block against 39.3 on main, measured back to back on an M2 Pro, 1.49% of a
   core per slot; 52.0 us in a block where the source splices. `measure-echo cpu` reports both.
+  Looking for a new stream's echo adds nothing to a block that is not looking: 40.1 us against
+  40.1, back to back on the same machine. A block that is looking costs less than one that
+  adapts, 38.6 us against 40.9 for a source that starts a stream every 100 blocks, since the
+  filter only predicts.
 - **A singer over a mic on the master's clock:** with no drift to follow, the loop's offset wanders
   0.24 samples either way, and the echo taken out while the singer sings over it falls from 16.1 to
   15.6 dB. Before and after them nothing moves past 0.1 dB.
