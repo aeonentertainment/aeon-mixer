@@ -690,7 +690,7 @@ mod tests {
         let (mut history, silent) = (EchoHistory::new(), EchoHistory::new());
         let (mut mic, mut out) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
         let mut next = arrivals.iter().peekable();
-        let mut block = [0.0f32; BLOCK];
+        let mut block = [0.0; BLOCK];
         let mut delays = Vec::with_capacity(seconds);
         for (index, played) in far[..frames].as_chunks::<BLOCK>().0.iter().enumerate() {
             let pumped = (index * BLOCK) as i64;
