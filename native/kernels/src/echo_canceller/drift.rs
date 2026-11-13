@@ -7,8 +7,8 @@
 use super::FRAME;
 
 /// The loop's gains per frame: a natural frequency of 1.2 Hz, damped at 0.75. It learns a 100 ppm
-/// rate within two seconds of the filter adapting; a third or a tenth of these gains learned it
-/// slower and took up to 9 dB less out by the fifth second.
+/// rate within two seconds of the filter adapting. Gains of 0.005 and 2e-5 took four, and 7 to
+/// 18 dB less out at the fifth second.
 const PROPORTIONAL: f64 = 0.03;
 const INTEGRAL: f64 = 4e-4;
 /// No frame's reading moves the loop by more than half a frame, as a burst of noise might.
