@@ -5,6 +5,8 @@
 //! readings sit, that every target is the guide's at its reading's position, so none is stale,
 //! and how many target changes a host counting them would see.
 
+use std::sync::atomic::Ordering;
+
 use assert_no_alloc::assert_no_alloc;
 use kernels::{Preset, Stretch};
 
@@ -359,18 +361,19 @@ fn a_seek_to_the_start_under_the_live_key_holds_the_clock_until_it_is_heard() {
 
 // A move to another output holds the playhead for the gap and starts the slot again, so the next
 // reading comes a hop after the move on the clock where it stopped: no jump, and an edge just past
-// the move is crossed once. The output keeps its latency here; #105 tests one that changes it.
+// the move is crossed once. The output keeps its latency here, published as the follower publishes
+// it when the first stream starts; the audio thread's own tests move to one that changes it.
 #[test]
 fn an_output_move_holds_the_clock_through_the_gap() {
     const LATENCY: u32 = 480;
     const MOVED_AT: i64 = SECOND as i64;
     const NOTE: (u64, u64) = (MOVED_AT as u64 + 200, 90_000);
     let (mut audio, mut controls) = AudioThread::new();
+    audio.output_latency_frames().store(LATENCY, Ordering::Release);
     let mut slot = Slot::new(Box::new(Sine::new(226.0, 0.5)));
     slot.set_guide(Some(guide(&[NOTE])));
     let mut graph = Box::new(Graph::new(vec![slot]));
     graph.set_backing(Backing::new(Stems::new(Planar::silence(4 * SECOND), None), 0));
-    graph.set_backing_offset_frames(LATENCY);
     controls.commands.push(Command::Swap { id: 1, graph }).ok().unwrap();
     controls.commands.push(Command::Start { id: 2 }).ok().unwrap();
     controls.params.update(|p| p.slots[0].effects.corrector = CORRECTING);
