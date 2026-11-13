@@ -70,13 +70,16 @@ pub struct EchoFindings {
 }
 
 /// Where a slot's source has its delay, block by block: `latency_frames`, how long ago the singer
-/// sang what it hands over, which the canceller follows once it holds for two blocks, and
+/// sang what it hands over, which the canceller follows once it holds for two blocks;
 /// `spliced_frames`, the frames it has spliced into what it hands over since it began, less those
-/// it took out, which the canceller follows the block they happen.
+/// it took out, which the canceller follows the block they happen; and `streams`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceDelay {
     pub latency_frames: u32,
     pub spliced_frames: i64,
+    /// Streams the source has started. A new one starts its delay over at the latency, so the
+    /// echo is back where the latency says, however far the last one had drifted.
+    pub streams: u32,
 }
 
 /// Takes the room's echo of the master out of one mic, with the master as its reference. The
@@ -96,8 +99,9 @@ pub struct EchoCanceller {
     /// The lag the filter's reference is read at now, less the drift's offset.
     alignment: Option<usize>,
     drift: Drift,
-    /// The source's splices as of the block before.
+    /// The source's splices and streams as of the block before.
     spliced: Option<i64>,
+    streams: Option<u32>,
     /// The source's recent splices, in frames, fading.
     recent_splices: f32,
     adapted: bool,
@@ -141,6 +145,7 @@ impl EchoCanceller {
             alignment: None,
             drift: Drift::default(),
             spliced: None,
+            streams: None,
             recent_splices: 0.0,
             adapted: false,
             meters: Meters::default(),
@@ -166,6 +171,7 @@ impl EchoCanceller {
         self.alignment = None;
         self.drift.reset();
         self.spliced = None;
+        self.streams = None;
         self.recent_splices = 0.0;
         self.adapted = false;
         self.meters = Meters::default();
@@ -200,6 +206,13 @@ impl EchoCanceller {
         let spliced = source.spliced_frames - self.spliced.unwrap_or(source.spliced_frames);
         self.spliced = Some(source.spliced_frames);
         self.recent_splices = self.recent_splices * SPLICES_FADE + spliced.unsigned_abs() as f32;
+        let restarted = self.streams.is_some_and(|was| was != source.streams);
+        self.streams = Some(source.streams);
+        if restarted {
+            // A new stream: the echo is back where the latency says, and the clocks are the same
+            self.drift.restart();
+            self.alignment = None;
+        }
         let read_at = self.drift.offset();
         self.drift.shift(spliced as f64);
 

@@ -41,7 +41,11 @@ pub fn run() -> Cpu {
             let blocks = far.as_chunks::<BLOCK>().0.iter().zip(mic.as_chunks::<BLOCK>().0.iter());
             for (index, (played, heard)) in (0..).zip(blocks) {
                 block.copy_from_slice(heard);
-                let delay = SourceDelay { latency_frames: 0, spliced_frames: index * splices };
+                let delay = SourceDelay {
+                    latency_frames: 0,
+                    spliced_frames: index * splices,
+                    ..SourceDelay::default()
+                };
                 canceller.process(&history, &silent, delay, &mut block);
                 history.push(played, played);
             }

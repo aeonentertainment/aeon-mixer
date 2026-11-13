@@ -48,10 +48,14 @@ impl Source for PacketSource {
     }
 
     /// A skew correction drops or conceals a frame, moving the echo with it, and the latency
-    /// holds, so the jitter buffer reports it as a splice.
+    /// holds, so the jitter buffer reports it as a splice. A new stream starts at the opening
+    /// delay, wherever the last had drifted to.
     fn delay(&self) -> SourceDelay {
-        let spliced_frames = self.jitter.spliced_frames();
-        SourceDelay { latency_frames: self.jitter.latency_frames(), spliced_frames }
+        SourceDelay {
+            latency_frames: self.jitter.latency_frames(),
+            spliced_frames: self.jitter.spliced_frames(),
+            streams: self.jitter.streams(),
+        }
     }
 }
 

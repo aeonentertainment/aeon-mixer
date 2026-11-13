@@ -61,6 +61,9 @@ pub struct JitterBuffer {
     /// Frames the skew corrections have moved the stream later, less those they moved it
     /// earlier, since the buffer was made: they move the echo, and the playout delay holds.
     spliced: i64,
+    /// Streams anchored since the buffer was made. Each starts at the opening delay, wherever
+    /// the last had drifted to.
+    streams: u32,
     /// Output frames pulled since the buffer was made: the clock every due time is on.
     now: i64,
     stats: SlotStats,
@@ -134,6 +137,7 @@ impl JitterBuffer {
             stream: None,
             anchored: false,
             spliced: 0,
+            streams: 0,
             now: 0,
             stats,
             shared,
@@ -161,6 +165,11 @@ impl JitterBuffer {
     /// its echo and not its latency.
     pub fn spliced_frames(&self) -> i64 {
         self.spliced
+    }
+
+    /// Streams anchored so far.
+    pub fn streams(&self) -> u32 {
+        self.streams
     }
 
     /// `ResetSlot`: forget the stream. The next packet is a new singer and re-anchors.
@@ -270,6 +279,7 @@ impl JitterBuffer {
             self.stats.resyncs += 1;
         }
         self.anchored = true;
+        self.streams = self.streams.wrapping_add(1);
         self.fifo.clear();
         self.playout_delay = self.opening;
         let plays_at = self.now + self.playout_delay;
@@ -636,7 +646,7 @@ mod tests {
     }
 
     /// Packets stop for over a second: concealment stops too, and the next packet is a new
-    /// stream at the playout delay, however far its timestamp jumped.
+    /// stream at the playout delay, however far its timestamp jumped, and counted as one.
     #[test]
     fn silence_over_a_second_ends_the_stream_and_the_next_packet_begins_another() {
         let signal = quantized(&source(RATE as usize));
@@ -653,6 +663,7 @@ mod tests {
         assert!(compare(&signal, 0, &out, resumed, 0).error < 1e-6);
         let stats = jitter.stats();
         assert_eq!(stats.resyncs, 1, "{stats:?}");
+        assert_eq!(jitter.streams(), 2, "the echo canceller hears of the new stream");
         assert!(stats.concealed < 400, "concealment stopped after a second: {stats:?}");
     }
 

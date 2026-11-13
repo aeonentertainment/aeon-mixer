@@ -37,7 +37,7 @@ pub trait Source: Send {
     /// Where the echo canceller finds the source's delay: its latency, and the frames it has
     /// spliced in less those it took out, which move the echo without moving the latency.
     fn delay(&self) -> SourceDelay {
-        SourceDelay { latency_frames: self.latency_frames(), spliced_frames: 0 }
+        SourceDelay { latency_frames: self.latency_frames(), ..SourceDelay::default() }
     }
 }
 

@@ -455,6 +455,7 @@ impl Source for CaptureVoice {
         SourceDelay {
             latency_frames: self.latency_frames(),
             spliced_frames: self.moved - self.target as i64,
+            ..SourceDelay::default()
         }
     }
 }
