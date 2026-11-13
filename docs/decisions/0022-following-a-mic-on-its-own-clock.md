@@ -128,7 +128,9 @@ sets is where the delay ends up.
 - **A splice in the canceller's own block.** The sweep inside a spliced block stays. A 480-frame
   input's 32-frame correction costs its second up to 3.3 dB, every 6.7 s at 100 ppm. A 128-frame
   input's whole-period correction costs its second 6.2 to 7.1 dB, every 27 s at 100 ppm and 13 s at
-  200; `capture_edges.rs` runs it for 40 s.
+  200; `capture_edges.rs` runs it for 40 s. Over two minutes that left 4 to 12 seconds of 115 more
+  than 3 dB under the same clock, at 100 ppm and 200 either way. A slower input's first slip also
+  plays a gap, once: at 200 ppm slow that second came out 13.7 dB under.
 
 ## The run a person owes
 
