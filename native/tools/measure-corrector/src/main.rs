@@ -18,6 +18,7 @@ mod curve;
 mod degrader;
 mod diff;
 mod expression;
+mod flapping;
 mod ingest;
 mod key_report;
 mod listen;

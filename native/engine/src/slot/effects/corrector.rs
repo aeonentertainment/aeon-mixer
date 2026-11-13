@@ -38,6 +38,11 @@ impl Corrector {
         self.kernel.latency_samples()
     }
 
+    /// Whether it is pulling the voice now.
+    pub fn correcting(&self) -> bool {
+        self.kernel.correcting()
+    }
+
     /// One run of the slot's voice, in place, following `guide` when there is one. `frame` is
     /// where its first sample sits on the guide's clock, which docs/design.md section 3 derives
     /// from the playhead, and `semitones` the backing's key shift, which the guide follows.

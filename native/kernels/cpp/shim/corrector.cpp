@@ -43,6 +43,8 @@ std::int32_t aeon_corrector_reading_lag_samples(const PitchCorrector *corrector)
 
 float aeon_corrector_error_semitones(const PitchCorrector *corrector) noexcept { return corrector->errorSemitones(); }
 
+bool aeon_corrector_correcting(const PitchCorrector *corrector) noexcept { return corrector->correcting(); }
+
 std::int32_t aeon_corrector_latency_samples(const PitchCorrector *corrector) noexcept {
   return corrector->latencySamples();
 }

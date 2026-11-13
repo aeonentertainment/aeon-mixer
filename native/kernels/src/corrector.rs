@@ -82,6 +82,13 @@ impl PitchCorrector {
         unsafe { ffi::aeon_corrector_error_semitones(self.raw.as_ptr()) }
     }
 
+    /// Whether it is pulling the voice now: a voice it hears, a class to pull it to, and a
+    /// strength over 0. What a singer hears switch on and off.
+    pub fn correcting(&self) -> bool {
+        // SAFETY: `raw` is live for as long as `self`
+        unsafe { ffi::aeon_corrector_correcting(self.raw.as_ptr()) }
+    }
+
     /// How far the output trails the input now; 0 while bypassed.
     pub fn latency_samples(&self) -> usize {
         // SAFETY: `raw` is live for as long as `self`
@@ -170,6 +177,21 @@ mod tests {
             let cents = cents_between(median_pitch(&output, 1.0, 2.0), target);
             assert!(cents.abs() < 10.0, "output {cents:+.1} cents from {target:.1} Hz");
         }
+    }
+
+    // It is correcting while it hears a voice and pulls it, and not at strength 0 or once the voice
+    // has stopped
+    #[test]
+    fn correcting_is_a_heard_voice_and_a_pull() {
+        let mut corrector = PitchCorrector::new(RATE);
+        corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
+        corrected(&mut corrector, &harmonic_tone(220.0, 0.5), 128);
+        assert!(corrector.correcting(), "a sung tone at strength 1");
+        corrector.set_target(EVERY_PITCH_CLASS, 0.0, 40.0);
+        assert!(!corrector.correcting(), "strength 0");
+        corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
+        corrected(&mut corrector, &vec![0.0; 24_000], 128);
+        assert!(!corrector.correcting(), "half a second of silence");
     }
 
     // A new stream on the slot starts clean: nothing of the last singer comes out after a reset

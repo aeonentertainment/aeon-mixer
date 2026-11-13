@@ -4,7 +4,7 @@
 //! slot's state between blocks; what `AudioThread` adds is the command drain and the swap fade.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use assert_no_alloc::assert_no_alloc;
 use cpu_time::ThreadTime;
@@ -82,15 +82,20 @@ pub fn run(setup: Setup) -> Take {
 
     let delay = Arc::new(AtomicU32::new(0));
     let published = Arc::clone(&delay);
+    let correcting = Arc::new(AtomicBool::new(false));
+    let published_correcting = Arc::clone(&correcting);
     let mut driver = OfflineDriver::new(Box::new(move |out: Stereo<'_>| {
         graph.render(&params, out, &mut events);
-        published.store(graph.slots()[0].corrector_latency_frames() as u32, Ordering::Relaxed);
+        let slot = &graph.slots()[0];
+        published.store(slot.corrector_latency_frames() as u32, Ordering::Relaxed);
+        published_correcting.store(slot.corrector_correcting(), Ordering::Relaxed);
     }));
 
     let mut take = Take {
         left: Vec::with_capacity(blocks * BLOCK),
         right: Vec::with_capacity(blocks * BLOCK),
         readings: Vec::with_capacity(frames / 480 + 1),
+        engaged: Vec::with_capacity(frames / 480 + 1),
         delays: Vec::with_capacity(blocks),
         cpu_seconds: 0.0,
         stats: None,
@@ -109,6 +114,7 @@ pub fn run(setup: Setup) -> Take {
         while let Some(event) = drain.pop() {
             if let Event::Pitch { slot: 0, position_ms, hz, confidence, .. } = event {
                 take.readings.push(Point { ms: position_ms, hz, confidence });
+                take.engaged.push(correcting.load(Ordering::Relaxed));
             }
         }
     }

@@ -77,6 +77,11 @@ impl Slot {
         self.corrector.latency_frames()
     }
 
+    /// Whether the corrector is pulling the voice now: what a singer hears switch on and off.
+    pub fn corrector_correcting(&self) -> bool {
+        self.corrector.correcting()
+    }
+
     /// The same delay for the control thread, once the graph has moved to the audio thread.
     pub fn corrector_delay(&self) -> Arc<CorrectorDelay> {
         Arc::clone(&self.corrector_delay)

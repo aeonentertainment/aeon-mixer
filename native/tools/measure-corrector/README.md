@@ -85,6 +85,12 @@ the way they do, and the table says so.
   drift of up to 12, scoops into half the notes and an unsteady wobble on some held ones. The
   slot then follows the melody. The error against the key is split into held notes, onsets and
   wobbled notes. `off` is the degradation itself.
+- **Flapping.** The clip as sung, through the slot: how often correction lets go of a note and
+  takes it back, per second of note past its first 30 ms. It reads `Slot::corrector_correcting` at
+  each published reading, 10 ms apart, so a switch shorter than that can go unseen. A singer hears
+  each switch as the voice going untuned and tuned again. `drops_at_the_gate_pct` is the share of
+  drops at a reading under the corrector's bar, `unsure_readings_per_second` how often readings
+  fail it at all, and `acting_pct` how much of the notes correction held.
 - **The floor.** The degrader bent and bent back, against the key. No row can claim less, and the
   table prints `under floor` instead of a number that does.
 - **Artefacts,** on every take, a phone's included, as the output against its own input: clicks
