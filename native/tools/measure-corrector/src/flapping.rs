@@ -77,7 +77,8 @@ pub fn measure(readings: &[Point], engaged: &[bool], notes: &[MeantNote]) -> Fla
 impl Flapping {
     pub fn json(&self) -> Value {
         let per_second = |count: usize| count as f64 / self.note_seconds.max(f64::EPSILON);
-        let share = |count: usize, of: usize| 100.0 * count as f64 / of.max(1) as f64;
+        // A share of nothing is no number: null, which a table shows as none to split
+        let share = |count: usize, of: usize| (of > 0).then(|| 100.0 * count as f64 / of as f64);
         json!({
             "note_seconds": self.note_seconds,
             "acting_pct": share(self.acting, self.readings),
@@ -129,5 +130,21 @@ mod tests {
         assert_eq!((flapping.drops, flapping.returns), (3, 3));
         assert_eq!((flapping.drops_unsure, flapping.drops_low, flapping.drops_sure), (2, 0, 1));
         assert_eq!(flapping.unsure_readings, 6);
+    }
+
+    // A note correction holds throughout has no drops to split, so the split reads as none, not as
+    // 0 % of each cause; readings outside every note give no share held either
+    #[test]
+    fn nothing_to_split_reads_as_none() {
+        let notes = [MeantNote { midi: 57, start_ms: 0.0, end_ms: 1040.0 }];
+        let readings: Vec<Point> =
+            (0..100).map(|i| point(f64::from(i) * 10.0 + 5.0, true)).collect();
+        let row = measure(&readings, &[true; 100], &notes).json();
+        assert_eq!(row["drops_per_second"], 0.0);
+        for key in ["drops_unsure_pct", "drops_under_82_hz_pct", "drops_at_a_sure_reading_pct"] {
+            assert!(row[key].is_null(), "{key} read {}", row[key]);
+        }
+        assert_eq!(row["acting_pct"], 100.0);
+        assert!(measure(&[], &[], &notes).json()["acting_pct"].is_null());
     }
 }

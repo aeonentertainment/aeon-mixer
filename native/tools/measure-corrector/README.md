@@ -88,12 +88,13 @@ the way they do, and the table says so.
 - **Flapping.** The clip as sung, through the slot: how often correction lets go of a note and
   takes it back, per second of note past its first 30 ms. It reads `Slot::corrector_correcting` at
   each published reading, 10 ms apart, so a switch shorter than that can go unseen. A singer hears
-  each switch as the voice going untuned and tuned again. `drops_unsure_pct`, `drops_under_82_hz_pct` and
-  `drops_at_a_sure_reading_pct` split the drops by the reading they came at: under the corrector's
-  confidence bar, sure but under 82 Hz, or sure, where the corrector's own reading or its hold let
-  go; the corrector votes with its own readings, so this is what a host saw, not the kernel's
-  reason, `unsure_readings_per_second` how often readings
-  fail it at all, and `acting_pct` how much of the notes correction held.
+  each switch as the voice going untuned and tuned again. `drops_unsure_pct`,
+  `drops_under_82_hz_pct` and `drops_at_a_sure_reading_pct` split the drops by the reading they
+  came at: under the corrector's confidence bar, sure but under 82 Hz, or sure, where the
+  corrector's own reading or its hold let go. The corrector votes with its own readings, so this is
+  what a host saw, not the kernel's reason. With no drops they are null, which `diff` shows as `-`.
+  `unsure_readings_per_second` is how often readings fail the bar at all, and `acting_pct` how much
+  of the notes correction held.
 - **The floor.** The degrader bent and bent back, against the key. No row can claim less, and the
   table prints `under floor` instead of a number that does.
 - **Artefacts,** on every take, a phone's included, as the output against its own input: clicks
