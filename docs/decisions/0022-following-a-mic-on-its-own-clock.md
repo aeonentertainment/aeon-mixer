@@ -59,8 +59,10 @@ and correcting the canceller's output for the sweep gained 0.3 dB.
 The delay finder follows a moved echo too, and slower. While a capture slot corrected 128 frames it
 named lags up to 259 frames from where the splices put the path, more than the 128 the canceller
 takes for the same path, and the filter started over: up to 26.5 dB under the same mic on the
-output's clock, and more than 3 dB under for eight seconds. So a lag the finder names within a
-second of the source's last splice is never a new path.
+output's clock, and more than 3 dB under for eight seconds. The finder stayed that far off for up
+to two seconds, and 1.6 s of waiting was not enough. So the canceller judges a lag the finder names
+only once the source has gone three seconds without a splice, and a lag named meanwhile is judged
+then, not dropped.
 
 ## The loop
 
