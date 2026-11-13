@@ -791,8 +791,9 @@ ring into the jitter buffer at the top of each block.
   out of it. 30 ms is three 10 ms chunks, room for a host two chunks late, and is a default
   until `measure-latency` (8.9) gives the push path a number.
 - A `capture` slot is a mic on this machine, with no socket and no jitter buffer. `createMixer`
-  starts its input through `devices::capture` (8.3) at the output's period, or as near as the
-  device allows, and rejects if it cannot, or if the input's period is over 1024 frames, or the
+  starts its input through `devices::capture` (8.3) at the output's period when the ring holds it
+  beside that callback, or else the longest whole-block period it can, 896 frames under 2048, or
+  as near as the device allows, and rejects if it cannot, or if the input's period is over 1024 frames, or the
   ring cannot hold the output's callback beside it: the target's ceiling and the headroom, twice
   the period, the callback in whole blocks and 16 frames, over its 4096 frames. So a 2048-frame
   callback, which some Bluetooth outputs grant, plays under any input of 1016 frames or less, and a
