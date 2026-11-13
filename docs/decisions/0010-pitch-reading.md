@@ -78,9 +78,10 @@ retune, which is #46's to change. Strength sets its own floor: at 0.6 the oracle
 ## What it asks of the howl guard
 
 The corrector reads a howl as readily as a voice, and at 5 ms it retunes one a semitone at a time.
-A loop through a correcting slot then hops and loses its shape for part of each trip, which hid
-more howls from the guard than today's corrector does: 20 of 480 seeded rooms never caught against 8. The guard now follows a tone through a semitone and five misses, and catches all but one;
-decision 0020 has the numbers.
+A loop through a correcting slot then moves and loses its shape for part of each trip. On the guard
+before #137 that hid more howls than today's corrector does: 20 of 480 seeded rooms never caught
+against 8. #137's guard follows a tone the corrector moves, and with it this corrector leaves 1 of
+480 uncaught and 91 louder than -20 dBFS, against 213. Decision 0020 has the numbers.
 
 ## What it costs
 
