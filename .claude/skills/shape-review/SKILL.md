@@ -12,11 +12,12 @@ code works and `/pr-review` whether it follows AGENTS.md, so a bug or a broken r
 finding is a **simpler shape**: a concrete other way to build the same behaviour that removes
 code, a concept or a special case.
 
-1. Read the PR: `gh pr view $ARGUMENTS --comments` for the title, body and earlier review, then
-   `gh pr diff $ARGUMENTS`. A diff that touches only prose docs gets the one-line summary "Docs
-   only, no shape to judge" and the review ends there. The tree you read must be the PR's head.
-   CI checks it out for you. In a local run, `git rev-parse HEAD` must equal `gh pr view
-   $ARGUMENTS --json headRefOid`; when it differs, end with "Check out the PR's head first".
+1. Read the PR: `gh pr view $ARGUMENTS --json title,body,comments,commits` for the title, body,
+   earlier review summaries and the commits pushed since, then `gh pr diff $ARGUMENTS`. A diff
+   that touches only prose docs gets the one-line summary "Docs only, no shape to judge" and the
+   review ends there. The tree you read must be the PR's head. CI checks it out for you. In a
+   local run, `git rev-parse HEAD` must equal `gh pr view $ARGUMENTS --json headRefOid`; when it
+   differs, end with "Check out the PR's head first".
 2. Write the **goal**: one sentence saying what the PR makes true for a host that embeds the
    mixer, a listener in the room, or a person reading a tool's numbers. The diff is judged
    against the goal, and a simpler shape must keep it true.
@@ -52,8 +53,8 @@ code, a concept or a special case.
    sketch in names and sentences, and what it removes. Then write the summary into your Claude
    comment on the PR: the goal, one line per finding with a pointer to its inline comment, then
    one line per question that found nothing, saying what you compared. A PR whose shape is right
-   gets "Nothing to change", and most small PRs do. A finding already posted on this PR is
-   posted again only when its answer left it standing. A local run has neither tool: give the
+   gets "Nothing to change", and most small PRs do. A finding an earlier summary lists is not
+   posted again: the summary names it as still open. A local run has neither tool: give the
    findings and the summary in the session.
 
 Done when the summary states the goal, every question in step 3 has a line, and every finding
