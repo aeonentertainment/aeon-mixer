@@ -209,14 +209,14 @@ export interface OutputInfo {
   refused?: RefusedOutput
 }
 
+/** Every output the OS offers, the default marked. */
+export declare function outputs(): Array<OutputEntry>
+
 export interface RefusedOutput {
   id: string
   name: string
   error: string
 }
-
-/** Every output the OS offers, the default marked. */
-export declare function outputs(): Array<OutputEntry>
 
 export interface ReverbInput {
   enabled: boolean
