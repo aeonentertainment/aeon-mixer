@@ -45,8 +45,6 @@ scope and missing tests belong to `/pr-review`.
    - **Numbers people quote.** In tools and reports: a warning computed but never printed, a
      measurement that includes samples outside the clip, a verdict that reads the first row
      where the score reads all of them, a path check that two spellings of one folder get past.
-   - **What the caller controls.** Every number, path, device id and flag a host or a command
-     line passes in: is it checked before it reaches a device, an allocation or an index?
 3. Prove each candidate against the code before it becomes a finding: name the lines that make
    the scenario reachable, and look for the guard that already prevents it. A candidate you
    cannot tie to reachable lines is dropped. Candidates with one cause are one finding. Keep at
