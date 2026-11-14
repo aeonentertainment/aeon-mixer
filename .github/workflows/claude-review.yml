@@ -13,8 +13,10 @@
 # --permission-mode default keeps --allowedTools the whole list: the action's own
 # default, auto, lets a safety review run calls that no rule allows.
 #
-# One review of each kind per PR: it runs when the PR opens, leaves draft or is reopened,
-# never on a push. Close and reopen a PR to review it again.
+# Every push is reviewed again, and a newer push cancels the review of an older one, so
+# the reviews on a PR are always of its head. The job runs on a GitHub-hosted runner: it
+# only calls APIs, and a review that waits behind the build queue finds the head has moved
+# and is refused by the action.
 #
 # Required repo secrets, one per author, each from `claude setup-token` run by
 # that person: CLAUDE_CODE_OAUTH_TOKEN_<github login>, looked up
@@ -25,7 +27,7 @@ name: claude-review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened, synchronize]
 
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
@@ -37,7 +39,7 @@ jobs:
   review:
     # Drafts get no review, and a fork's PR has no secrets to review with.
     if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
