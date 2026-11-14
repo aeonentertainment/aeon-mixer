@@ -126,7 +126,7 @@ What the engine reports so the rest of the device can follow:
   the Wi-Fi.
 - An engaged corrector delays its slot's voice by an amount that moves with the voice, and holds
   it through a rest. `stats()` gives each slot `correctorDelayMs`, the delay as it stands, and
-  `correctorMaxDelayMs`, its 15 ms ceiling; both read 0 with correction off. A host shows
+  `correctorMaxDelayMs`, its 13.5 ms ceiling; both read 0 with correction off. A host shows
   the first and budgets with the second. Neither enters a clock: nothing can play a live voice
   early, and the guide clock and a pitch reading both name the corrector's input, ahead of its
   delay. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) has the reasons.
@@ -163,8 +163,10 @@ ahead or buffers, so a click leaves on the sample it entered, but the high-pass'
 delays a voice's fundamental near its corner: 1.8 ms at 110 Hz, 0.4 at 220. Decision
 [0012](decisions/0012-cleaning-the-voice.md) has the reasons for their order and numbers. The
 corrector costs a singer who asks for it a delay that moves with the voice,
-from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
-stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
+from 0.1 ms at rest up to one period of it and 0.25 ms: 1.4 ms at most at 880 Hz, 9.3 at 110, 12.4
+at the 82 Hz it stops at, and 13.5 there shifted six semitones up. A rest moves it down to a quarter
+period above that floor. Decisions [0009](decisions/0009-reporting-the-corrector-delay.md) and
+[0021](decisions/0021-one-period-and-a-rest.md) weigh that. Off, it hands
 the voice over bit for bit with no delay and still reads pitch. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots, and a PCM ring
 a device's capture thread fills for `capture` slots. Slots are mono and pan with a constant-power
