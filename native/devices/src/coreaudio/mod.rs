@@ -6,6 +6,7 @@ mod driver;
 mod hal_rate;
 mod io;
 mod property;
+mod steps;
 mod watch;
 
 use engine::driver::DriverError;

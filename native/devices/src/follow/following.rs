@@ -11,6 +11,7 @@ use super::dock::Dock;
 use super::playing::Playing;
 use super::refused::Refused;
 use super::start_error::StartError;
+use super::starting::Starting;
 use super::system::System;
 use crate::output::Output;
 use crate::request::Request;
@@ -20,6 +21,12 @@ use crate::stats::Stats;
 /// output the rule picks, the one it left and the default will start. A command sent in the gap is
 /// answered after it, and the binding gives up on one after a second.
 pub const GIVE_UP: Duration = Duration::from_secs(1);
+
+/// How long an output's start may take before it is refused as one that failed, at open and on a
+/// move. A healthy output starts in tens of ms and a Bluetooth one can take a second or two, while
+/// a CoreAudio output whose clock never runs is held for the HAL's own 10 s and then fails. Decision
+/// 0016 has the case.
+pub const REFUSE_AFTER: Duration = Duration::from_secs(3);
 
 /// How often an output that refused to open is tried again, inside `GIVE_UP`.
 const RETRY: Duration = Duration::from_millis(100);
@@ -256,7 +263,9 @@ fn target<'a>(outputs: &'a [Output], pinned: Option<&str>) -> Option<&'a Output>
 }
 
 // Opens by id even when following the default, so the output reported is the one opened if the
-// default moves again in between; that move wakes the follower once more.
+// default moves again in between; that move wakes the follower once more. A start still running
+// after `REFUSE_AFTER` is refused, and the movable comes back unless the stream has rendered with
+// it, which means it is running and the start is waited out.
 fn start<M: Movable>(
     system: &impl System,
     request: &Request,
@@ -267,7 +276,21 @@ fn start<M: Movable>(
     let (callback, latency) = (movable.callback_frames(), movable.output_latency_frames());
     let (render, dock) = Dock::lend(movable);
     let request = Request { device: Some(output.id.clone()), ..request.clone() };
-    match system.driver(request, Arc::clone(stats)).start(render) {
+    let starting = match Starting::spawn(system.driver(request, Arc::clone(stats)), render) {
+        Ok(starting) => starting,
+        Err(error) => return Err((error, dock.take())),
+    };
+    let started = match starting.within(REFUSE_AFTER) {
+        Some(result) => result,
+        None => match dock.take() {
+            Some(movable) => {
+                let error = format!("did not start within {} s", REFUSE_AFTER.as_secs());
+                return Err((DriverError::Backend(error), Some(movable)));
+            }
+            None => starting.finish(),
+        },
+    };
+    match started {
         Ok(running) => {
             // The stream may have rendered already. A capture slot re-priming from `moved` waits
             // for more mic than arrives before this store, and the next block hears it; so does

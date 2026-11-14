@@ -27,7 +27,8 @@ impl Follower {
     /// Opens where `request` says, `request.device` being the pinned output, and follows from
     /// there. Blocks while the first stream opens, as a driver's `start` does. `stats` records
     /// every stream it opens. A start that fails leaves nothing behind: no stream, no watch, and
-    /// the `Movable` dropped.
+    /// the `Movable` dropped. One refused after `REFUSE_AFTER` holds its device, on a thread of its
+    /// own, until the OS's start returns.
     pub fn start(
         request: Request,
         movable: impl Movable,
