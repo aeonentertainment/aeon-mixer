@@ -2,7 +2,8 @@
 
 **Status:** accepted, 2026-11-10, ahead of the code for #53. An output that will not start
 leaves the song where it was, 2026-11-13, for aeon-karaoke#510. A start that hangs is refused
-after 3 s, 2026-11-13, for #161.
+after 3 s, 2026-11-13, for #161. The open starts its output off the event loop, 2026-11-13, for
+#164.
 
 ## The problem
 
@@ -65,6 +66,8 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   for its start to return, however long that takes. A healthy output starts in tens of ms and a
   Bluetooth one can take a second or two, so 3 s refuses neither. The wedged monitor below took
   10.1 s. An output slower than 3 s is refused like one that hangs, until the rule picks it again.
+- **The open never holds the event loop.** The start runs off Node's event loop, so a host that
+  tries one output after another keeps answering through the 3 s each may take.
 - **A stall is a loss, not a fault.** A stream that asks for no audio for 200 ms while its
   output stays listed is lost, on every backend, and reopened. A Mac asleep calls no IOProc, and
   by one Mac's logs neither does DarkWake, so a reopen that stays silent waits twice as long as
