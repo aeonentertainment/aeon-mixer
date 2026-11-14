@@ -257,11 +257,15 @@ impl Rig {
     }
 
     /// Waits until the follower has finished whatever its last wake started: it handles one
-    /// wake at a time, so once it lists the outputs again, the last one is done. Only for a
-    /// follower that is playing, which lists only when woken.
+    /// wake at a time, so once it lists the outputs again, the last one is done. A wake still
+    /// pending folds into the one raised here, so the first list may begin that reconcile rather
+    /// than follow it; the second list is from a wake raised after the first, so follows it. Only
+    /// for a follower that is playing, which lists only when woken.
     fn settle(&self) {
-        self.fake.wake().raise();
-        while self.next() != Seen::Listed {}
+        for _ in 0..2 {
+            self.fake.wake().raise();
+            while self.next() != Seen::Listed {}
+        }
     }
 
     fn playing(&self) -> (String, u32, u32) {
@@ -392,6 +396,8 @@ fn a_stream_that_stops_calling_back_reopens_and_waits_longer_each_time_it_stays_
     );
     assert!(starts[2] - starts[1] >= 2 * STALL, "the next reopen waits twice as long");
     assert!(starts[3] - starts[2] >= 4 * STALL, "and the one after twice again");
+    // A stream reports its start before the follower records the move
+    rig.settle();
     assert_eq!(rig.playing().1, 3, "the host hears outputChanged for every reopen");
     assert!(!rig.stats.report().failed, "silence never faults the engine");
 

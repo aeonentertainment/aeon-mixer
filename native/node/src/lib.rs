@@ -21,7 +21,7 @@ mod slot_stats_info;
 pub use backing::{BackingInput, BackingRender, StemGainsInput};
 pub use clock::OutputEntry;
 pub use echo_info::EchoInfo;
-pub use engine::{Engine, OpenOptions, OutputDevice, OutputInfo};
+pub use engine::{Engine, OpenOptions, OutputDevice, OutputInfo, RefusedOutput};
 pub use event::NativeEvent;
 pub use guide::{GuideInput, NoteInput};
 pub use mixer::Mixer;
