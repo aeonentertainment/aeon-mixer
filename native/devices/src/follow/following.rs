@@ -179,11 +179,16 @@ impl<M: Movable, S: System> Following<M, S> {
         else {
             return;
         };
-        // The output it left, while the OS still lists it, is where a refused target sends it
+        // Where the rule says, then the output it left while the OS still lists it, then the
+        // default, which a pinned engine falls back to when its pin and that one both fail
         let left = outputs.iter().find(|output| output.id == playing.output.id);
-        let candidates = target
-            .iter()
-            .chain(left.filter(|left| target.as_ref().is_none_or(|target| target.id != left.id)));
+        let default = outputs.iter().find(|output| output.is_default);
+        let mut candidates: Vec<&Output> = Vec::with_capacity(3);
+        for output in target.iter().chain(left).chain(default) {
+            if !candidates.iter().any(|tried| tried.id == output.id) {
+                candidates.push(output);
+            }
+        }
         let mut refusal = None;
         for output in candidates {
             match start(&self.system, &self.request, &self.stats, output, movable) {

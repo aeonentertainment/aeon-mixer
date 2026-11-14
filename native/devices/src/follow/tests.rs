@@ -496,6 +496,25 @@ fn a_pinned_output_that_returns_but_will_not_start_leaves_the_song_on_the_defaul
     assert!(!rig.stats.report().failed);
 }
 
+/// A pinned output back but refusing, then the default it fell back to unplugged: the new default
+/// takes the song, as the rule of decision 0016 says it would with no pin.
+#[test]
+fn a_pinned_engine_whose_pin_refuses_and_whose_fallback_goes_plays_on_the_default() {
+    let rig = Rig::new(&[("hdmi", true), ("usb", false)], Some("usb"));
+    rig.expect(&[started("usb")]);
+    rig.fake.offer(&[("hdmi", true)]);
+    rig.expect(&[stopped("usb"), started("hdmi")]);
+    rig.fake.room().refuses.push("usb".into());
+    rig.fake.offer(&[("hdmi", true), ("usb", false)]);
+    rig.expect(&[stopped("hdmi"), Seen::Refused("usb".into()), started("hdmi")]);
+
+    rig.fake.offer(&[("usb", false), ("speakers", true)]);
+    rig.expect(&[stopped("hdmi"), Seen::Refused("usb".into()), started("speakers")]);
+    rig.settle();
+    assert_eq!(rig.playing(), ("speakers".into(), 3, 800));
+    assert!(!rig.stats.report().failed);
+}
+
 #[test]
 fn nothing_that_will_start_within_a_second_faults_the_engine() {
     let rig = Rig::new(&[("usb", true), ("built-in", false)], None);
