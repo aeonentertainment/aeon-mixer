@@ -50,17 +50,22 @@ impl<R: NominalRate> RateHolds<R> {
             let entry = &mut held[at];
             entry.users += 1;
             let first = entry.users == 1;
-            let landing = entry.put_back.take().is_some_and(|at| at.elapsed() < self.landing);
+            let put_back = entry.put_back.take();
+            let landing = put_back.is_some_and(|at| at.elapsed() < self.landing);
             // Asked for under the lock, so a put back and the next ask reach the HAL in order
             match self.hal.rate(device) {
-                // A rate put back a moment ago may still read 48 kHz while it lands, so this asks
-                // again, to land last, and keeps the rate found
-                Ok(now) if now == rate && landing => self.hal.put_rate(device, rate).map(|()| true),
+                // A put back may still be on its way while the device reads 48 kHz, however long
+                // ago it was asked, so this asks again, to land last. Within a second the read is
+                // taken as ours still standing and the rate found is kept; later it is the rate
+                // the device was left at
                 Ok(now) if now == rate => {
-                    if first {
+                    if first && !landing {
                         entry.found = None;
                     }
-                    Ok(false)
+                    match put_back {
+                        Some(_) => self.hal.put_rate(device, rate).map(|()| true),
+                        None => Ok(false),
+                    }
                 }
                 Ok(now) => {
                     if first {
@@ -269,10 +274,21 @@ mod tests {
         assert_eq!(holds.hal.rate_of(MONITOR), 96_000.0);
 
         holds.hal.land(MONITOR, 48_000.0).unwrap();
-        let before = holds.hal.asked().len();
         drop(holds.hold(MONITOR).unwrap());
-        assert_eq!(holds.hal.asked().len(), before, "a device at 48 kHz is left alone");
+        assert_eq!(holds.hal.asked().last(), Some(&(MONITOR, 48_000.0)), "nothing to put back");
         assert_eq!(holds.hal.rate_of(MONITOR), 48_000.0);
+    }
+
+    /// A HAL slow to move the rate can be slow to put it back: the put back is still on its way
+    /// when the next stream holds the device, long after, and that stream's ask must land last.
+    #[test]
+    fn a_put_back_still_on_its_way_long_after_is_asked_past() {
+        let fake = Fake { puts_wait: true, ..Fake::new(&[(MONITOR, 44_100.0)]) };
+        let holds = RateHolds { landing: Duration::ZERO, ..RateHolds::new(fake) };
+        drop(holds.hold(MONITOR).unwrap());
+        drop(holds.hold(MONITOR).unwrap());
+        let asked = &holds.hal.asked()[..3];
+        assert_eq!(asked, [(MONITOR, 48_000.0), (MONITOR, 44_100.0), (MONITOR, 48_000.0)]);
     }
 
     #[test]
