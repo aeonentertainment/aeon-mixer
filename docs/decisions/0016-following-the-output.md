@@ -1,6 +1,7 @@
 # 0016: The engine follows the room's output
 
-**Status:** accepted, 2026-11-10, ahead of the code for #53.
+**Status:** accepted, 2026-11-10, ahead of the code for #53. An output that will not start
+leaves the song where it was, 2026-11-13, for aeon-karaoke#510.
 
 ## The problem
 
@@ -24,7 +25,8 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   rule: the engine plays on the pinned output if the OS lists it, and otherwise on the default.
 - **How the host learns.** `engine.output` names the output playing now, its `id` and `name`
   beside its latency, at open and after every move. An `outputChanged` event fires after each
-  move with the new `output` and the gap the move left. The host logs both.
+  move with the new `output` and the gap the move left, and with a gap of 0 when a refusal
+  clears with no move. The host logs both.
 - **Muted is not the engine's call.** A muted default is still where the OS sends every other
   app's sound, so the person in the room fixes it where they fix everything else. In the session
   above the mute was not the fault: the default had moved and the engine had not. Following the
@@ -33,8 +35,18 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   The audio thread does not run during it: the backing playhead holds and resumes where it was,
   every slot starts its stream again on the new clock, and the first 5 ms on the new output fade
   in. The new output's latency is in the event.
-- **When it gives up.** If no output can be opened within a second of the loss, the engine
-  faults as before, and the host closes and reopens it.
+- **When the new output will not start.** The engine starts the output it left again, if the OS
+  still lists it, and failing that the default, which only a pinned engine has not tried yet.
+  With no pin the default is the output that refused, so the engine faults once the one it left
+  fails too. `engine.output.refused` names the one that would not start, with what the OS said.
+  The fallback counts as a move, with the gap the room heard, so the song carries on after one
+  gap and `outputChanged` says so. The engine does not try the refused output again while the
+  rule still picks it. Once the rule picks another output, as when the default changes or the
+  refused output leaves the list, the refusal clears, and the next time the rule picks it, it is
+  tried afresh.
+- **When it gives up.** If none of the output it should play on, the one it left and the default
+  will start within a second of the wake, the engine faults as before, and the host closes and
+  reopens it.
 - **When the first open fails.** `openEngine` rejects with `OutputUnavailableError`, whose `code`
   is `"output-unavailable"` and whose `device` names the output that would not start. The
   module-level `outputDevices()` lists the others with no engine open, so the host can open one
@@ -46,6 +58,17 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   the last before the next, up to 6.4 s, and the engine is never faulted for it. When the Mac
   wakes, the stream that is open plays on. The wait is on the monotonic clock, which on macOS
   and Linux stands still while the machine sleeps.
+
+### The case that set the rule
+
+On a Mac on 13 November 2026, the default moved mid-song to a DisplayPort monitor whose audio
+had stopped starting for every app: `afplay` failed with `AudioQueueStart` returning `'stop'`,
+`kAudioHardwareNotRunningError`, until the monitor was power-cycled (aeon-karaoke#510). The
+follower had already stopped the stream it was playing. It retried the monitor every 100 ms, and a
+second later the engine faulted and the song ended, with the output it left still listed and
+working. With the monitor healthy, moves on the same Mac worked, with gaps of 41 ms to the MacBook
+Pro speakers and 194 ms back to the monitor. A move whose output starts is unchanged, so those
+gaps stand.
 
 ## How the OSes say an output changed
 
@@ -104,7 +127,8 @@ even the same output. Three wakes for one change cost two lists and no moves.
 
 Moving stops the old stream, which hands the engine's audio thread back, and starts the new
 stream with it. Nothing crosses to the audio thread to do this: the follower holds it only while
-no stream runs, so section 2's five crossings are unchanged.
+no stream runs, so section 2's five crossings are unchanged. A start that fails hands the audio
+thread back too, so the follower starts the output it left with it.
 
 ## The numbers
 
@@ -129,6 +153,17 @@ CoreAudio device away from 48 kHz, whose rate change is given a second of its ow
 
 ## Rejected
 
+- **Hold silence and retry the refused output, doubling up to 6.4 s, as a stall does.** A command
+  waits a second for its ack while no stream runs, so the song ends at the first command anyway,
+  and the room hears nothing while a working output sits listed.
+- **Fall back to any output that starts.** A Mac lists virtual outputs, such as a call app's or a
+  recorder's, that the room cannot hear. The output it left is the one the room was hearing a
+  moment ago, and the default is where the rule goes with no pin. With those gone too, the engine
+  faults and the host chooses.
+- **Start the new output before stopping the old.** One audio thread renders into one stream, and
+  two at once means two clocks, as with the crossfade below.
+- **Retry a refused output on a timer while playing elsewhere.** Each try costs the room a gap on
+  the output that works. The refused output is tried again when the OS says something changed.
 - **Fault and let the host reopen.** What the engine did. Reopening destroys the live mixer, so
   every unplug ends the song, and nothing ever follows a new default.
 - **Follow a loss, never a default change.** The session above was a default change.
@@ -148,9 +183,9 @@ CoreAudio device away from 48 kHz, whose rate change is given a second of its ow
 - **A listener on each open device.** `kAudioDevicePropertyDeviceIsAlive` says the same thing as
   the device list, and a listener per device is one more registration per move to remove safely.
   The follower registers its listeners once, for the engine's life.
-- **Fault a stream that stays silent for a second,** as an output that refuses to open does. A
-  Mac asleep on battery wakes into DarkWake through the night, by its logs with no IOProc called,
-  and every song left playing would end there. Reopening ever more slowly costs about ten opens a
-  minute while it is awake.
+- **Fault a stream that stays silent for a second,** as a lost output with nothing that will
+  start does. A Mac asleep on battery wakes into DarkWake through the night, by its logs with no
+  IOProc called, and every song left playing would end there. Reopening ever more slowly costs
+  about ten opens a minute while it is awake.
 - **Report a muted output.** The OS shows mute already, and a mute flag would need one more
   listener per device. Left for when a host asks.
