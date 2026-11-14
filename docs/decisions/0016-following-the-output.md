@@ -36,24 +36,19 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   every slot starts its stream again on the new clock, and the first 5 ms on the new output fade
   in. The new output's latency is in the event.
 - **When the new output will not start.** The engine starts the output it left again, if the OS
-  still lists it, and failing that the default, and `engine.output.refused` names the one that would not start, with what the
-  OS said. The song carries on after one gap. The engine does not try the refused output again
-  while the pin or the default still names it; once either names another, or the refused output
-  leaves the list, the refusal clears and the next time it is named it is tried afresh.
-  <<<<<<< HEAD
-- **When it gives up.** If neither the output it should play on nor the one it left will start
-  within a second of the wake, the engine faults as before, and the host closes and reopens it.
+  still lists it, and failing that the default, and `engine.output.refused` names the one that
+  would not start, with what the OS said. The song carries on after one gap. The engine does not
+  try the refused output again while the pin or the default still names it; once either names
+  another, or the refused output leaves the list, the refusal clears and the next time it is named
+  it is tried afresh.
+- **When it gives up.** If none of the output it should play on, the one it left and the default
+  will start within a second of the wake, the engine faults as before, and the host closes and
+  reopens it.
 - **When the first open fails.** `openEngine` rejects with `OutputUnavailableError`, whose `code`
   is `"output-unavailable"` and whose `device` names the output that would not start. The
   module-level `outputDevices()` lists the others with no engine open, so the host can open one
   (aeon-karaoke#511). An engine's own `outputDevices()` lists none on the timer clock by design: it
   plays on no output.
-  \=======
-- **When it gives up.** If none of the output it should play on, the one it left and the default
-  will start within a second of the wake, the engine faults as before, and the host closes and reopens it.
-
-> > > > > > > 9048c13 (docs(design): a pinned engine falls back to the default last)
-
 - **A stall is a loss, not a fault.** A stream that asks for no audio for 200 ms while its
   output stays listed is lost, on every backend, and reopened. A Mac asleep calls no IOProc, and
   by one Mac's logs neither does DarkWake, so a reopen that stays silent waits twice as long as
