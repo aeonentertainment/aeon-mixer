@@ -208,7 +208,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 
 - **Open.** `openEngine` picks the device, or the timer clock where nothing plays locally,
   starts the driver with the silent graph, and returns once the first block has rendered. The
-  engine and its audio thread last until `close`; the stream under them moves with the output.
+  start runs off Node's event loop, so the host keeps answering through the 3 s each output it
+  tries may take. The engine and its audio thread last until `close`; the stream under them moves
+  with the output.
   When the output it picks will not start within 3 s, or the OS lists none, it rejects with
   `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
   setting behind. A start refused after 3 s may hold its device, and its rate, until the OS's own
