@@ -21,7 +21,8 @@ export declare class BackingRender {
 export declare class Engine {
   /**
    * Starts the clock on the silent graph and the events thread, which calls `on_events` with
-   * every batch it drains.
+   * every batch it drains. An output that will not start throws an error whose `code` is
+   * `"output-unavailable"` and whose `device` names it, if the OS listed one to pick.
    */
   constructor(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void)
   /**
@@ -152,6 +153,9 @@ export interface GuideInput {
   keyMask: number
 }
 
+/** Every input the OS offers, the default marked: the devices a `capture` slot may name. */
+export declare function inputs(): Array<OutputEntry>
+
 export type NativeEvent =
   | { kind: 'ack'; id: number; positionFrames: number }
   | { kind: 'level'; slot: number; rmsDb: number; peakDb: number }
@@ -204,6 +208,9 @@ export interface OutputInfo {
   /** The output the rule picks that would not start, while the engine plays on `device`. */
   refused?: RefusedOutput
 }
+
+/** Every output the OS offers, the default marked. */
+export declare function outputs(): Array<OutputEntry>
 
 export interface RefusedOutput {
   id: string

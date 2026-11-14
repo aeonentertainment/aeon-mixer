@@ -66,7 +66,7 @@ await engine.close();
   monotonic clock, and the mix leaves on `rtpReturn`. `measure-clock` prints its timing:
   `cargo run --release -p devices --bin measure-clock` in `native/`.
 - **The output** is the OS default, unless `openEngine({ output: { device } })` pins one by an id
-  from `engine.outputDevices()`. When the default changes, or the output goes away, the song
+  from `outputDevices()`. When the default changes, or the output goes away, the song
   moves to the new output after a short gap, a pinned engine moving back when its output
   returns. `engine.output` names the output playing and its latency, and `outputChanged` fires
   after each move with both and the gap. When the new output will not start, the song goes back
@@ -75,6 +75,11 @@ await engine.close();
   pin or default rule picks another output, as when the default changes or the refused output
   leaves the list.
   `outputChanged` fires again, with a gap of 0, when it clears.
+- **An output that will not start** makes `openEngine` reject with `OutputUnavailableError`,
+  whose `code` is `"output-unavailable"` and whose `device` names it. `outputDevices()` and
+  `inputDevices()` list the OS's devices with no engine open, so a host can open another; they
+  open no stream and change no setting. An engine's own `outputDevices()` lists the same on a
+  device engine and none on the timer and offline clocks, which play on no output.
 - **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
   renders only when its caller runs `engine.pump(blocks)`. The tests run on it.
 

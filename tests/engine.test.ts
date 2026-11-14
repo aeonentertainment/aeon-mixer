@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { openEngine } from "../src/index.ts";
+import { inputDevices, openEngine, outputDevices } from "../src/index.ts";
 
 const BLOCK = 128;
 /** One reading of the master meter, 100 ms at 48 kHz. */
@@ -132,4 +132,19 @@ test("options and reaction buffers are checked before anything crosses", async (
   expect(() => engine.reactions.play(new Float32Array(0), 1)).toThrow(TypeError);
   expect(() => engine.pump(0)).toThrow(RangeError);
   await engine.close();
+});
+
+// A host whose default output will not start lists the others with no engine to ask. What a list
+// holds is the machine's: a box with no sound card lists none, so this checks the shape it has.
+test("the OS's outputs and inputs list with no engine open", async () => {
+  for (const devices of [await outputDevices(), await inputDevices()]) {
+    for (const device of devices) {
+      expect(device).toEqual({
+        id: expect.any(String),
+        name: expect.any(String),
+        isDefault: expect.any(Boolean),
+      });
+    }
+    expect(devices.filter((device) => device.isDefault).length).toBeLessThanOrEqual(1);
+  }
 });

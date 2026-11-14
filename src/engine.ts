@@ -15,6 +15,7 @@ import type {
   OpenEngineOptions,
   OutputInfo,
 } from "./types.ts";
+import { OutputUnavailableError } from "./output-unavailable-error.ts";
 import { framesToMs, msToFrames } from "./units.ts";
 import { finiteIn, integerIn, pcm, rtpReturn, slotInput } from "./validate.ts";
 
@@ -90,15 +91,19 @@ export class Engine {
       if (periodFrames !== 64 && periodFrames !== 128) {
         throw new RangeError(`periodFrames must be 64 or 128, got ${String(periodFrames)}`);
       }
-      this.#native = new NativeEngine(
-        {
-          clock: "device",
-          periodFrames,
-          ...pinned,
-          ...(device === undefined ? {} : { device }),
-        },
-        deliver,
-      );
+      try {
+        this.#native = new NativeEngine(
+          {
+            clock: "device",
+            periodFrames,
+            ...pinned,
+            ...(device === undefined ? {} : { device }),
+          },
+          deliver,
+        );
+      } catch (error) {
+        throw OutputUnavailableError.from(error);
+      }
     }
     this.#output = outputInfo(this.#native.output);
     this.#host = {
@@ -143,12 +148,20 @@ export class Engine {
     },
   };
 
+  /**
+   * The outputs this engine may move to: on a device engine, what the module's `outputDevices()`
+   * lists. None on the timer and offline clocks, which play on no output; the module's call lists
+   * the OS's whatever engine is open.
+   */
   async outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>> {
     this.#assertRunning();
     return this.#native.outputs();
   }
 
-  /** The inputs a `capture` slot may name, the default marked. None on an offline engine. */
+  /**
+   * The inputs a `capture` slot may name, the default marked: the module's `inputDevices()`. None
+   * on an offline engine, which opens no input.
+   */
   async inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>> {
     this.#assertRunning();
     return this.#native.inputs();

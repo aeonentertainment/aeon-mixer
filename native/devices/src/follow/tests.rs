@@ -13,7 +13,7 @@ use engine::block::{BLOCK, RATE, Stereo};
 use engine::driver::{Driver, DriverError, Movable, Render, Running, StreamInfo};
 
 use super::following::{GIVE_UP, STALL};
-use super::{Follower, System};
+use super::{Follower, StartError, System};
 use crate::output::Output;
 use crate::request::Request;
 use crate::stats::Stats;
@@ -31,6 +31,7 @@ enum Seen {
     Stopped(String),
     Refused(String),
     Dropped,
+    Unwatched,
 }
 
 /// The OS's side: what it lists, the one stream running with the stats it records callbacks
@@ -124,7 +125,16 @@ impl System for Fake {
 
     fn watch(&self, wake: Wake) -> Result<Box<dyn Send>, DriverError> {
         self.room().wake = Some(wake);
-        Ok(Box::new(()))
+        Ok(Box::new(Watching(self.seen.clone())))
+    }
+}
+
+/// The fake's listener registration, which says when it is removed.
+struct Watching(Sender<Seen>);
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        let _ = self.0.send(Seen::Unwatched);
     }
 }
 
@@ -223,9 +233,22 @@ impl Rig {
     }
 
     fn with(outputs: &[(&str, bool)], pinned: Option<&str>, panics: bool, stall: Duration) -> Self {
+        Self::starting(outputs, &[], pinned, panics, stall)
+            .unwrap_or_else(|(error, ..)| panic!("the first output opens: {error}"))
+    }
+
+    /// A follower started on `outputs`, of which `refuses` will not start.
+    fn starting(
+        outputs: &[(&str, bool)],
+        refuses: &[&str],
+        pinned: Option<&str>,
+        panics: bool,
+        stall: Duration,
+    ) -> Result<Self, (StartError, Fake, Receiver<Seen>)> {
         let (sender, seen) = channel();
         let fake = Fake { room: Arc::default(), seen: sender.clone() };
         fake.offer(outputs);
+        fake.room().refuses = refuses.iter().map(|id| (*id).into()).collect();
         let (callback, latency) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0)));
         let counter = Counter {
             frame: 1.0,
@@ -237,10 +260,12 @@ impl Rig {
         };
         let stats = Arc::new(Stats::new());
         let request = Request { device: pinned.map(Into::into), ..Request::default() };
-        let follower =
-            Follower::stalling_after(stall, request, counter, fake.clone(), Arc::clone(&stats))
-                .expect("the first output opens");
-        Self { fake, seen, stats, callback, latency, follower: Some(follower) }
+        match Follower::stalling_after(stall, request, counter, fake.clone(), Arc::clone(&stats)) {
+            Ok(follower) => {
+                Ok(Self { fake, seen, stats, callback, latency, follower: Some(follower) })
+            }
+            Err(error) => Err((error, fake, seen)),
+        }
     }
 
     fn next(&self) -> Seen {
@@ -542,10 +567,40 @@ fn a_render_that_panicked_is_never_moved() {
     assert_eq!(rig.opened(), None, "no stream starts with a torn render");
 }
 
+/// aeon-karaoke#511 opens another output when the default will not start, so the failure names
+/// the output that refused, and leaves no stream, render or listener behind to hold it.
+#[test]
+fn an_output_that_will_not_start_at_open_is_named_and_leaves_nothing_behind() {
+    let Err((error, fake, seen)) = Rig::starting(
+        &[("monitor", true), ("built-in", false)],
+        &["monitor"],
+        None,
+        false,
+        NEVER_STALLS,
+    ) else {
+        panic!("the monitor refuses, so nothing opens");
+    };
+    let StartError::Unavailable { output: Some(output), .. } = &error else {
+        panic!("an unavailable output, not {error:?}");
+    };
+    assert_eq!(output.id, "monitor");
+    let seen: Vec<_> = seen.try_iter().filter(|seen| *seen != Seen::Listed).collect();
+    assert_eq!(seen, [Seen::Refused("monitor".into()), Seen::Dropped, Seen::Unwatched]);
+    assert!(fake.room().device.is_none(), "no stream runs");
+}
+
+#[test]
+fn an_os_with_no_output_listed_is_unavailable_with_none_named() {
+    let Err((error, ..)) = Rig::starting(&[], &[], None, false, NEVER_STALLS) else {
+        panic!("nothing to open");
+    };
+    assert!(matches!(error, StartError::Unavailable { output: None, .. }), "{error:?}");
+}
+
 #[test]
 fn closing_stops_the_stream_and_drops_the_render() {
     let mut rig = Rig::new(&[("usb", true)], None);
     rig.expect(&[started("usb")]);
     rig.follower = None;
-    rig.expect(&[stopped("usb"), Seen::Dropped]);
+    rig.expect(&[stopped("usb"), Seen::Dropped, Seen::Unwatched]);
 }

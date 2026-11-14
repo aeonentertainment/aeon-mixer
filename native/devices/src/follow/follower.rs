@@ -7,6 +7,7 @@ use engine::driver::{DriverError, Movable};
 
 use super::current::Current;
 use super::following::{Following, STALL};
+use super::start_error::StartError;
 use super::system::System;
 use crate::request::Request;
 use crate::stats::Stats;
@@ -25,13 +26,14 @@ pub struct Follower {
 impl Follower {
     /// Opens where `request` says, `request.device` being the pinned output, and follows from
     /// there. Blocks while the first stream opens, as a driver's `start` does. `stats` records
-    /// every stream it opens.
+    /// every stream it opens. A start that fails leaves nothing behind: no stream, no watch, and
+    /// the `Movable` dropped.
     pub fn start(
         request: Request,
         movable: impl Movable,
         system: impl System,
         stats: Arc<Stats>,
-    ) -> Result<Self, DriverError> {
+    ) -> Result<Self, StartError> {
         Self::stalling_after(STALL, request, movable, system, stats)
     }
 
@@ -43,11 +45,11 @@ impl Follower {
         movable: impl Movable,
         system: impl System,
         stats: Arc<Stats>,
-    ) -> Result<Self, DriverError> {
+    ) -> Result<Self, StartError> {
         let (wake, woken) = Wake::new();
         stats.wake_on_loss(wake.clone());
         // Watching before the first open, so a change while it opens is not missed
-        let watch = system.watch(wake.clone())?;
+        let watch = system.watch(wake.clone()).map_err(StartError::Backend)?;
         let following = Following::open(request, movable, system, stats, watch, stall)?;
         let current = following.current();
         let stopping = Arc::new(AtomicBool::new(false));
@@ -57,7 +59,9 @@ impl Follower {
                 let stopping = Arc::clone(&stopping);
                 move || following.run(&woken, &stopping)
             })
-            .map_err(|error| DriverError::Backend(format!("follower thread: {error}")))?;
+            .map_err(|error| {
+                StartError::Backend(DriverError::Backend(format!("follower thread: {error}")))
+            })?;
         Ok(Self { current, wake, stopping, thread: Some(thread) })
     }
 
