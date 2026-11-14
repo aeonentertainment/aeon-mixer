@@ -30,7 +30,7 @@ pub use capture::{Capture, CaptureInfo, Captured, Capturing, Sink};
 pub use capture_feed::CaptureFeed;
 pub use capture_request::CaptureRequest;
 pub use feed::{Feed, interleave};
-pub use follow::{Current, Follower, Playing, Refused, System};
+pub use follow::{Current, Follower, Playing, Refused, StartError, System};
 pub use output::{Input, Output};
 pub use report::Report;
 pub use request::Request;

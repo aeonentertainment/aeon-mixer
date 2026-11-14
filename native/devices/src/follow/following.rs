@@ -10,6 +10,7 @@ use super::current::Current;
 use super::dock::Dock;
 use super::playing::Playing;
 use super::refused::Refused;
+use super::start_error::StartError;
 use super::system::System;
 use crate::output::Output;
 use crate::request::Request;
@@ -76,12 +77,15 @@ impl<M: Movable, S: System> Following<M, S> {
         stats: Arc<Stats>,
         watch: Box<dyn Send>,
         stall: Duration,
-    ) -> Result<Self, DriverError> {
-        let outputs = system.outputs()?;
-        let output =
-            target(&outputs, request.device.as_deref()).ok_or(DriverError::NoDevice)?.clone();
+    ) -> Result<Self, StartError> {
+        let outputs = system.outputs().map_err(StartError::Backend)?;
+        let output = target(&outputs, request.device.as_deref())
+            .ok_or(StartError::Unavailable { output: None, error: DriverError::NoDevice })?
+            .clone();
         let (running, dock) =
-            start(&system, &request, &stats, &output, movable).map_err(|(error, _)| error)?;
+            start(&system, &request, &stats, &output, movable).map_err(|(error, _)| {
+                StartError::Unavailable { output: Some(output.clone()), error }
+            })?;
         let current = Current::new(Playing {
             info: running.info,
             output,

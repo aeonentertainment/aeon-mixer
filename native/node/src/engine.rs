@@ -2,7 +2,7 @@
 //! drives the audio thread, and the events thread that brings events back. Commands return the
 //! id their ack will carry; `src/` turns that into a promise.
 
-use devices::Playing;
+use devices::{Playing, StartError};
 use engine::audio_thread::{AudioThread, Controls};
 use engine::block::MAX_SLOTS;
 use engine::command::{Command, CommandProducer};
@@ -111,9 +111,11 @@ pub struct Engine {
 #[napi]
 impl Engine {
     /// Starts the clock on the silent graph and the events thread, which calls `on_events` with
-    /// every batch it drains.
+    /// every batch it drains. An output that will not start throws an error whose `code` is
+    /// `"output-unavailable"` and whose `device` names it, if the OS listed one to pick.
     #[napi(constructor)]
     pub fn new(
+        env: &Env,
         options: OpenOptions,
         on_events: Function<'_, Vec<NativeEvent>, ()>,
     ) -> Result<Self> {
@@ -125,7 +127,8 @@ impl Engine {
                 Clock::Offline(Box::new(engine::driver::OfflineDriver::new(audio.into_render())))
             }
             ClockKind::Timer => Clock::timer(audio.into_render())?,
-            ClockKind::Device => Clock::open(options.device, options.period_frames, audio)?,
+            ClockKind::Device => Clock::open(options.device, options.period_frames, audio)
+                .map_err(|error| start_error(env, error))?,
         };
         let deliver = on_events.build_threadsafe_function().build()?;
         let events = EventsThread::spawn(events, retired, clock.stats(), clock.current(), deliver);
@@ -182,9 +185,7 @@ impl Engine {
     pub fn inputs(&self) -> Result<Vec<OutputEntry>> {
         match self.clock()? {
             Clock::Offline(_) => Ok(Vec::new()),
-            Clock::Timer { .. } | Clock::Device { .. } => devices::inputs()
-                .map(|inputs| inputs.into_iter().map(OutputEntry::from).collect())
-                .map_err(|error| Error::from_reason(error.to_string())),
+            Clock::Timer { .. } | Clock::Device { .. } => crate::listing::inputs(),
         }
     }
 
@@ -346,6 +347,25 @@ fn slot_index(index: u32) -> Result<usize> {
 /// `src/` sends whole, finite, non-negative frame counts; the cast saturates on anything else.
 fn frames(count: f64) -> u64 {
     count as u64
+}
+
+// An unavailable output is thrown as an error with its code and device on it, so a host tells it
+// from every other failure without reading the message.
+fn start_error(env: &Env, error: StartError) -> Error {
+    let message = error.to_string();
+    let StartError::Unavailable { output, .. } = error else {
+        return Error::from_reason(message);
+    };
+    let thrown = env.create_error(Error::from_reason(message.clone())).and_then(|mut js| {
+        js.set_named_property("code", "output-unavailable")?;
+        let device = output.map(|output| OutputDevice { id: output.id, name: output.name });
+        js.set_named_property("device", device)?;
+        env.throw(js)
+    });
+    match thrown {
+        Ok(()) => Error::new(Status::PendingException, message),
+        Err(error) => error,
+    }
 }
 
 fn closed() -> Error {

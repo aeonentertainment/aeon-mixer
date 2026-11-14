@@ -6,6 +6,8 @@ import type * as Binding from "../native/binding/index.js";
 const binding: typeof Binding = createRequire(import.meta.url)("../native/binding/index.js");
 
 export const NativeEngine = binding.Engine;
+export const nativeOutputs = binding.outputs;
+export const nativeInputs = binding.inputs;
 export type NativeEngine = Binding.Engine;
 export type NativeMixer = Binding.Mixer;
 export type NativeBackingRender = Binding.BackingRender;

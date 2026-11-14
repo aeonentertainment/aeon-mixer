@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use devices::{Current, Follower, Os, Playing, Request, Stats, TimerDriver};
+use devices::{Current, Follower, Os, Playing, Request, StartError, Stats, TimerDriver};
 use engine::audio_thread::AudioThread;
 use engine::driver::{Driver, OfflineDriver, Render, Running, StreamInfo};
 use napi::bindgen_prelude::*;
@@ -18,11 +18,14 @@ pub enum Clock {
 impl Clock {
     /// Starts this OS's backend at `period_frames` on `device`, the pinned output, or on the
     /// default, and follows the room's output from there (docs/design.md section 5).
-    pub fn open(device: Option<String>, period_frames: u32, audio: AudioThread) -> Result<Self> {
+    pub fn open(
+        device: Option<String>,
+        period_frames: u32,
+        audio: AudioThread,
+    ) -> std::result::Result<Self, StartError> {
         let stats = Arc::new(Stats::new());
         let follower =
-            Follower::start(Request { device, period_frames }, audio, Os, Arc::clone(&stats))
-                .map_err(|error| Error::from_reason(error.to_string()))?;
+            Follower::start(Request { device, period_frames }, audio, Os, Arc::clone(&stats))?;
         Ok(Self::Device { follower, stats })
     }
 
@@ -70,9 +73,7 @@ impl Clock {
     pub fn outputs(&self) -> Result<Vec<OutputEntry>> {
         match self {
             Self::Offline(_) | Self::Timer { .. } => Ok(Vec::new()),
-            Self::Device { .. } => devices::outputs()
-                .map(|outputs| outputs.into_iter().map(OutputEntry::from).collect())
-                .map_err(|error| Error::from_reason(error.to_string())),
+            Self::Device { .. } => crate::listing::outputs(),
         }
     }
 }
