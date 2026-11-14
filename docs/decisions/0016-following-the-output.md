@@ -67,10 +67,7 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   Bluetooth one can take a second or two, so 3 s refuses neither. The wedged monitor below took
   10.1 s. An output slower than 3 s is refused like one that hangs, until the rule picks it again.
 - **The open never holds the event loop.** The start runs off Node's event loop, so a host that
-  tries one output after another keeps answering through the 3 s each may take. The public
-  `Engine` constructor goes with it. It was never part of the contract: section 7.2 types `Engine`
-  as an interface that only `openEngine` builds. Before 1.0, removing it takes no major bump. The
-  package exports `Engine` as a type only, so no later refactor can change a public constructor.
+  tries one output after another keeps answering through the 3 s each may take.
 - **A stall is a loss, not a fault.** A stream that asks for no audio for 200 ms while its
   output stays listed is lost, on every backend, and reopened. A Mac asleep calls no IOProc, and
   by one Mac's logs neither does DarkWake, so a reopen that stays silent waits twice as long as
