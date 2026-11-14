@@ -238,10 +238,13 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   audio thread, so the live mixer and its song carry on after a gap. The playhead holds through
   the gap, every slot starts its stream again on the new clock, a capture slot under the new
   output's callback, the first 5 ms fade in, and
-  `outputChanged` fires with the new `output`. Decision
-  [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
-- **Faults.** A caught panic, or a lost output with nothing to move to within a second, emits
-  `fault` on the engine. The host closes and reopens; nothing inside tries to recover.
+  `outputChanged` fires with the new `output`. When the new output will not start, the engine
+  starts the one it left again, if the OS still lists it, so the song carries on after one gap.
+  `output.refused` names the output that would not start until the pin or the default changes.
+  Decision [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
+- **Faults.** A caught panic, or a second in which neither the output the engine should play on
+  nor the one it left will start, emits `fault` on the engine. The host closes and reopens;
+  nothing inside tries to recover.
 - **Mixer errors.** `error` on a mixer fires once, when that mixer can no longer play its song,
   and the host ends the song and destroys it. Three things raise it: a render job that fails,
   at the moment it fails, so a bad next song is known before its turn (`start` still rejects
@@ -249,11 +252,11 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   block and a second without one means the room has gone silent; and an engine fault, on every
   mixer the engine holds, so a host can treat one signal as the end of a song. A timeout is not
   itself a fault: a stall can pass, so the song ends and the engine stays open until it faults,
-  on a panic or on a second with no output to play on. A lost device moves the engine; it does not
-  fault it. Trouble a mixer plays through is not an error: a slot's bad,
-  late or missing packets are concealed and counted in `stats()`, so one phone never ends a song
-  for the room, and a return stream that cannot send costs only its remote listener, since the
-  room still hears the mix.
+  on a panic or on a second with no output that will start. A lost device moves the engine, and an
+  output that will not start leaves it where it was; neither faults it. Trouble a mixer plays
+  through is not an error: a slot's bad, late or missing packets are concealed and counted in
+  `stats()`, so one phone never ends a song for the room, and a return stream that cannot send
+  costs only its remote listener, since the room still hears the mix.
 
 ## 6. Module map
 
@@ -453,6 +456,26 @@ export interface OutputInfo {
   latencyMs: number;
   /** The output playing now, as `outputDevices()` lists it; null on the offline clock. */
   device: { id: string; name: string } | null;
+  /** The output the engine should play on, when it would not start, and what the OS said (5). */
+  refused: { id: string; name: string; error: string } | null;
+}
+
+/** The OS's devices with no engine open. Listing opens no stream and changes no setting. */
+export function outputDevices(): Promise<
+  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
+>;
+export function inputDevices(): Promise<
+  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
+>;
+
+/**
+ * `openEngine` rejects with this when the output it picks will not start. `device` is that output,
+ * the pinned one or the default, or null when the OS lists none. Every other failure is a plain
+ * `Error`. It carries no list: `outputDevices()` gives one with no engine open.
+ */
+export class OutputUnavailableError extends Error {
+  readonly code: "output-unavailable";
+  readonly device: { id: string; name: string } | null;
 }
 
 /** The OS's devices with no engine open. Listing opens no stream and changes no setting. */
@@ -688,7 +711,8 @@ own, so no OS listener and no Node call ever starts or stops a device.
 pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, StartError>; current(); drop stops it
 pub enum StartError { Unavailable { output: Option<Output>, error: DriverError }, Backend(DriverError) }
 pub struct Current;        // the follower's Playing, shared: get() on any thread but the audio thread
-pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration }
+pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration, pub refused: Option<Refused> }
+pub struct Refused { pub output: Output, pub error: String }   // the output the rule picks that would not start
 pub trait System: Send + 'static {   // the OS behind the follower; a test passes a fake one
     fn outputs(&self) -> Result<Vec<Output>, DriverError>;
     fn driver(&self, request: Request, stats: Arc<Stats>) -> Box<dyn Driver + Send>;
@@ -712,14 +736,19 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell and its
   `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
   to the new stream running.
-- With nothing to play on, or an output that refuses to open, it waits for the next wake and
-  tries again every 100 ms for up to a second, then fails the stats, which faults the engine.
+- A move whose output will not start starts the output it left again, if the OS still lists it,
+  and sets `Playing.refused`. The follower does not try the refused output again while the rule
+  still picks it, so a refusal costs one gap, not one on every wake. Once the rule picks another,
+  as when the default changes or the refused output leaves the list, the refusal clears, and the
+  next time the rule picks that output it is tried afresh.
+- With nothing that will start, it waits for the next wake and tries again every 100 ms for up to
+  a second, then fails the stats, which faults the engine.
 - `start` fails with `StartError::Unavailable` when the output the rule picks will not start, or
   the OS lists none, and `Backend` when the list, the watch or the thread fails. A failed `start`
   leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
   `OutputUnavailableError`.
-- The binding reads `Current` for `engine.output`, and its events thread sends `outputChanged`
-  whenever `moves` goes up.
+- The binding reads `Current` for `engine.output`, `refused` included, and its events thread sends
+  `outputChanged` whenever `moves` goes up.
 - The watches: CoreAudio listens on the system object for the default output and the device list,
   with `kAudioHardwarePropertyRunLoop` set to null so the HAL calls it on its own thread. WASAPI
   registers an `IMMNotificationClient` from a COM thread of its own. ALSA has nothing to listen
