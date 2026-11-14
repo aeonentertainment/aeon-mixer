@@ -624,6 +624,12 @@ export interface Mixer {
 The binding's generated types are re-exported through `src/native.ts` and never widened. The
 public types above are inferred from the implementation wherever TypeScript can reach.
 
+`Engine` is exported as a type only, and only `openEngine` builds one. Its constructor was never
+part of the contract: until now the package also exported the class, so `new Engine(options)`
+compiled, but nothing documented or used it. Before 1.0, removing that export takes no major
+bump, as decisions 0007 and 0009 set for other pre-1.0 changes. Exporting it as a type only
+means no later refactor can change a public constructor by accident.
+
 ## 8. Modules
 
 Each module names its purpose, the rules beyond section 2 that bind it, and what done means.
