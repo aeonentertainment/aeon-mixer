@@ -54,7 +54,7 @@ windows = { version = "0.62", optional = true, features = [
   "Win32_Security",
 ] }
 # The `implement` macro behind the endpoint notifications names this crate directly
-windows-core = { version = "0.62", optional = true }
+windows-core = { version = "0.100", optional = true }
 
 [dev-dependencies]
 assert_no_alloc = "1.1"
