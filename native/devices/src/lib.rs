@@ -15,7 +15,13 @@ mod capture_request;
 mod channel_count;
 mod feed;
 mod follow;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod nominal_rate;
 mod output;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod rate_hold;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod rate_holds;
 mod report;
 mod request;
 mod sample;
