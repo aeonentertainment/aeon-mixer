@@ -3,6 +3,7 @@ mod capture;
 mod capture_callback;
 mod capture_io;
 mod driver;
+mod hal_rate;
 mod io;
 mod property;
 mod watch;

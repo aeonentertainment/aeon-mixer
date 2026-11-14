@@ -13,7 +13,8 @@ use objc2_core_audio_types::{
 
 use super::capture_callback::CaptureCallback;
 use super::capture_io::CaptureIo;
-use super::driver::{set_period, set_rate};
+use super::driver::set_period;
+use super::hal_rate::RATES;
 use super::property::{get, string};
 use crate::capture::{Capture, CaptureInfo, Capturing, Sink};
 use crate::capture_feed::CaptureFeed;
@@ -43,7 +44,7 @@ impl Capture for CoreAudioCapture {
             Some(uid) => super::find_input(uid)?,
             None => super::default_input()?,
         };
-        set_rate(device)?;
+        let rate = RATES.hold(device)?;
         let period = set_period(device, request.period_frames)?;
 
         let streams = super::input_streams(device)?;
@@ -84,7 +85,10 @@ impl Capture for CoreAudioCapture {
         let feed = CaptureFeed::new(sink, Arc::clone(&stats));
         let callback = CaptureCallback::new(feed, usize::from(request.channel), stats);
         let io = CaptureIo::start(device, callback)?;
-        Ok(Capturing::new(info, move || drop(io)))
+        Ok(Capturing::new(info, move || {
+            drop(io);
+            drop(rate);
+        }))
     }
 }
 
