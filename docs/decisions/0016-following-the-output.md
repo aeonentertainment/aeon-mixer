@@ -1,7 +1,8 @@
 # 0016: The engine follows the room's output
 
 **Status:** accepted, 2026-11-10, ahead of the code for #53. An output that will not start
-leaves the song where it was, 2026-11-13, for aeon-karaoke#510.
+leaves the song where it was, 2026-11-13, for aeon-karaoke#510. A start that hangs is refused
+after 3 s, 2026-11-13, for #161.
 
 ## The problem
 
@@ -52,6 +53,13 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   module-level `outputDevices()` lists the others with no engine open, so the host can open one
   (aeon-karaoke#511). An engine's own `outputDevices()` lists none on the timer clock by design: it
   plays on no output.
+- **How long a start may take.** A start that has not returned after 3 s is refused as one that
+  failed is, on every backend: `openEngine` rejects with `OutputUnavailableError`, and a move goes
+  back to the output it left. The start carries on alone on a thread of its own until the backend
+  returns. A stream that starts late is stopped there without playing a sample of the song, and
+  one that fails lets go of what it held, the CoreAudio IOProc and the rate hold of decision 0023
+  included. A healthy output starts in tens of ms and a Bluetooth one can take a second or two, so
+  3 s refuses neither. The wedged monitor below took 10.1 s.
 - **A stall is a loss, not a fault.** A stream that asks for no audio for 200 ms while its
   output stays listed is lost, on every backend, and reopened. A Mac asleep calls no IOProc, and
   by one Mac's logs neither does DarkWake, so a reopen that stays silent waits twice as long as
@@ -69,6 +77,29 @@ second later the engine faulted and the song ended, with the output it left stil
 working. With the monitor healthy, moves on the same Mac worked, with gaps of 41 ms to the MacBook
 Pro speakers and 194 ms back to the monitor. A move whose output starts is unchanged, so those
 gaps stand.
+
+### The case that set the bound
+
+The same monitor, wedged again, took 10.1 s to refuse: `openEngine` rejected 10.1 s after it
+began, and Aeon Karaoke's desktop app opened another output 0.17 s later (#161). The time is
+CoreAudio's own. In coreaudiod's log each start shows `IOWorkLoopInit … starting`, then 10 s
+later `IsTimeRunning_Helper: Device … is not running`, and `AudioDeviceStart` returns `'stop'`.
+The monitor read 48 kHz already, so no rate change waited, and setting the IO buffer is a
+property write that returns at once. The HAL gives a device's clock 10 s to start running, and
+Apple's `AudioServerPlugIn.h` says a driver's `StartIO` "can take as long as necessary". Only the
+caller can bound a start.
+
+No property says beforehand that a start will hang. By Apple's `AudioHardware.h`:
+
+| Property                                       | What Apple says it means                                         | Why it cannot catch a wedged output                                     |
+| ---------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `kAudioDevicePropertyDeviceIsAlive`            | 1 when ready and available, 0 when unusable and about to go away | the monitor stayed listed and every app got as far as starting it       |
+| `kAudioDevicePropertyDeviceIsRunningSomewhere` | 1 when any process runs the device                               | 0 on every idle output, healthy or not                                  |
+| `kAudioStreamPropertyIsActive`                 | the stream is enabled and doing IO                               | it says the stream is switched on, not that the device's clock will run |
+| `kAudioDevicePropertyHogMode`                  | the pid that has the device to itself, or -1                     | `afplay` failed the same way, so no process held it                     |
+
+A start under a bound of our own is the one thing that tells them apart. Cloud's run on
+aeon-karaoke#510 records the time to refuse on the real monitor.
 
 ## How the OSes say an output changed
 
@@ -140,7 +171,7 @@ manual run per OS records them.
 | A default change reaches the follower | under 1 ms after the OS posts it                                            |                                                     |
 | A loss reaches it                     | macOS and Windows: when the OS posts it; ALSA: the next period, 2.7 ms      | 200 ms without a callback, on every backend         |
 | Stop the old stream                   | a few ms                                                                    | a stalled stream's 200 ms, which the stop waits out |
-| Open the new stream at 48 kHz         | tens of ms, measured by #53                                                 | a rate change is given 1 s on CoreAudio             |
+| Open the new stream at 48 kHz         | tens of ms, measured by #53; a Bluetooth output a second or two             | 3 s, then refused; a CoreAudio rate change has 1 s  |
 | The new output's own latency          | 11.2 ms on the monitor, 20.0 ms on the MacBook Pro speakers (decision 0003) |                                                     |
 
 The bound that matters is 1 s. A command sent during the gap is acknowledged after it, and the
@@ -148,11 +179,22 @@ binding rejects a command unanswered for a second, which ends the song. A move t
 than that ends the song as a fault would have; a move that takes 100 ms does not. That is why the
 follower calls a stream lost after 200 ms without a callback, on every backend, where WASAPI and
 ALSA used to wait 1 s and CoreAudio never noticed: twenty of WASAPI's 10 ms shared periods, and
-the worst of it leaves most of the second for the open. The case that can still overrun is a
-CoreAudio device away from 48 kHz, whose rate change is given a second of its own.
+the worst of it leaves most of the second for the open. The cases that can still overrun are a
+CoreAudio device away from 48 kHz, whose rate change is given a second of its own, and an output
+slow to start, such as Bluetooth. Both start in the end. An output that never starts costs 3 s,
+and the song goes back to the output it left.
 
 ## Rejected
 
+- **Ask the HAL whether the device can run, and skip the start.** The table above: no property
+  Apple documents tells a wedged output from a healthy idle one.
+- **Refuse after 1 s, the second a command waits.** A Bluetooth output that takes a second or two
+  to start would be refused every time, and the room could never play through it.
+- **Cancel the hung start from another thread.** CoreAudio documents no way to stop an
+  `AudioDeviceStart` in progress, and cubeb's deadlocks above came from racing calls into one
+  device. The start finishes alone, and whatever it left is dropped there.
+- **Wait as long as the backend does.** What 0.7.0 did: 10.1 s on the monitor, at open and on a
+  move.
 - **Hold silence and retry the refused output, doubling up to 6.4 s, as a stall does.** A command
   waits a second for its ack while no stream runs, so the song ends at the first command anyway,
   and the room hears nothing while a working output sits listed.

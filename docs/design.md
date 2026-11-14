@@ -209,7 +209,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 - **Open.** `openEngine` picks the device, or the timer clock where nothing plays locally,
   starts the driver with the silent graph, and returns once the first block has rendered. The
   engine and its audio thread last until `close`; the stream under them moves with the output.
-  When the output it picks will not start, or the OS lists none, it rejects with
+  When the output it picks will not start within 3 s, or the OS lists none, it rejects with
   `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
   setting behind. The host may then open another output from the module's `outputDevices()`.
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
@@ -238,13 +238,13 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   audio thread, so the live mixer and its song carry on after a gap. The playhead holds through
   the gap, every slot starts its stream again on the new clock, a capture slot under the new
   output's callback, the first 5 ms fade in, and `outputChanged` fires with the new `output`.
-  When the new output will not start, the engine starts the one it left again, if the OS still
-  lists it, and failing that the default, which only a pinned engine has not tried yet. With no
-  pin the default is the output that refused, so the engine faults once the one it left fails too.
-  The fallback counts as a move, with the gap the room heard, so the song carries on after one
-  gap. `output.refused` names the output that would not start until the rule picks another
-  output, as when the default changes or the refused output leaves the list. `outputChanged`
-  fires again, with a gap of 0, when the refusal clears with no move. Decision
+  When the new output will not start within 3 s, the engine starts the one it left again, if the
+  OS still lists it, and failing that the default, which only a pinned engine has not tried yet.
+  With no pin the default is the output that refused, so the engine faults once the one it left
+  fails too. The fallback counts as a move, with the gap the room heard, so the song carries on
+  after one gap. `output.refused` names the output that would not start until the rule picks
+  another output, as when the default changes or the refused output leaves the list.
+  `outputChanged` fires again, with a gap of 0, when the refusal clears with no move. Decision
   [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
 - **Faults.** A caught panic, or a second in which none of the output the engine should play on,
   the one it left and the default will start, emits `fault` on the engine. The host closes and
@@ -730,6 +730,12 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   output again while the rule still picks it, so a refusal costs one gap, not one on every wake.
   Once the rule picks another, as when the default changes or the refused output leaves the list,
   the refusal clears, and the next time the rule picks that output it is tried afresh.
+- A start that has not returned after 3 s is refused as one that failed, at open and on a move,
+  on every backend. Each start runs on a thread of its own. When it is refused, the follower takes
+  the `Movable` back from the render it lent, which renders silence from then on, and the start
+  finishes alone: a stream it starts late is stopped there, and one that fails drops what it held.
+  A stream that called back before the 3 s were up keeps the `Movable`, and the follower waits for
+  its start to return.
 - With nothing that will start, it waits for the next wake and tries again every 100 ms for up to
   a second, then fails the stats, which faults the engine.
 - `start` fails with `StartError::Unavailable` when the output the rule picks will not start, or
