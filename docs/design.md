@@ -235,6 +235,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   audio thread, so the live mixer and its song carry on after a gap. The playhead holds through
   the gap, every slot starts its stream again on the new clock, a capture slot under the new
   output's callback, the first 5 ms fade in, and
+  When the output it picks will not start, or the OS lists none, it rejects with
+  `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
+  setting behind. The host may then open another output from the module's `outputDevices()`.
   `outputChanged` fires with the new `output`. When the new output will not start, the engine
   starts the one it left again, if the OS still lists it, and failing that the default, so the
   song carries on after one gap.
@@ -481,8 +484,9 @@ export interface Engine {
   readonly capabilities: ReadonlySet<Capability>;
   /** The output playing now: what it was opened on, and after a move, what it moved to. */
   readonly output: OutputInfo;
+  /** The module's `outputDevices()` on a device engine; none on the timer and offline clocks. */
   outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
-  /** The inputs a `capture` slot may name. None on an offline engine. */
+  /** The module's `inputDevices()`: the inputs a `capture` slot may name. None offline. */
   inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
   createMixer(config: MixerConfig): Promise<Mixer>;
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
@@ -689,7 +693,8 @@ own, so no OS listener and no Node call ever starts or stops a device.
 
 ```rust
 // devices/src/
-pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, DriverError>; current(); drop stops it
+pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, StartError>; current(); drop stops it
+pub enum StartError { Unavailable { output: Option<Output>, error: DriverError }, Backend(DriverError) }
 pub struct Current;        // the follower's Playing, shared: get() on any thread but the audio thread
 pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration, pub refused: Option<Refused> }
 pub struct Refused { pub output: Output, pub error: String }   // the output the rule picks that would not start
@@ -723,6 +728,10 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   next time the rule picks that output it is tried afresh.
 - With nothing that will start, it waits for the next wake and tries again every 100 ms for up to
   a second, then fails the stats, which faults the engine.
+- `start` fails with `StartError::Unavailable` when the output the rule picks will not start, or
+  the OS lists none, and `Backend` when the list, the watch or the thread fails. A failed `start`
+  leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
+  `OutputUnavailableError`.
 - The binding reads `Current` for `engine.output`, `refused` included. Its events thread sends
   `outputChanged` whenever `moves` goes up, and with a gap of 0 when `refused` changes with no
   move.
