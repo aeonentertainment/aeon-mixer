@@ -15,9 +15,9 @@ use crate::output::Output;
 use crate::request::Request;
 use crate::stats::Stats;
 
-/// How long a lost output may wait for one to move to before the engine faults: neither the output
-/// the rule picks nor the one it left will start. A command sent in the gap is answered after it,
-/// and the binding gives up on one after a second.
+/// How long a lost output may wait for one to move to before the engine faults: none of the
+/// output the rule picks, the one it left and the default will start. A command sent in the gap is
+/// answered after it, and the binding gives up on one after a second.
 pub const GIVE_UP: Duration = Duration::from_secs(1);
 
 /// How often an output that refused to open is tried again, inside `GIVE_UP`.
