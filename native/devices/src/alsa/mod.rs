@@ -28,9 +28,10 @@ pub fn inputs() -> Result<Vec<crate::Input>, DriverError> {
     devices("Output")
 }
 
-// Every hw: device but those that run only `other_way`.
+// Every hw: device but those that run only `other_way`. A Linux with no libasound has no ALSA
+// device to list, so it lists none, and an open there finds no output rather than failing to look.
 fn devices(other_way: &str) -> Result<Vec<Output>, DriverError> {
-    let lib = asound()?;
+    let Ok(lib) = asound() else { return Ok(Vec::new()) };
     let mut hints = null_mut();
     // SAFETY: `hints` receives a null-terminated array freed below.
     lib.check(
