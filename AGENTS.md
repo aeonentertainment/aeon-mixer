@@ -59,6 +59,7 @@ a decision record and the developer's agreement.
    telemetry. Anything the cloud needs to know is Aeon Karaoke's job.
 4. **The public API is versioned.** A breaking change to an exported type or behaviour is a
    deliberate major bump with a note in the decision log, never a side effect of a refactor.
+   Before 1.0 the minor number is the major: decision 0024.
 5. **No `any`.** Inferred types first, annotations where inference cannot reach.
 
 ## Ways to hurt yourself
