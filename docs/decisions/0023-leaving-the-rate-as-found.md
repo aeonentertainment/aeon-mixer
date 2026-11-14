@@ -28,8 +28,12 @@ The last of this process's streams to let go of a device puts back the rate the 
   waiting, because `close` drops the stream on Node's event loop. It asks whatever the device
   reads, so a 48 kHz that lands after the engine's one-second wait is undone too: the HAL applies
   the two in the order asked. A stream that holds the device again before that lands asks for
-  48 kHz whatever it reads, so its request lands last. If a person changed the rate mid-song, the
-  song was already playing at the wrong speed.
+  48 kHz whatever it reads, so its request lands last.
+- **Whose rate.** The first stream on a device reads it each time, so the rate put back is the
+  one it had when the engine came to it. A rate a person chose between songs is the one kept, and
+  a device they set to 48 kHz is left alone. Only a 48 kHz read within a second of a put-back is
+  taken as that put-back still landing. If a person changed the rate mid-song, the song was
+  already playing at the wrong speed.
 - **What it cannot.** A process that is killed or crashes leaves 48 kHz, as before.
 
 ## The costs

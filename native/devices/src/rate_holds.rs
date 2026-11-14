@@ -1,5 +1,5 @@
-use std::mem;
 use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use engine::block::RATE;
 use engine::driver::DriverError;
@@ -14,6 +14,8 @@ use crate::rate_hold::RateHold;
 pub struct RateHolds<R> {
     hal: R,
     held: Mutex<Vec<Held>>,
+    /// How long a rate put back may take to land: the second a set is given to.
+    landing: Duration,
 }
 
 struct Held {
@@ -21,41 +23,52 @@ struct Held {
     /// The rate before ours, or none when the device was at 48 kHz already.
     found: Option<f64>,
     users: u32,
-    /// The last stream out asked for `found` again, which may not have landed yet.
-    put_back: bool,
+    /// When the last stream out asked for `found` again, which may not have landed yet.
+    put_back: Option<Instant>,
 }
 
 impl<R: NominalRate> RateHolds<R> {
     pub const fn new(hal: R) -> Self {
-        Self { hal, held: Mutex::new(Vec::new()) }
+        Self { hal, held: Mutex::new(Vec::new()), landing: Duration::from_secs(1) }
     }
 
     /// Puts `device` at 48 kHz for one stream until the hold drops. Blocks while the rate lands,
-    /// on the thread that starts the stream.
+    /// on the thread that starts the stream. The first stream on a device takes the rate it reads
+    /// as the one to put back, so a rate a person chose between songs is the one kept.
     pub fn hold(&self, device: u32) -> Result<RateHold<'_, R>, DriverError> {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         let at = match held.iter().position(|held| held.device == device) {
             Some(at) => at,
             None => {
-                held.push(Held { device, found: None, users: 0, put_back: false });
+                held.push(Held { device, found: None, users: 0, put_back: None });
                 held.len() - 1
             }
         };
         let hold = RateHold { holds: self, device };
-        held[at].users += 1;
+        let entry = &mut held[at];
+        entry.users += 1;
+        let first = entry.users == 1;
+        let landing = entry.put_back.take().is_some_and(|at| at.elapsed() < self.landing);
         let rate = f64::from(RATE);
-        let moved = if mem::take(&mut held[at].put_back) {
-            // A rate put back a moment ago may still read 48 kHz while it lands, so this asks again
-            self.hal.set_rate(device, rate)
-        } else {
-            match self.hal.rate(device) {
-                Ok(found) if found == rate => Ok(()),
-                Ok(found) => {
-                    held[at].found.get_or_insert(found);
-                    self.hal.set_rate(device, rate)
+        let moved = match self.hal.rate(device) {
+            // A rate put back a moment ago may still read 48 kHz while it lands, so this asks
+            // again, to land last, and keeps the rate found
+            Ok(now) if now == rate && landing => self.hal.set_rate(device, rate),
+            Ok(now) if now == rate => {
+                if first {
+                    entry.found = None;
                 }
-                Err(error) => Err(error),
+                Ok(())
             }
+            Ok(now) => {
+                if first {
+                    entry.found = Some(now);
+                } else {
+                    entry.found.get_or_insert(now);
+                }
+                self.hal.set_rate(device, rate)
+            }
+            Err(error) => Err(error),
         };
         drop(held);
         // On a failure the hold drops here, and with no other user puts the rate back
@@ -74,7 +87,7 @@ impl<R: NominalRate> RateHolds<R> {
         {
             // Best effort: a device that has gone takes its rate with it
             let _ = self.hal.put_rate(device, found);
-            held.put_back = true;
+            held.put_back = Some(Instant::now());
         }
     }
 }
@@ -202,6 +215,26 @@ mod tests {
         assert_eq!(holds.hal.asked(), asked, "48 kHz asked after the put back, so it lands last");
         drop(again);
         assert_eq!(holds.hal.asked().last(), Some(&(MONITOR, 44_100.0)), "and the rate found kept");
+    }
+
+    /// Between songs a person sets the interface to 96 kHz, or to 48 kHz, which the engine would
+    /// never have touched. The next song's stream puts back what they chose.
+    #[test]
+    fn a_rate_chosen_between_songs_is_the_one_put_back() {
+        let holds = RateHolds {
+            landing: Duration::ZERO,
+            ..RateHolds::new(Fake::new(&[(MONITOR, 44_100.0)]))
+        };
+        drop(holds.hold(MONITOR).unwrap());
+        holds.hal.land(MONITOR, 96_000.0).unwrap();
+        drop(holds.hold(MONITOR).unwrap());
+        assert_eq!(holds.hal.rate_of(MONITOR), 96_000.0);
+
+        holds.hal.land(MONITOR, 48_000.0).unwrap();
+        let before = holds.hal.asked().len();
+        drop(holds.hold(MONITOR).unwrap());
+        assert_eq!(holds.hal.asked().len(), before, "a device at 48 kHz is left alone");
+        assert_eq!(holds.hal.rate_of(MONITOR), 48_000.0);
     }
 
     #[test]
