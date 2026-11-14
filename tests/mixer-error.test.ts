@@ -13,9 +13,9 @@ const addon = vi.hoisted(() => ({ deliver: (_batch: NativeEvent[]): void => {} }
 vi.mock(import("../src/native.ts"), async (original) => {
   const native = await original();
   class TappedEngine extends native.NativeEngine {
-    constructor(...[options, deliver]: ConstructorParameters<typeof native.NativeEngine>) {
-      super(options, deliver);
+    static override open(...[options, deliver]: Parameters<typeof native.NativeEngine.open>) {
       addon.deliver = deliver;
+      return native.NativeEngine.open(options, deliver);
     }
   }
   return { ...native, NativeEngine: TappedEngine };

@@ -2,7 +2,7 @@
 //! drives the audio thread, and the events thread that brings events back. Commands return the
 //! id their ack will carry; `src/` turns that into a promise.
 
-use devices::{Playing, StartError};
+use devices::Playing;
 use engine::audio_thread::{AudioThread, Controls};
 use engine::block::MAX_SLOTS;
 use engine::command::{Command, CommandProducer};
@@ -17,12 +17,14 @@ use transport::Network;
 use crate::backing::{BackingInput, BackingRender, StemGainsInput};
 use crate::clock::{Clock, OutputEntry};
 use crate::event::NativeEvent;
-use crate::events_thread::EventsThread;
+use crate::events_thread::{Deliver, EventsThread};
 use crate::guide::GuideInput;
 use crate::mixer::Mixer;
+use crate::opening::Opening;
 use crate::rtp_return::RtpReturnInput;
 use crate::slot_input::SlotInput;
 use crate::slot_params::SlotParamsInput;
+use crate::test_os::TestOs;
 
 /// What drives the audio thread.
 #[napi(string_enum = "lowercase")]
@@ -108,40 +110,53 @@ pub struct Engine {
     next_id: u32,
 }
 
-#[napi]
 impl Engine {
-    /// Starts the clock on the silent graph and the events thread, which calls `on_events` with
-    /// every batch it drains. An output that will not start throws an error whose `code` is
-    /// `"output-unavailable"` and whose `device` names it, if the OS listed one to pick.
-    #[napi(constructor)]
-    pub fn new(
-        env: &Env,
-        options: OpenOptions,
-        on_events: Function<'_, Vec<NativeEvent>, ()>,
-    ) -> Result<Self> {
-        let network = Network::spawn()?;
-        let (audio, controls) = AudioThread::new();
+    /// The engine once its clock runs: the events thread starts here, on the control thread,
+    /// calling `deliver` with every batch it drains.
+    pub fn running(
+        controls: Controls,
+        clock: Clock,
+        network: Network,
+        deliver: Deliver,
+        playout_delay_frames: Option<u32>,
+    ) -> Self {
         let Controls { params, commands, events, retired, reactions } = controls;
-        let clock = match options.clock {
-            ClockKind::Offline => {
-                Clock::Offline(Box::new(engine::driver::OfflineDriver::new(audio.into_render())))
-            }
-            ClockKind::Timer => Clock::timer(audio.into_render())?,
-            ClockKind::Device => Clock::open(options.device, options.period_frames, audio)
-                .map_err(|error| start_error(env, error))?,
-        };
-        let deliver = on_events.build_threadsafe_function().build()?;
         let events = EventsThread::spawn(events, retired, clock.stats(), clock.current(), deliver);
-        Ok(Self {
+        Self {
             params,
             commands,
             reactions,
             clock: Some(clock),
             events: Some(events),
             network: Some(network),
-            playout_delay_frames: options.playout_delay_frames,
+            playout_delay_frames,
             next_id: 0,
-        })
+        }
+    }
+}
+
+#[napi]
+impl Engine {
+    /// Starts the clock on the silent graph off the event loop, and resolves with the engine once
+    /// it runs; `on_events` is called with every batch the events thread drains. An output that
+    /// will not start rejects with an error whose `code` is `"output-unavailable"` and whose
+    /// `device` names it, if the OS listed one to pick.
+    #[napi(ts_return_type = "Promise<Engine>")]
+    pub fn open(
+        options: OpenOptions,
+        on_events: Function<'_, Vec<NativeEvent>, ()>,
+    ) -> Result<AsyncTask<Opening>> {
+        let network = Network::spawn()?;
+        let (audio, controls) = AudioThread::new();
+        let deliver = on_events.build_threadsafe_function().build()?;
+        Ok(AsyncTask::new(Opening::new(
+            options,
+            TestOs::from_env(),
+            audio,
+            controls,
+            network,
+            deliver,
+        )))
     }
 
     /// Builds a mixer with one slot per input, in order: `"rtp"`, `"l16"`, `"push"` or
@@ -347,25 +362,6 @@ fn slot_index(index: u32) -> Result<usize> {
 /// `src/` sends whole, finite, non-negative frame counts; the cast saturates on anything else.
 fn frames(count: f64) -> u64 {
     count as u64
-}
-
-// An unavailable output is thrown as an error with its code and device on it, so a host tells it
-// from every other failure without reading the message.
-fn start_error(env: &Env, error: StartError) -> Error {
-    let message = error.to_string();
-    let StartError::Unavailable { output, .. } = error else {
-        return Error::from_reason(message);
-    };
-    let thrown = env.create_error(Error::from_reason(message.clone())).and_then(|mut js| {
-        js.set_named_property("code", "output-unavailable")?;
-        let device = output.map(|output| OutputDevice { id: output.id, name: output.name });
-        js.set_named_property("device", device)?;
-        env.throw(js)
-    });
-    match thrown {
-        Ok(()) => Error::new(Status::PendingException, message),
-        Err(error) => error,
-    }
 }
 
 fn closed() -> Error {

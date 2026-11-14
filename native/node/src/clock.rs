@@ -9,6 +9,8 @@ use engine::driver::{Driver, OfflineDriver, Render, Running, StreamInfo};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
+use crate::test_os::TestOs;
+
 pub enum Clock {
     Offline(Box<OfflineDriver>),
     Timer { running: Running, stats: Arc<Stats> },
@@ -17,15 +19,20 @@ pub enum Clock {
 
 impl Clock {
     /// Starts this OS's backend at `period_frames` on `device`, the pinned output, or on the
-    /// default, and follows the room's output from there (docs/design.md section 5).
+    /// default, and follows the room's output from there (docs/design.md section 5). Blocks while
+    /// the first stream starts. `test_os` stands in for this OS in the TypeScript tests.
     pub fn open(
         device: Option<String>,
         period_frames: u32,
         audio: AudioThread,
+        test_os: Option<TestOs>,
     ) -> std::result::Result<Self, StartError> {
         let stats = Arc::new(Stats::new());
-        let follower =
-            Follower::start(Request { device, period_frames }, audio, Os, Arc::clone(&stats))?;
+        let request = Request { device, period_frames };
+        let follower = match test_os {
+            Some(test_os) => Follower::start(request, audio, test_os, Arc::clone(&stats))?,
+            None => Follower::start(request, audio, Os, Arc::clone(&stats))?,
+        };
         Ok(Self::Device { follower, stats })
     }
 

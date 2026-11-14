@@ -11,14 +11,17 @@ mod engine;
 mod event;
 mod events_thread;
 mod guide;
+mod hanging_start;
 mod ingest;
 mod listing;
 mod mixer;
+mod opening;
 mod output_seen;
 mod rtp_return;
 mod slot_input;
 mod slot_params;
 mod slot_stats_info;
+mod test_os;
 
 pub use backing::{BackingInput, BackingRender, StemGainsInput};
 pub use clock::OutputEntry;

@@ -5,6 +5,7 @@ import {
   NativeEngine,
   type NativeEvent,
   type NativeMixer,
+  type NativeOpenOptions,
   type NativeOutputInfo,
 } from "./native.ts";
 import type {
@@ -21,6 +22,9 @@ import { finiteIn, integerIn, pcm, rtpReturn, slotInput } from "./validate.ts";
 
 type State = "running" | "faulted" | "closed";
 
+/** Carries the addon's event batches to the engine `openEngine` builds once the open resolves. */
+type Batches = Emitter<{ batch: (batch: NativeEvent[]) => void }>;
+
 /** An engine on the test clock. Its caller pumps it; nothing plays. */
 export type OfflineEngine = Engine & Required<Pick<Engine, "pump">>;
 
@@ -33,7 +37,39 @@ export function openEngine(
 ): Promise<OfflineEngine>;
 export function openEngine(options: OpenEngineOptions): Promise<Engine>;
 export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
-  return new Engine(options);
+  const slots = integerIn("slots", options.slots ?? 8, 1, 16);
+  const batches: Batches = new Emitter();
+  // The events thread starts as the open resolves and its first batch lands on a later turn of the
+  // event loop, after the engine below listens
+  const deliver = (batch: NativeEvent[]) => batches.emit("batch", batch);
+  try {
+    const native = await NativeEngine.open(nativeOptions(options), deliver);
+    return new Engine(native, slots, "offline" in options.output, batches);
+  } catch (error) {
+    throw OutputUnavailableError.from(error);
+  }
+}
+
+/** The addon's options for `options.output`, with every value checked. */
+function nativeOptions(options: OpenEngineOptions): NativeOpenOptions {
+  // A pinned delay can never rise, so under 5 ms, two blocks, ordinary jitter would be all late
+  // packets for good. A slot left to choose goes as low as 3.67 ms, because it rises when packets
+  // come late. 100 ms stays inside the 64 packets the buffer holds, 160 ms of the shortest frame
+  const pinned =
+    options.playoutDelayMs === undefined
+      ? {}
+      : {
+          playoutDelayFrames: msToFrames(
+            finiteIn("playoutDelayMs", options.playoutDelayMs, 5, 100),
+          ),
+        };
+  if ("offline" in options.output) return { clock: "offline", periodFrames: 128, ...pinned };
+  if ("timer" in options.output) return { clock: "timer", periodFrames: 128, ...pinned };
+  const { device, periodFrames = 128 } = options.output;
+  if (periodFrames !== 64 && periodFrames !== 128) {
+    throw new RangeError(`periodFrames must be 64 or 128, got ${String(periodFrames)}`);
+  }
+  return { clock: "device", periodFrames, ...pinned, ...(device === undefined ? {} : { device }) };
 }
 
 export class Engine {
@@ -65,45 +101,15 @@ export class Engine {
   #underruns = 0;
   #state: State = "running";
 
-  constructor(options: OpenEngineOptions) {
-    this.#slots = integerIn("slots", options.slots ?? 8, 1, 16);
-    // A pinned delay can never rise, so under 5 ms, two blocks, ordinary jitter would be all late
-    // packets for good. A slot left to choose goes as low as 3.67 ms, because it rises when packets
-    // come late. 100 ms stays inside the 64 packets the buffer holds, 160 ms of the shortest frame
-    const pinned =
-      options.playoutDelayMs === undefined
-        ? {}
-        : {
-            playoutDelayFrames: msToFrames(
-              finiteIn("playoutDelayMs", options.playoutDelayMs, 5, 100),
-            ),
-          };
-    const deliver = (batch: NativeEvent[]) => {
+  /** Built by `openEngine` around the engine the addon opened, whose events `batches` relays. */
+  constructor(native: NativeEngine, slots: number, offline: boolean, batches: Batches) {
+    this.#native = native;
+    this.#slots = slots;
+    batches.on("batch", (batch) => {
       this.#deliver(batch);
-    };
-    if ("offline" in options.output) {
-      this.#native = new NativeEngine({ clock: "offline", periodFrames: 128, ...pinned }, deliver);
+    });
+    if (offline) {
       this.pump = (blocks) => this.#native.pump(integerIn("blocks", blocks, 1, 1 << 20));
-    } else if ("timer" in options.output) {
-      this.#native = new NativeEngine({ clock: "timer", periodFrames: 128, ...pinned }, deliver);
-    } else {
-      const { device, periodFrames = 128 } = options.output;
-      if (periodFrames !== 64 && periodFrames !== 128) {
-        throw new RangeError(`periodFrames must be 64 or 128, got ${String(periodFrames)}`);
-      }
-      try {
-        this.#native = new NativeEngine(
-          {
-            clock: "device",
-            periodFrames,
-            ...pinned,
-            ...(device === undefined ? {} : { device }),
-          },
-          deliver,
-        );
-      } catch (error) {
-        throw OutputUnavailableError.from(error);
-      }
     }
     this.#output = outputInfo(this.#native.output);
     this.#host = {
