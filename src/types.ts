@@ -34,6 +34,17 @@ export interface OutputInfo {
   readonly latencyMs: number;
   /** The output playing now, as `outputDevices()` lists it; null on the offline clock. */
   readonly device: { readonly id: string; readonly name: string } | null;
+  /**
+   * The output the engine should play on, the pinned one or the default, when it would not start,
+   * with what the OS said. The engine stays on `device`, and the refusal stands, until the pin or
+   * default rule picks another output, as when the default changes or the refused output leaves
+   * the list. Null while it plays where it should.
+   */
+  readonly refused: {
+    readonly id: string;
+    readonly name: string;
+    readonly error: string;
+  } | null;
 }
 
 /**
@@ -127,7 +138,10 @@ export interface SlotStats {
 
 export type EngineEvents = {
   fault: (error: Error) => void;
-  /** After every move to another output; `gapMs` is how long the room heard nothing. */
+  /**
+   * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing, and with
+   * `gapMs` 0 when `refused` clears with no move.
+   */
   outputChanged: (output: OutputInfo, gapMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */
   masterLevel: (rmsDb: number, peakDb: number) => void;

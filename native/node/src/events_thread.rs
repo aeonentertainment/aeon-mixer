@@ -17,6 +17,7 @@ use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use crate::backing::{SharedRenderJob, lock};
 use crate::engine::OutputInfo;
 use crate::event::NativeEvent;
+use crate::output_seen::OutputSeen;
 
 pub const DRAIN_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -54,7 +55,7 @@ impl EventsThread {
             underruns_seen: 0,
             failed_seen: false,
             current,
-            moves_seen: 0,
+            output_seen: OutputSeen::default(),
             new_watches,
             renders: Vec::new(),
         };
@@ -98,7 +99,7 @@ struct Drain {
     underruns_seen: u64,
     failed_seen: bool,
     current: Option<Current>,
-    moves_seen: u32,
+    output_seen: OutputSeen,
     new_watches: Receiver<RenderWatch>,
     renders: Vec<RenderWatch>,
 }
@@ -128,12 +129,11 @@ impl Drain {
             }
         }
         if let Some(playing) = self.current.as_ref().map(Current::get)
-            && playing.moves != self.moves_seen
+            && let Some(gap) = self.output_seen.change(&playing)
         {
-            self.moves_seen = playing.moves;
             batch.push(NativeEvent::OutputChanged {
-                gap_ms: playing.gap.as_secs_f64() * 1000.0,
-                output: OutputInfo::new(playing.info, Some(playing.output)),
+                gap_ms: gap.as_secs_f64() * 1000.0,
+                output: OutputInfo::new(playing.info, Some(playing)),
             });
         }
         self.renders.extend(self.new_watches.try_iter());

@@ -257,11 +257,15 @@ impl Rig {
     }
 
     /// Waits until the follower has finished whatever its last wake started: it handles one
-    /// wake at a time, so once it lists the outputs again, the last one is done. Only for a
-    /// follower that is playing, which lists only when woken.
+    /// wake at a time, so once it lists the outputs again, the last one is done. A wake still
+    /// pending folds into the one raised here, so the first list may begin that reconcile rather
+    /// than follow it; the second list is from a wake raised after the first, so follows it. Only
+    /// for a follower that is playing, which lists only when woken.
     fn settle(&self) {
-        self.fake.wake().raise();
-        while self.next() != Seen::Listed {}
+        for _ in 0..2 {
+            self.fake.wake().raise();
+            while self.next() != Seen::Listed {}
+        }
     }
 
     fn playing(&self) -> (String, u32, u32) {
@@ -392,6 +396,8 @@ fn a_stream_that_stops_calling_back_reopens_and_waits_longer_each_time_it_stays_
     );
     assert!(starts[2] - starts[1] >= 2 * STALL, "the next reopen waits twice as long");
     assert!(starts[3] - starts[2] >= 4 * STALL, "and the one after twice again");
+    // A stream reports its start before the follower records the move
+    rig.settle();
     assert_eq!(rig.playing().1, 3, "the host hears outputChanged for every reopen");
     assert!(!rig.stats.report().failed, "silence never faults the engine");
 
@@ -420,8 +426,97 @@ fn a_list_that_fails_to_read_moves_only_a_stream_that_lost_its_device() {
     rig.expect(&[started("built-in")]);
 }
 
+/// The Mac case of aeon-karaoke#510: the default moved to a monitor whose audio would not start,
+/// and the engine faulted a second later with the old output still there. It goes back to the old
+/// one instead, with one gap, and says which output refused.
 #[test]
-fn nothing_to_play_on_within_a_second_faults_the_engine() {
+fn a_new_default_that_will_not_start_leaves_the_song_on_the_output_it_left() {
+    let rig = Rig::new(&[("usb", true), ("monitor", false)], None);
+    rig.expect(&[started("usb")]);
+    let before = rig.fake.pump(2);
+    rig.fake.room().refuses.push("monitor".into());
+
+    rig.fake.offer(&[("usb", false), ("monitor", true)]);
+    rig.expect(&[stopped("usb"), Seen::Refused("monitor".into()), started("usb")]);
+    rig.settle();
+    assert_eq!(rig.playing(), ("usb".into(), 1, 300), "back where it was, as one move");
+    let refused = rig.follower.as_ref().expect("following").current().get().refused;
+    let refused = refused.expect("the refusal is reported");
+    assert_eq!(
+        (refused.output.id.as_str(), refused.error.as_str()),
+        ("monitor", "audio backend: refused")
+    );
+    assert!(!rig.stats.report().failed, "a refused move never faults the engine");
+    assert_eq!(rig.fake.pump(1)[0], -(before[before.len() - 1] + 1.0), "the song carries on");
+
+    // Later wakes leave it be: the rule still picks the monitor, which already refused
+    rig.settle();
+    rig.settle();
+    let more: Vec<_> = rig.seen.try_iter().filter(|seen| *seen != Seen::Listed).collect();
+    assert!(more.is_empty(), "no retry on every wake: {more:?}");
+}
+
+/// A refusal lasts while the rule picks that output. Once it picks another, here because the
+/// monitor left the list as it powered off, the refusal clears with no move, and the monitor's
+/// return as the default is tried afresh.
+#[test]
+fn a_refused_output_is_tried_again_once_the_rule_has_picked_another() {
+    let rig = Rig::new(&[("usb", true), ("monitor", false)], None);
+    rig.expect(&[started("usb")]);
+    rig.fake.room().refuses.push("monitor".into());
+    rig.fake.offer(&[("usb", false), ("monitor", true)]);
+    rig.expect(&[stopped("usb"), Seen::Refused("monitor".into()), started("usb")]);
+
+    rig.fake.room().refuses.clear();
+    rig.fake.offer(&[("usb", true)]);
+    rig.settle();
+    let current = rig.follower.as_ref().expect("following").current();
+    assert_eq!((current.get().refused, rig.playing().1), (None, 1), "cleared, and no move");
+
+    rig.fake.offer(&[("usb", false), ("monitor", true)]);
+    rig.expect(&[stopped("usb"), started("monitor")]);
+    rig.settle();
+    assert_eq!(rig.playing(), ("monitor".into(), 2, 700));
+}
+
+/// A pinned output that comes back but will not start leaves the engine on the default it moved
+/// to when the pin went.
+#[test]
+fn a_pinned_output_that_returns_but_will_not_start_leaves_the_song_on_the_default() {
+    let rig = Rig::new(&[("hdmi", true), ("usb", false)], Some("usb"));
+    rig.expect(&[started("usb")]);
+    rig.fake.offer(&[("hdmi", true)]);
+    rig.expect(&[stopped("usb"), started("hdmi")]);
+
+    rig.fake.room().refuses.push("usb".into());
+    rig.fake.offer(&[("hdmi", true), ("usb", false)]);
+    rig.expect(&[stopped("hdmi"), Seen::Refused("usb".into()), started("hdmi")]);
+    rig.settle();
+    assert_eq!(rig.playing(), ("hdmi".into(), 2, 400));
+    assert!(!rig.stats.report().failed);
+}
+
+/// A pinned output back but refusing, then the default it fell back to unplugged: the new default
+/// takes the song, as the rule of decision 0016 says it would with no pin.
+#[test]
+fn a_pinned_engine_whose_pin_refuses_and_whose_fallback_goes_plays_on_the_default() {
+    let rig = Rig::new(&[("hdmi", true), ("usb", false)], Some("usb"));
+    rig.expect(&[started("usb")]);
+    rig.fake.offer(&[("hdmi", true)]);
+    rig.expect(&[stopped("usb"), started("hdmi")]);
+    rig.fake.room().refuses.push("usb".into());
+    rig.fake.offer(&[("hdmi", true), ("usb", false)]);
+    rig.expect(&[stopped("hdmi"), Seen::Refused("usb".into()), started("hdmi")]);
+
+    rig.fake.offer(&[("usb", false), ("speakers", true)]);
+    rig.expect(&[stopped("hdmi"), Seen::Refused("usb".into()), started("speakers")]);
+    rig.settle();
+    assert_eq!(rig.playing(), ("speakers".into(), 3, 800));
+    assert!(!rig.stats.report().failed);
+}
+
+#[test]
+fn nothing_that_will_start_within_a_second_faults_the_engine() {
     let rig = Rig::new(&[("usb", true), ("built-in", false)], None);
     rig.expect(&[started("usb")]);
     rig.fake.room().refuses.push("built-in".into());

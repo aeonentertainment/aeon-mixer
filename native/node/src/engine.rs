@@ -2,6 +2,7 @@
 //! drives the audio thread, and the events thread that brings events back. Commands return the
 //! id their ack will carry; `src/` turns that into a promise.
 
+use devices::Playing;
 use engine::audio_thread::{AudioThread, Controls};
 use engine::block::MAX_SLOTS;
 use engine::command::{Command, CommandProducer};
@@ -54,6 +55,8 @@ pub struct OutputInfo {
     pub latency_ms: f64,
     /// The output playing now; none on the offline clock.
     pub device: Option<OutputDevice>,
+    /// The output the rule picks that would not start, while the engine plays on `device`.
+    pub refused: Option<RefusedOutput>,
 }
 
 #[napi(object)]
@@ -62,14 +65,32 @@ pub struct OutputDevice {
     pub name: String,
 }
 
+#[napi(object)]
+pub struct RefusedOutput {
+    pub id: String,
+    pub name: String,
+    pub error: String,
+}
+
 impl OutputInfo {
-    pub fn new(info: StreamInfo, device: Option<devices::Output>) -> Self {
+    /// `playing` is the follower's, and none on the offline and timer clocks.
+    pub fn new(info: StreamInfo, playing: Option<Playing>) -> Self {
+        let (device, refused) = playing.map_or((None, None), |playing| {
+            let device = OutputDevice { id: playing.output.id, name: playing.output.name };
+            let refused = playing.refused.map(|refused| RefusedOutput {
+                id: refused.output.id,
+                name: refused.output.name,
+                error: refused.error,
+            });
+            (Some(device), refused)
+        });
         Self {
             sample_rate: info.sample_rate,
             period_frames: info.period_frames,
             latency_ms: f64::from(info.output_latency_frames) * 1000.0
                 / f64::from(info.sample_rate),
-            device: device.map(|output| OutputDevice { id: output.id, name: output.name }),
+            device,
+            refused,
         }
     }
 }
@@ -145,8 +166,7 @@ impl Engine {
     #[napi(getter)]
     pub fn output(&self) -> Result<OutputInfo> {
         let clock = self.clock()?;
-        let device = clock.playing().map(|playing| playing.output);
-        Ok(OutputInfo::new(clock.info(), device))
+        Ok(OutputInfo::new(clock.info(), clock.playing()))
     }
 
     /// The outputs this OS offers, the default marked. Empty on the offline and timer clocks.

@@ -124,7 +124,8 @@ export class Engine {
 
   /**
    * The output playing now. An engine opened with no `output.device` follows the OS default, and
-   * one with a `device` plays there while it exists; `outputChanged` fires after every move.
+   * one with a `device` plays there while it exists; `outputChanged` fires after every move, and
+   * when `refused` clears with no move.
    */
   get output() {
     return this.#output;
@@ -317,12 +318,14 @@ function outputInfo(info: NativeOutputInfo): OutputInfo {
   if (info.sampleRate !== 48000) {
     throw new Error(`the engine runs at 48 kHz; the addon reports ${info.sampleRate}`);
   }
-  const { periodFrames, latencyMs, device } = info;
+  const { periodFrames, latencyMs, device, refused } = info;
   return {
     sampleRate: 48000,
     periodFrames,
     latencyMs,
     device: device === undefined ? null : { id: device.id, name: device.name },
+    refused:
+      refused === undefined ? null : { id: refused.id, name: refused.name, error: refused.error },
   };
 }
 
