@@ -36,11 +36,14 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   every slot starts its stream again on the new clock, and the first 5 ms on the new output fade
   in. The new output's latency is in the event.
 - **When the new output will not start.** The engine starts the output it left again, if the OS
-  still lists it, and failing that the default, and `engine.output.refused` names the one that
-  would not start, with what the OS said. The song carries on after one gap. The engine does not
-  try the refused output again while the pin or the default still names it; once either names
-  another, or the refused output leaves the list, the refusal clears and the next time it is named
-  it is tried afresh.
+  still lists it, and failing that the default, which only a pinned engine has not tried yet.
+  With no pin the default is the output that refused, so the engine faults once the one it left
+  fails too. `engine.output.refused` names the one that would not start, with what the OS said.
+  The fallback counts as a move, with the gap the room heard, so the song carries on after one
+  gap and `outputChanged` says so. The engine does not try the refused output again while the
+  rule still picks it. Once the rule picks another output, as when the default changes or the
+  refused output leaves the list, the refusal clears, and the next time the rule picks it, it is
+  tried afresh.
 - **When it gives up.** If none of the output it should play on, the one it left and the default
   will start within a second of the wake, the engine faults as before, and the host closes and
   reopens it.
@@ -158,10 +161,9 @@ CoreAudio device away from 48 kHz, whose rate change is given a second of its ow
   moment ago, and the default is where the rule goes with no pin. With those gone too, the engine
   faults and the host chooses.
 - **Start the new output before stopping the old.** One audio thread renders into one stream, and
-  two at once means two clocks, as the crossfade below.
+  two at once means two clocks, as with the crossfade below.
 - **Retry a refused output on a timer while playing elsewhere.** Each try costs the room a gap on
   the output that works. The refused output is tried again when the OS says something changed.
-
 - **Fault and let the host reopen.** What the engine did. Reopening destroys the live mixer, so
   every unplug ends the song, and nothing ever follows a new default.
 - **Follow a loss, never a default change.** The session above was a default change.
@@ -182,9 +184,8 @@ CoreAudio device away from 48 kHz, whose rate change is given a second of its ow
   the device list, and a listener per device is one more registration per move to remove safely.
   The follower registers its listeners once, for the engine's life.
 - **Fault a stream that stays silent for a second,** as a lost output with nothing that will
-  start does. A
-  Mac asleep on battery wakes into DarkWake through the night, by its logs with no IOProc called,
-  and every song left playing would end there. Reopening ever more slowly costs about ten opens a
-  minute while it is awake.
+  start does. A Mac asleep on battery wakes into DarkWake through the night, by its logs with no
+  IOProc called, and every song left playing would end there. Reopening ever more slowly costs
+  about ten opens a minute while it is awake.
 - **Report a muted output.** The OS shows mute already, and a mute flag would need one more
   listener per device. Left for when a host asks.

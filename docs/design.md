@@ -239,9 +239,12 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   the gap, every slot starts its stream again on the new clock, a capture slot under the new
   output's callback, the first 5 ms fade in, and `outputChanged` fires with the new `output`.
   When the new output will not start, the engine starts the one it left again, if the OS still
-  lists it, and failing that the default, so the song carries on after one gap.
-  `output.refused` names the output that would not start until the pin or the default changes,
-  and `outputChanged` fires again, with a gap of 0, when it clears. Decision
+  lists it, and failing that the default, which only a pinned engine has not tried yet. With no
+  pin the default is the output that refused, so the engine faults once the one it left fails too.
+  The fallback counts as a move, with the gap the room heard, so the song carries on after one
+  gap. `output.refused` names the output that would not start until the rule picks another
+  output, as when the default changes or the refused output leaves the list. `outputChanged`
+  fires again, with a gap of 0, when the refusal clears with no move. Decision
   [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
 - **Faults.** A caught panic, or a second in which none of the output the engine should play on,
   the one it left and the default will start, emits `fault` on the engine. The host closes and
@@ -491,8 +494,8 @@ export interface Engine {
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
   reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
   on(event: "fault", listener: (error: Error) => void): () => void;
-  /** Whenever `output` changes: after every move, `gapMs` how long the room heard nothing, and
-   * with `gapMs` 0 when a refusal clears with no move. */
+  /** Whenever `output` changes: after every move, the fallback from a refused output included,
+   * with `gapMs` how long the room heard nothing; with `gapMs` 0 when a refusal clears alone. */
   on(event: "outputChanged", listener: (output: OutputInfo, gapMs: number) => void): () => void;
   /** The mix after the clipper, reactions included, between songs too. */
   on(event: "masterLevel", listener: (rmsDb: number, peakDb: number) => void): () => void;
@@ -721,10 +724,12 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
   to the new stream running.
 - A move whose output will not start starts the output it left again, if the OS still lists it,
-  and failing that the default, which a pinned engine has not tried, and sets `Playing.refused`. The follower does not try the refused output again while the rule
-  still picks it, so a refusal costs one gap, not one on every wake. Once the rule picks another,
-  as when the default changes or the refused output leaves the list, the refusal clears, and the
-  next time the rule picks that output it is tried afresh.
+  and failing that the default, which only a pinned engine has not tried yet, and sets
+  `Playing.refused`. No output is tried twice in one attempt. The fallback counts as a move:
+  `moves` goes up and `gap` is the one the room heard. The follower does not try the refused
+  output again while the rule still picks it, so a refusal costs one gap, not one on every wake.
+  Once the rule picks another, as when the default changes or the refused output leaves the list,
+  the refusal clears, and the next time the rule picks that output it is tried afresh.
 - With nothing that will start, it waits for the next wake and tries again every 100 ms for up to
   a second, then fails the stats, which faults the engine.
 - `start` fails with `StartError::Unavailable` when the output the rule picks will not start, or
@@ -732,8 +737,8 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
   `OutputUnavailableError`.
 - The binding reads `Current` for `engine.output`, `refused` included. Its events thread sends
-  `outputChanged` whenever `moves` goes up, and with a gap of 0 when `refused` changes with no
-  move.
+  `outputChanged` whenever `moves` goes up, and with a gap of 0 when `refused` clears with no
+  move. A refusal is only ever set by the fallback's move.
 - The watches: CoreAudio listens on the system object for the default output and the device list,
   with `kAudioHardwarePropertyRunLoop` set to null so the HAL calls it on its own thread. WASAPI
   registers an `IMMNotificationClient` from a COM thread of its own. ALSA has nothing to listen
