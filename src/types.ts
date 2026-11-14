@@ -36,8 +36,9 @@ export interface OutputInfo {
   readonly device: { readonly id: string; readonly name: string } | null;
   /**
    * The output the engine should play on, the pinned one or the default, when it would not start,
-   * with what the OS said. The engine stays on `device` until the pin or the default changes.
-   * Null while it plays where it should.
+   * with what the OS said. The engine stays on `device`, and the refusal stands, until the pin or
+   * default rule picks another output, as when the default changes or the refused output leaves
+   * the list. Null while it plays where it should.
    */
   readonly refused: {
     readonly id: string;
