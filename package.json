@@ -1,6 +1,6 @@
 {
   "name": "@aeonentertainment/mixer",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Low-latency LAN audio mixer for Aeon Karaoke: phone and house mics, a backing track, one mix to the room.",
   "bugs": {
     "url": "https://github.com/aeonentertainment/aeon-mixer/issues"
