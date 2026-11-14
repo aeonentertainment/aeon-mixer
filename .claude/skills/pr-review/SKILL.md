@@ -37,9 +37,9 @@ here a line-level bug is a finding only when it breaks a rule below.
    in AGENTS.md's words and what satisfies it, then write the summary into your Claude comment
    on the PR: one line per rule in step 2, its verdict, and for a broken rule a pointer to its
    inline comment. A clean PR gets the summary and no inline comments. `gh pr view $ARGUMENTS
-   --comments` shows an earlier run: a finding already posted is posted again only when its
-   answer left the rule broken. A local run has neither tool: give the findings and the summary
-   in the session.
+   --json comments` shows an earlier run's summary: a broken rule it lists is not posted again,
+   and the summary says it is still broken. A local run has neither tool: give the findings and
+   the summary in the session.
 
 Done when every rule in step 2 has its line in the summary and every inline comment names its
 rule.
