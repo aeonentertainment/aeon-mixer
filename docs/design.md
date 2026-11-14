@@ -215,7 +215,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
   setting behind. A start refused after 3 s may hold its device, and its rate, until the OS's own
   start returns, on a thread of the engine's that is not the host's. The host may then open
-  another output from the module's `outputDevices()`.
+  another output from the module's `outputDevices()`, whose `transport` lets it pass over a
+  virtual device that would start and play to nobody (decision
+  [0025](decisions/0025-device-transports.md)).
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
   stem buffers, everything pre-allocated. If the backing has an armed key or speed, a render
   job starts on the worker thread and `renderProgress` events report it. The mixer object
@@ -470,13 +472,33 @@ export interface OutputInfo {
   refused: { id: string; name: string; error: string } | null;
 }
 
+/**
+ * How a device reaches the machine, as its OS or driver reports it; decision 0025 maps each OS.
+ * `virtual` has no hardware behind it (BlackHole, ZoomAudioDevice, a virtual cable): it starts
+ * and plays to nobody. `network` plays somewhere else, seconds late. `other` is hardware on a bus
+ * not named here; `unknown` is a device the OS or driver did not say. A new OS transport maps into
+ * one of these, so the union does not grow.
+ */
+export type Transport =
+  | "builtIn"
+  | "usb"
+  | "bluetooth"
+  | "display"
+  | "network"
+  | "aggregate"
+  | "virtual"
+  | "other"
+  | "unknown";
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  transport: Transport;
+}
+
 /** The OS's devices with no engine open. Listing opens no stream and changes no setting. */
-export function outputDevices(): Promise<
-  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
->;
-export function inputDevices(): Promise<
-  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
->;
+export function outputDevices(): Promise<ReadonlyArray<DeviceInfo>>;
+export function inputDevices(): Promise<ReadonlyArray<DeviceInfo>>;
 
 /**
  * `openEngine` rejects with this when the output it picks will not start. `device` is that output,
@@ -493,9 +515,9 @@ export interface Engine {
   /** The output playing now: what it was opened on, and after a move, what it moved to. */
   readonly output: OutputInfo;
   /** The module's `outputDevices()` on a device engine; none on the timer and offline clocks. */
-  outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
+  outputDevices(): Promise<ReadonlyArray<DeviceInfo>>;
   /** The module's `inputDevices()`: the inputs a `capture` slot may name. None offline. */
-  inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
+  inputDevices(): Promise<ReadonlyArray<DeviceInfo>>;
   createMixer(config: MixerConfig): Promise<Mixer>;
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
   reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
@@ -694,13 +716,21 @@ and a realtime audio thread where the host grants one. Each reports what it got 
 - `measure-sink` opens the device, runs for a minute, and prints the period, the reported
   latency, the callback timing distribution and the underrun count. Those numbers go into
   decision 0003 per OS before any crate is final.
-- Device enumeration lists outputs and inputs and marks the default.
 - The timer clock is the `Driver` for a box with no sound card. A thread of ours sleeps to each
   block's absolute deadline on the monotonic clock and renders every block that has fallen due,
   at most a second's worth, so the output clock keeps to wall time. Its period is one block and
   its latency zero. The wait is the clock, between renders, as a backend's thread waits on its
   device; render itself keeps section 2's rules. `measure-clock` prints its wakes in
   `measure-sink`'s form. Decision 0011 has the numbers and what was rejected.
+- Device enumeration lists outputs and inputs, marks the default and says each one's transport,
+  read as decision [0025](decisions/0025-device-transports.md) maps it for each OS. Reading it
+  opens no stream. A transport that cannot be read is `Unknown`, and the device stays listed.
+
+```rust
+// devices/src/output.rs
+pub struct Output { pub id: String, pub name: String, pub is_default: bool, pub transport: Transport }
+pub enum Transport { BuiltIn, Usb, Bluetooth, Display, Network, Aggregate, Virtual, Other, Unknown }   // the binding sends each as its TypeScript name
+```
 
 The follower keeps the engine on the room's output. It owns the running stream on a thread of its
 own, so no OS listener and no Node call ever starts or stops a device.
