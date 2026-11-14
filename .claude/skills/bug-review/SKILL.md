@@ -12,13 +12,13 @@ concrete sequence of calls, packets or samples that ends in a wrong result for a
 embeds the mixer, a listener in the room, or a person reading a tool's numbers. Style, taste,
 scope and missing tests belong to `/pr-review`.
 
-1. Read the PR: `gh pr view $ARGUMENTS` for the title and body, then `gh pr diff $ARGUMENTS`.
-   A diff that touches only prose docs gets the one-line summary "Docs only, nothing to hunt"
-   and the review ends there. The tree you read must be the PR's head. CI checks it out for
-   you. In a local run, `git rev-parse HEAD` must equal
-   `gh pr view $ARGUMENTS --json headRefOid`; when it differs, end with "Check out the PR's
-   head first". On a PR already reviewed, `gh pr view $ARGUMENTS --comments` shows the earlier
-   findings and their answers.
+1. Read the PR: `gh pr view $ARGUMENTS` for the title and body, then `gh pr diff $ARGUMENTS`. A
+   diff that touches only prose docs gets the one-line summary "Docs only, nothing to hunt" and
+   the review ends there. The tree you read must be the PR's head. CI checks it out for you. In
+   a local run, `git rev-parse HEAD` must equal `gh pr view $ARGUMENTS --json headRefOid`; when
+   it differs, end with "Check out the PR's head first". On a PR already reviewed, `gh pr view
+   $ARGUMENTS --json comments,commits` shows each earlier review's summary and the commits
+   pushed since.
 2. Walk the diff once per lens. For each changed function, read its callers and callees in the
    checked-out tree until the lens is settled; the diff alone rarely shows the bug.
    - **Interleaving.** For every `await`, event, command ring and thread hand-off the diff adds
@@ -51,15 +51,15 @@ scope and missing tests belong to `/pr-review`.
    most eight, the most severe.
 4. Grade each finding. **P1**: a host using the API as documented hits it, the room hears it,
    or a tool reports a wrong number. **P2**: real, but it needs an unusual sequence or setup.
-5. In CI, post one inline comment per finding on the line where the fix belongs:
-   `**P1** **<what goes wrong, in five words>**`, then the scenario as numbered events ending
-   in the wrong result, then the cause: the rule this code fails to keep, the other places that
-   rely on that rule, and where a fix belongs (this line, a caller, or the design). A finding
-   in code added to answer an earlier finding starts its title with `Second patch:`. Then
-   write the summary into your Claude comment on the PR: one line per finding with its grade
-   and a pointer to its inline comment, then one line per lens that found nothing, saying what
-   you checked. A finding already posted on this PR is posted again only when its answer left
-   it standing. A local run has neither tool: give the findings and the summary in the session.
+5. In CI, post one inline comment per finding on the line where the fix belongs: `**P1** **<what
+   goes wrong, in five words>**`, then the scenario as numbered events ending in the wrong
+   result, then the cause: the rule this code fails to keep, the other places that rely on that
+   rule, and where a fix belongs (this line, a caller, or the design). A finding in a function
+   where an earlier summary already lists one starts its title with `Second patch:`. Then write
+   the summary into your Claude comment on the PR: one line per finding with its grade and a
+   pointer to its inline comment, then one line per lens that found nothing, saying what you
+   checked. A finding an earlier summary lists is not posted again: the summary names it as
+   still open. A local run has neither tool: give the findings and the summary in the session.
 
 Done when every lens in step 2 has a line in the summary and every inline comment carries a
 grade, a scenario and a cause.
