@@ -48,14 +48,15 @@ code, a concept or a special case.
 5. Sort each finding. **Here**: the simpler shape is smaller than the code it replaces and stays
    inside this PR. **Later**: it reaches code this PR does not touch, so it is worth an issue
    titled `pattern: <the shape>` and no change here.
-6. In CI, post one inline comment per finding on the line where the shape starts: `**Here**
-   **<the simpler shape, in five words>**`, then what the code does now, the simpler shape as a
-   sketch in names and sentences, and what it removes. Then write the summary into your Claude
-   comment on the PR: the goal, one line per finding with a pointer to its inline comment, then
-   one line per question that found nothing, saying what you compared. A PR whose shape is right
-   gets "Nothing to change", and most small PRs do. A finding an earlier summary lists is not
-   posted again: the summary names it as still open. A local run has neither tool: give the
-   findings and the summary in the session.
+6. In CI, post one inline comment per **Here** finding on the line where the shape starts:
+   `**Here** **<the simpler shape, in five words>**`, then what the code does now, the simpler
+   shape as a sketch in names and sentences, and what it removes. A **Later** finding gets the
+   same three parts in the summary and no inline comment, since its code is outside the diff.
+   Then write the summary into your Claude comment on the PR: the goal, one line per Here
+   finding with a pointer to its inline comment, each Later finding in full, then one line per
+   question that found nothing, saying what you compared. A PR whose shape is right gets
+   "Nothing to change", and most small PRs do. A local run has neither tool: give the findings
+   and the summary in the session.
 
 Done when the summary states the goal, every question in step 3 has a line, and every finding
 says what it removes.

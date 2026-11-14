@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The bug hunt reads callers and callees, so it gets more turns.
+        # The bug hunt and the shape review read past the diff, so they get more turns.
         include:
           - skill: pr-review
             turns: 40
