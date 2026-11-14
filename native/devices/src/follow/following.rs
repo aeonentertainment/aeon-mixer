@@ -150,15 +150,16 @@ impl<M: Movable, S: System> Following<M, S> {
         let refused = playing.refused.as_ref().is_some_and(|refused| {
             target.as_ref().is_some_and(|target| target.id == refused.output.id)
         });
-        if playing.refused.is_some() && !refused {
-            self.current.set(Playing { refused: None, ..playing.clone() });
-        }
 
         if let State::Playing { .. } = self.state {
             let listed = outputs.iter().any(|output| output.id == playing.output.id);
             let stays =
                 refused || target.as_ref().is_none_or(|target| target.id == playing.output.id);
             if listed && stays && !lost {
+                // Cleared only where it stays: a move sets the refusal its own start leaves
+                if playing.refused.is_some() && !refused {
+                    self.current.set(Playing { refused: None, ..playing });
+                }
                 return;
             }
             self.quiet = if stalled { (self.quiet + 1).min(DOUBLINGS) } else { 0 };
