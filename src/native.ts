@@ -15,6 +15,7 @@ export type {
   BackingInput,
   GuideInput,
   NativeEvent,
+  OpenOptions as NativeOpenOptions,
   OutputEntry,
   OutputInfo as NativeOutputInfo,
   RtpReturnInput,

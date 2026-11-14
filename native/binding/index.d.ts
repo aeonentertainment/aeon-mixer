@@ -20,11 +20,12 @@ export declare class BackingRender {
 
 export declare class Engine {
   /**
-   * Starts the clock on the silent graph and the events thread, which calls `on_events` with
-   * every batch it drains. An output that will not start throws an error whose `code` is
-   * `"output-unavailable"` and whose `device` names it, if the OS listed one to pick.
+   * Starts the clock on the silent graph off the event loop, and resolves with the engine once
+   * it runs; `on_events` is called with every batch the events thread drains. An output that
+   * will not start rejects with an error whose `code` is `"output-unavailable"` and whose
+   * `device` names it, if the OS listed one to pick.
    */
-  constructor(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void)
+  static open(options: OpenOptions, onEvents: (arg: Array<NativeEvent>) => void): Promise<Engine>
   /**
    * Builds a mixer with one slot per input, in order: `"rtp"`, `"l16"`, `"push"` or
    * `"capture"`. The rtp and l16 slots bind their ports here and report them through
@@ -209,7 +210,7 @@ export interface OutputInfo {
   refused?: RefusedOutput
 }
 
-/** Every output the OS offers, the default marked. */
+/** Every output the OS offers, the default marked, or the test OS's when it stands in. */
 export declare function outputs(): Array<OutputEntry>
 
 export interface RefusedOutput {
