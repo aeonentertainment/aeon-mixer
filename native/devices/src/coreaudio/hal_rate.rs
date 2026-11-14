@@ -26,15 +26,7 @@ impl NominalRate for HalRate {
     }
 
     fn set_rate(&self, device: u32, rate: f64) -> Result<(), DriverError> {
-        // SAFETY: the nominal sample rate is a Float64.
-        unsafe {
-            set(
-                device,
-                kAudioDevicePropertyNominalSampleRate,
-                kAudioObjectPropertyScopeGlobal,
-                &rate,
-            )?
-        };
+        self.put_rate(device, rate)?;
         let step = Duration::from_millis(10);
         for _ in 0..RATE_CHANGE.as_millis() / step.as_millis() {
             if self.rate(device)? == rate {
@@ -43,5 +35,17 @@ impl NominalRate for HalRate {
             thread::sleep(step);
         }
         Err(DriverError::Backend(format!("the device did not move to {rate} Hz")))
+    }
+
+    fn put_rate(&self, device: u32, rate: f64) -> Result<(), DriverError> {
+        // SAFETY: the nominal sample rate is a Float64.
+        unsafe {
+            set(
+                device,
+                kAudioDevicePropertyNominalSampleRate,
+                kAudioObjectPropertyScopeGlobal,
+                &rate,
+            )
+        }
     }
 }

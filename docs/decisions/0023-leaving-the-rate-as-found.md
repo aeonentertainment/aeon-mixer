@@ -24,17 +24,22 @@ The last of this process's streams to let go of a device puts back the rate the 
   counts its streams on each device, so the input keeps 48 kHz while the output moves away, and
   the last one out restores it. The count lives in `devices/src/rate_holds.rs`, behind a
   `NominalRate` trait, and its tests run on a fake HAL that records every set.
-- **What it puts back.** The rate found, whenever the device reads otherwise, so a late landing is
-  undone. If a person changed the rate mid-song, the song was already playing at the wrong speed.
+- **How it puts it back.** The last stream out asks the HAL for the rate found and returns without
+  waiting, because `close` drops the stream on Node's event loop. It asks whatever the device
+  reads, so a 48 kHz that lands after the engine's one-second wait is undone too: the HAL applies
+  the two in the order asked. A stream that holds the device again before that lands asks for
+  48 kHz whatever it reads, so its request lands last. If a person changed the rate mid-song, the
+  song was already playing at the wrong speed.
 - **What it cannot.** A process that is killed or crashes leaves 48 kHz, as before.
 
 ## The costs
 
 A device already at 48 kHz, which is most Mac outputs and the monitor in #510, is never set and
 costs nothing. A device elsewhere costs one more rate change each time a stream on it stops: a
-reopen of the same device after a loss or a stall puts the rate back and moves it again. The
-HAL's change lands asynchronously, in a few ms by cpal's account and within the 1 s the engine
-allows, and a move is already bounded by the same second (decision 0016).
+reopen of the same device after a loss or a stall puts the rate back and moves it again. Putting
+it back costs the stopping thread one property write. Moving it again waits for it to land, in a
+few ms by cpal's account and within the 1 s the engine allows, on the follower's thread, and a
+move is already bounded by the same second (decision 0016).
 
 ## What others do
 
