@@ -47,7 +47,9 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   tried afresh.
 - **When it gives up.** If none of the output it should play on, the one it left and the default
   will start within a second of the wake, the engine faults as before, and the host closes and
-  reopens it.
+  reopens it. The second counts from the wake, and a start is never cut short for it: a start
+  that hangs ends its try when the 3 s bound refuses it, so with starts that hang the fault comes
+  once every try under way has been refused, not at the second.
 - **When the first open fails.** `openEngine` rejects with `OutputUnavailableError`, whose `code`
   is `"output-unavailable"` and whose `device` names the output that would not start. The
   module-level `outputDevices()` lists the others with no engine open, so the host can open one
@@ -58,8 +60,11 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   back to the output it left. The start carries on alone on a thread of its own until the backend
   returns. A stream that starts late is stopped there without playing a sample of the song, and
   one that fails lets go of what it held, the CoreAudio IOProc and the rate hold of decision 0023
-  included. A healthy output starts in tens of ms and a Bluetooth one can take a second or two, so
-  3 s refuses neither. The wedged monitor below took 10.1 s.
+  included. Until then the device is still held: on the wedged monitor, for the 10 s the HAL
+  waits. A stream that called back within the 3 s is running, so the follower keeps it and waits
+  for its start to return, however long that takes. A healthy output starts in tens of ms and a
+  Bluetooth one can take a second or two, so 3 s refuses neither. The wedged monitor below took
+  10.1 s. An output slower than 3 s is refused like one that hangs, until the rule picks it again.
 - **A stall is a loss, not a fault.** A stream that asks for no audio for 200 ms while its
   output stays listed is lost, on every backend, and reopened. A Mac asleep calls no IOProc, and
   by one Mac's logs neither does DarkWake, so a reopen that stays silent waits twice as long as
@@ -98,7 +103,7 @@ No property says beforehand that a start will hang. By Apple's `AudioHardware.h`
 | `kAudioStreamPropertyIsActive`                 | the stream is enabled and doing IO                               | it says the stream is switched on, not that the device's clock will run |
 | `kAudioDevicePropertyHogMode`                  | the pid that has the device to itself, or -1                     | `afplay` failed the same way, so no process held it                     |
 
-A start under a bound of our own is the one thing that tells them apart. Cloud's run on
+A start under a bound of our own is the one thing that tells them apart. The repro on
 aeon-karaoke#510 records the time to refuse on the real monitor.
 
 ## How the OSes say an output changed
@@ -181,8 +186,10 @@ follower calls a stream lost after 200 ms without a callback, on every backend, 
 ALSA used to wait 1 s and CoreAudio never noticed: twenty of WASAPI's 10 ms shared periods, and
 the worst of it leaves most of the second for the open. The cases that can still overrun are a
 CoreAudio device away from 48 kHz, whose rate change is given a second of its own, and an output
-slow to start, such as Bluetooth. Both start in the end. An output that never starts costs 3 s,
-and the song goes back to the output it left.
+slow to start, such as Bluetooth. Both start in the end. An output that never starts costs 3 s
+of silence before the song goes back to the output it left. A command sent in those 3 s still
+ends the song a second in, as it did in the 10 s before the bound, so the bound saves the room
+the wait but not a song that a command lands in.
 
 ## Rejected
 

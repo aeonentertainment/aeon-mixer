@@ -211,7 +211,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   engine and its audio thread last until `close`; the stream under them moves with the output.
   When the output it picks will not start within 3 s, or the OS lists none, it rejects with
   `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
-  setting behind. The host may then open another output from the module's `outputDevices()`.
+  setting behind. A start refused after 3 s may hold its device, and its rate, until the OS's own
+  start returns, on a thread of the engine's that is not the host's. The host may then open
+  another output from the module's `outputDevices()`.
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
   stem buffers, everything pre-allocated. If the backing has an armed key or speed, a render
   job starts on the worker thread and `renderProgress` events report it. The mixer object
@@ -247,8 +249,10 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   `outputChanged` fires again, with a gap of 0, when the refusal clears with no move. Decision
   [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
 - **Faults.** A caught panic, or a second in which none of the output the engine should play on,
-  the one it left and the default will start, emits `fault` on the engine. The host closes and
-  reopens; nothing inside tries to recover.
+  the one it left and the default will start, emits `fault` on the engine. The second counts from
+  the wake, and a start under way is never cut short for it, so with starts that hang the fault
+  comes once each has been refused at 3 s. The host closes and reopens; nothing inside tries to
+  recover.
 - **Mixer errors.** `error` on a mixer fires once, when that mixer can no longer play its song,
   and the host ends the song and destroys it. Three things raise it: a render job that fails,
   at the moment it fails, so a bad next song is known before its turn (`start` still rejects
@@ -734,10 +738,12 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   on every backend. Each start runs on a thread of its own. When it is refused, the follower takes
   the `Movable` back from the render it lent, which renders silence from then on, and the start
   finishes alone: a stream it starts late is stopped there, and one that fails drops what it held.
-  A stream that called back before the 3 s were up keeps the `Movable`, and the follower waits for
-  its start to return.
-- With nothing that will start, it waits for the next wake and tries again every 100 ms for up to
-  a second, then fails the stats, which faults the engine.
+  A stream that called back before the 3 s were up is running, so it keeps the `Movable`, and the
+  follower waits for its start to return with no bound. A start refused at 3 s may hold its device
+  until the OS's own start returns.
+- With nothing that will start, it waits for the next wake and tries again every 100 ms until a
+  second has passed since the wake, then fails the stats, which faults the engine. A try under way
+  always finishes first, so with starts that hang the fault comes once each has been refused.
 - `start` fails with `StartError::Unavailable` when the output the rule picks will not start, or
   the OS lists none, and `Backend` when the list, the watch or the thread fails. A failed `start`
   leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
