@@ -236,12 +236,14 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   the gap, every slot starts its stream again on the new clock, a capture slot under the new
   output's callback, the first 5 ms fade in, and
   `outputChanged` fires with the new `output`. When the new output will not start, the engine
-  starts the one it left again, if the OS still lists it, so the song carries on after one gap.
+  starts the one it left again, if the OS still lists it, and failing that the default, so the
+  song carries on after one gap.
   `output.refused` names the output that would not start until the pin or the default changes,
   and `outputChanged` fires again, with a gap of 0, when it clears. Decision
   [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
-- **Faults.** A caught panic, or a second in which neither the output the engine should play on
-  nor the one it left will start, emits `fault` on the engine. The host closes and reopens; nothing inside tries to recover.
+- **Faults.** A caught panic, or a second in which none of the output the engine should play on,
+  the one it left and the default will start, emits `fault` on the engine. The host closes and
+  reopens; nothing inside tries to recover.
 - **Mixer errors.** `error` on a mixer fires once, when that mixer can no longer play its song,
   and the host ends the song and destroys it. Three things raise it: a render job that fails,
   at the moment it fails, so a bad next song is known before its turn (`start` still rejects
@@ -715,7 +717,7 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
   to the new stream running.
 - A move whose output will not start starts the output it left again, if the OS still lists it,
-  and sets `Playing.refused`. The follower does not try the refused output again while the rule
+  and failing that the default, which a pinned engine has not tried, and sets `Playing.refused`. The follower does not try the refused output again while the rule
   still picks it, so a refusal costs one gap, not one on every wake. Once the rule picks another,
   as when the default changes or the refused output leaves the list, the refusal clears, and the
   next time the rule picks that output it is tried afresh.
