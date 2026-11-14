@@ -15,7 +15,7 @@ Each [release](https://github.com/aeonentertainment/aeon-mixer/releases) carries
 Depend on its URL, and the lockfile pins its hash:
 
 ```bash
-npm install https://github.com/aeonentertainment/aeon-mixer/releases/download/v0.7.0/aeonentertainment-mixer-0.7.0.tgz
+npm install https://github.com/aeonentertainment/aeon-mixer/releases/download/v0.7.1/aeonentertainment-mixer-0.7.1.tgz
 ```
 
 ## Use
