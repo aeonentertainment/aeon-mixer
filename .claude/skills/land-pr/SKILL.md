@@ -16,6 +16,15 @@ Follow the `babysit-pr` skill for watching, rate limits and review findings. **G
 on the latest head: required checks pass, the review bots have reviewed that head, every review
 thread is resolved, and the PR is neither BEHIND nor DIRTY.
 
+Answer a finding at its **cause**. Before changing code, write the cause in your reply in one
+sentence: the rule the code failed to keep. Fix the rule where it is kept, which is often not
+the line the comment sits on, and prefer the fix that removes code. A fix that adds more lines
+than it removes says in the reply why no existing code could change instead. A **second patch**
+is a stop sign: when a review finds a bug in code you added to answer an earlier finding, patch
+nothing more. Rewrite the approach so neither finding can occur, or reply with why the approach
+is right and the test that proves it. A finding larger than the PR, which the shape review
+marks Later, becomes an issue titled `pattern: <the shape>` and no change here.
+
 `babysit-pr` and `leaving-pr-comments` are user-level skills on the developer's machines. Without
 them: watch through the harness instead of polling, check every bot finding against the source,
 fix the real ones, reply to a false positive with a written reason and resolve it, and rebase
