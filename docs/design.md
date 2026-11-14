@@ -209,9 +209,6 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 - **Open.** `openEngine` picks the device, or the timer clock where nothing plays locally,
   starts the driver with the silent graph, and returns once the first block has rendered. The
   engine and its audio thread last until `close`; the stream under them moves with the output.
-  When the output it picks will not start, or the OS lists none, it rejects with
-  `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
-  setting behind. The host may then open another output from the module's `outputDevices()`.
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
   stem buffers, everything pre-allocated. If the backing has an armed key or speed, a render
   job starts on the worker thread and `renderProgress` events report it. The mixer object
@@ -240,11 +237,11 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   output's callback, the first 5 ms fade in, and
   `outputChanged` fires with the new `output`. When the new output will not start, the engine
   starts the one it left again, if the OS still lists it, so the song carries on after one gap.
-  `output.refused` names the output that would not start until the pin or the default changes.
-  Decision [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
+  `output.refused` names the output that would not start until the pin or the default changes,
+  and `outputChanged` fires again, with a gap of 0, when it clears. Decision
+  [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
 - **Faults.** A caught panic, or a second in which neither the output the engine should play on
-  nor the one it left will start, emits `fault` on the engine. The host closes and reopens;
-  nothing inside tries to recover.
+  nor the one it left will start, emits `fault` on the engine. The host closes and reopens; nothing inside tries to recover.
 - **Mixer errors.** `error` on a mixer fires once, when that mixer can no longer play its song,
   and the host ends the song and destroys it. Three things raise it: a render job that fails,
   at the moment it fails, so a bad next song is known before its turn (`start` still rejects
@@ -478,37 +475,19 @@ export class OutputUnavailableError extends Error {
   readonly device: { id: string; name: string } | null;
 }
 
-/** The OS's devices with no engine open. Listing opens no stream and changes no setting. */
-export function outputDevices(): Promise<
-  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
->;
-export function inputDevices(): Promise<
-  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
->;
-
-/**
- * `openEngine` rejects with this when the output it picks will not start. `device` is that output,
- * the pinned one or the default, or null when the OS lists none. Every other failure is a plain
- * `Error`. It carries no list: `outputDevices()` gives one with no engine open.
- */
-export class OutputUnavailableError extends Error {
-  readonly code: "output-unavailable";
-  readonly device: { id: string; name: string } | null;
-}
-
 export interface Engine {
   readonly capabilities: ReadonlySet<Capability>;
   /** The output playing now: what it was opened on, and after a move, what it moved to. */
   readonly output: OutputInfo;
-  /** The module's `outputDevices()` on a device engine; none on the timer and offline clocks. */
   outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
-  /** The module's `inputDevices()`: the inputs a `capture` slot may name. None offline. */
+  /** The inputs a `capture` slot may name. None on an offline engine. */
   inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
   createMixer(config: MixerConfig): Promise<Mixer>;
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
   reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
   on(event: "fault", listener: (error: Error) => void): () => void;
-  /** After every move to another output; `gapMs` is how long the room heard nothing. */
+  /** Whenever `output` changes: after every move, `gapMs` how long the room heard nothing, and
+   * with `gapMs` 0 when a refusal clears with no move. */
   on(event: "outputChanged", listener: (output: OutputInfo, gapMs: number) => void): () => void;
   /** The mix after the clipper, reactions included, between songs too. */
   on(event: "masterLevel", listener: (rmsDb: number, peakDb: number) => void): () => void;
@@ -708,8 +687,7 @@ own, so no OS listener and no Node call ever starts or stops a device.
 
 ```rust
 // devices/src/
-pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, StartError>; current(); drop stops it
-pub enum StartError { Unavailable { output: Option<Output>, error: DriverError }, Backend(DriverError) }
+pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, DriverError>; current(); drop stops it
 pub struct Current;        // the follower's Playing, shared: get() on any thread but the audio thread
 pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration, pub refused: Option<Refused> }
 pub struct Refused { pub output: Output, pub error: String }   // the output the rule picks that would not start
@@ -743,12 +721,9 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   next time the rule picks that output it is tried afresh.
 - With nothing that will start, it waits for the next wake and tries again every 100 ms for up to
   a second, then fails the stats, which faults the engine.
-- `start` fails with `StartError::Unavailable` when the output the rule picks will not start, or
-  the OS lists none, and `Backend` when the list, the watch or the thread fails. A failed `start`
-  leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
-  `OutputUnavailableError`.
-- The binding reads `Current` for `engine.output`, `refused` included, and its events thread sends
-  `outputChanged` whenever `moves` goes up.
+- The binding reads `Current` for `engine.output`, `refused` included. Its events thread sends
+  `outputChanged` whenever `moves` goes up, and with a gap of 0 when `refused` changes with no
+  move.
 - The watches: CoreAudio listens on the system object for the default output and the device list,
   with `kAudioHardwarePropertyRunLoop` set to null so the HAL calls it on its own thread. WASAPI
   registers an `IMMNotificationClient` from a COM thread of its own. ALSA has nothing to listen

@@ -1,7 +1,7 @@
 # 0016: The engine follows the room's output
 
 **Status:** accepted, 2026-11-10, ahead of the code for #53. An output that will not start
-leaves the song where it was, 2026-11-13, for aeon-karaoke#510 and #511.
+leaves the song where it was, 2026-11-13, for aeon-karaoke#510.
 
 ## The problem
 
@@ -25,7 +25,8 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   rule: the engine plays on the pinned output if the OS lists it, and otherwise on the default.
 - **How the host learns.** `engine.output` names the output playing now, its `id` and `name`
   beside its latency, at open and after every move. An `outputChanged` event fires after each
-  move with the new `output` and the gap the move left. The host logs both.
+  move with the new `output` and the gap the move left, and with a gap of 0 when a refusal
+  clears with no move. The host logs both.
 - **Muted is not the engine's call.** A muted default is still where the OS sends every other
   app's sound, so the person in the room fixes it where they fix everything else. In the session
   above the mute was not the fault: the default had moved and the engine had not. Following the
@@ -38,7 +39,7 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   still lists it, and `engine.output.refused` names the one that would not start, with what the
   OS said. The song carries on after one gap. The engine does not try the refused output again
   while the pin or the default still names it; once either names another, or the refused output
-  leaves the list, the next time it is named it is tried afresh.
+  leaves the list, the refusal clears and the next time it is named it is tried afresh.
 - **When it gives up.** If neither the output it should play on nor the one it left will start
   within a second of the wake, the engine faults as before, and the host closes and reopens it.
 - **When the first open fails.** `openEngine` rejects with `OutputUnavailableError`, whose `code`
@@ -177,7 +178,8 @@ CoreAudio device away from 48 kHz, whose rate change is given a second of its ow
 - **A listener on each open device.** `kAudioDevicePropertyDeviceIsAlive` says the same thing as
   the device list, and a listener per device is one more registration per move to remove safely.
   The follower registers its listeners once, for the engine's life.
-- **Fault a stream that stays silent for a second,** as an output that refuses to open does. A
+- **Fault a stream that stays silent for a second,** as a lost output with nothing that will
+  start does. A
   Mac asleep on battery wakes into DarkWake through the night, by its logs with no IOProc called,
   and every song left playing would end there. Reopening ever more slowly costs about ten opens a
   minute while it is awake.
