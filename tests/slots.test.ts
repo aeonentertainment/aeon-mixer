@@ -117,9 +117,9 @@ test("a slot reports the corrector's delay while correction is on and nothing on
   mixer.setSlotEffects(0, [{ kind: "pitch-correction", enabled: true, strength: 1, retuneMs: 0 }]);
   engine.pump(1);
   const on = corrector();
-  // With no voice yet the shifter rests on its floor, 59 frames, and the ceiling is 15 ms
-  expect(on.correctorDelayMs).toBeCloseTo(59 / 48, 1);
-  expect(on.correctorMaxDelayMs).toBe(15);
+  // With no voice yet the shifter rests on its floor, 5 frames, and the ceiling is 13.5 ms
+  expect(on.correctorDelayMs).toBeCloseTo(5 / 48, 1);
+  expect(on.correctorMaxDelayMs).toBe(13.5);
 
   mixer.setSlotEffects(0, []);
   // Turning off crossfades over 20 ms, eight blocks

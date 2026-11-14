@@ -64,10 +64,14 @@ pub fn table(result: &Value) -> String {
         |stat: &Value| format!("{} to {}", number(&stat["lowest"], 1), number(&stat["highest"], 1));
     let golden_row = |row: &Value| {
         format!(
-            "mean {}, p95 {}, max {} ms",
+            "mean {}, p95 {}, max {} ms; sung, mean {}, p95 {} ms; at {} onsets, median {} ms",
             span(&row["mean_ms"]),
             span(&row["p95_ms"]),
-            span(&row["max_ms"])
+            span(&row["max_ms"]),
+            span(&row["voiced_mean_ms"]),
+            span(&row["voiced_p95_ms"]),
+            row["onsets"],
+            span(&row["onset_median_ms"])
         )
     };
     cell(
