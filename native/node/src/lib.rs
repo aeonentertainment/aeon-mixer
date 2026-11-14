@@ -13,6 +13,7 @@ mod events_thread;
 mod guide;
 mod ingest;
 mod mixer;
+mod output_seen;
 mod rtp_return;
 mod slot_input;
 mod slot_params;

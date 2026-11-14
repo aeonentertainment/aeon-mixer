@@ -124,7 +124,8 @@ export class Engine {
 
   /**
    * The output playing now. An engine opened with no `output.device` follows the OS default, and
-   * one with a `device` plays there while it exists; `outputChanged` fires after every move.
+   * one with a `device` plays there while it exists; `outputChanged` fires after every move, and
+   * when `refused` clears with no move.
    */
   get output() {
     return this.#output;

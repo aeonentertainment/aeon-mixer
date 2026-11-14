@@ -137,7 +137,10 @@ export interface SlotStats {
 
 export type EngineEvents = {
   fault: (error: Error) => void;
-  /** After every move to another output; `gapMs` is how long the room heard nothing. */
+  /**
+   * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing, and with
+   * `gapMs` 0 when `refused` clears with no move.
+   */
   outputChanged: (output: OutputInfo, gapMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */
   masterLevel: (rmsDb: number, peakDb: number) => void;

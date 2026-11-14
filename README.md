@@ -71,7 +71,8 @@ await engine.close();
   returns. `engine.output` names the output playing and its latency, and `outputChanged` fires
   after each move with both and the gap. When the new output will not start, the song goes back
   to the output it left, and `engine.output.refused` names the one that would not, with what the
-  OS said, until the default or the pin changes.
+  OS said, until the default or the pin changes. `outputChanged` fires again, with a gap of 0,
+  when it clears.
 - **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
   renders only when its caller runs `engine.pump(blocks)`. The tests run on it.
 
