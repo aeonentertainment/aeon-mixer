@@ -35,6 +35,11 @@ The engine follows the output, inside one `openEngine`, with the mixer and the s
   in. The new output's latency is in the event.
 - **When it gives up.** If no output can be opened within a second of the loss, the engine
   faults as before, and the host closes and reopens it.
+- **When the first open fails.** `openEngine` rejects with `OutputUnavailableError`, whose `code`
+  is `"output-unavailable"` and whose `device` names the output that would not start. The
+  module-level `outputDevices()` lists the others with no engine open, so the host can open one
+  (aeon-karaoke#511). An engine's own `outputDevices()` lists none on the timer clock by design: it
+  plays on no output.
 - **A stall is a loss, not a fault.** A stream that asks for no audio for 200 ms while its
   output stays listed is lost, on every backend, and reopened. A Mac asleep calls no IOProc, and
   by one Mac's logs neither does DarkWake, so a reopen that stays silent waits twice as long as

@@ -209,6 +209,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 - **Open.** `openEngine` picks the device, or the timer clock where nothing plays locally,
   starts the driver with the silent graph, and returns once the first block has rendered. The
   engine and its audio thread last until `close`; the stream under them moves with the output.
+  When the output it picks will not start, or the OS lists none, it rejects with
+  `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
+  setting behind. The host may then open another output from the module's `outputDevices()`.
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
   stem buffers, everything pre-allocated. If the backing has an armed key or speed, a render
   job starts on the worker thread and `renderProgress` events report it. The mixer object
@@ -452,12 +455,31 @@ export interface OutputInfo {
   device: { id: string; name: string } | null;
 }
 
+/** The OS's devices with no engine open. Listing opens no stream and changes no setting. */
+export function outputDevices(): Promise<
+  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
+>;
+export function inputDevices(): Promise<
+  ReadonlyArray<{ id: string; name: string; isDefault: boolean }>
+>;
+
+/**
+ * `openEngine` rejects with this when the output it picks will not start. `device` is that output,
+ * the pinned one or the default, or null when the OS lists none. Every other failure is a plain
+ * `Error`. It carries no list: `outputDevices()` gives one with no engine open.
+ */
+export class OutputUnavailableError extends Error {
+  readonly code: "output-unavailable";
+  readonly device: { id: string; name: string } | null;
+}
+
 export interface Engine {
   readonly capabilities: ReadonlySet<Capability>;
   /** The output playing now: what it was opened on, and after a move, what it moved to. */
   readonly output: OutputInfo;
+  /** The module's `outputDevices()` on a device engine; none on the timer and offline clocks. */
   outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
-  /** The inputs a `capture` slot may name. None on an offline engine. */
+  /** The module's `inputDevices()`: the inputs a `capture` slot may name. None offline. */
   inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
   createMixer(config: MixerConfig): Promise<Mixer>;
   /** Room-lifetime reaction voices, four at once. False when a fifth is dropped while four play. */
@@ -663,7 +685,8 @@ own, so no OS listener and no Node call ever starts or stops a device.
 
 ```rust
 // devices/src/
-pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, DriverError>; current(); drop stops it
+pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, StartError>; current(); drop stops it
+pub enum StartError { Unavailable { output: Option<Output>, error: DriverError }, Backend(DriverError) }
 pub struct Current;        // the follower's Playing, shared: get() on any thread but the audio thread
 pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration }
 pub trait System: Send + 'static {   // the OS behind the follower; a test passes a fake one
@@ -691,6 +714,10 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   to the new stream running.
 - With nothing to play on, or an output that refuses to open, it waits for the next wake and
   tries again every 100 ms for up to a second, then fails the stats, which faults the engine.
+- `start` fails with `StartError::Unavailable` when the output the rule picks will not start, or
+  the OS lists none, and `Backend` when the list, the watch or the thread fails. A failed `start`
+  leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
+  `OutputUnavailableError`.
 - The binding reads `Current` for `engine.output`, and its events thread sends `outputChanged`
   whenever `moves` goes up.
 - The watches: CoreAudio listens on the system object for the default output and the device list,
