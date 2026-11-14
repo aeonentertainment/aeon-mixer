@@ -6,9 +6,11 @@ mod current;
 mod dock;
 mod follower;
 mod following;
+mod handoff;
 mod playing;
 mod refused;
 mod start_error;
+mod starting;
 mod system;
 
 pub use current::Current;

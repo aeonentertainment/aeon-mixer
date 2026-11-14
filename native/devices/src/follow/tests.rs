@@ -6,13 +6,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use assert_no_alloc::assert_no_alloc;
 use engine::block::{BLOCK, RATE, Stereo};
 use engine::driver::{Driver, DriverError, Movable, Render, Running, StreamInfo};
 
-use super::following::{GIVE_UP, STALL};
+use super::following::{GIVE_UP, REFUSE_AFTER, STALL};
 use super::{Follower, StartError, System};
 use crate::output::Output;
 use crate::request::Request;
@@ -24,12 +25,22 @@ const WAIT: Duration = Duration::from_secs(5);
 /// The stall for a test that never pumps: longer than any test runs, so no stream is lost to it.
 const NEVER_STALLS: Duration = Duration::from_secs(3600);
 
+/// How long CoreAudio waits for a device's clock to run before its start fails with `'stop'`.
+const HAL_WAIT: Duration = Duration::from_secs(10);
+
+/// The slow end of a Bluetooth output's start.
+const BLUETOOTH: Duration = Duration::from_secs(2);
+
 #[derive(Debug, PartialEq)]
 enum Seen {
     Listed,
     Started(String),
     Stopped(String),
     Refused(String),
+    /// A start that hangs has begun.
+    Hung(String),
+    /// A hung start that went on to start, and whether its first block was silent.
+    Late(String, bool),
     Dropped,
     Unwatched,
 }
@@ -40,10 +51,25 @@ enum Seen {
 struct Room {
     outputs: Vec<Output>,
     refuses: Vec<String>,
+    hang: Option<Hang>,
+    /// Outputs that take `BLUETOOTH` to start, then start.
+    slow: Vec<String>,
     unreadable: bool,
     device: Option<(String, Render, Arc<Stats>)>,
     starts: Vec<Instant>,
     wake: Option<Wake>,
+}
+
+/// An output whose start hangs, as the wedged monitor's did, until the test says how it ends or
+/// the HAL's own wait runs out and it fails.
+struct Hang {
+    id: String,
+    gate: Receiver<Late>,
+}
+
+enum Late {
+    Fails,
+    Starts,
 }
 
 #[derive(Clone)]
@@ -147,10 +173,6 @@ struct FakeDriver {
 impl Driver for FakeDriver {
     fn start(self: Box<Self>, render: Render) -> Result<Running, DriverError> {
         let Self { fake, id, stats } = *self;
-        if fake.room().refuses.contains(&id) {
-            let _ = fake.seen.send(Seen::Refused(id));
-            return Err(DriverError::Backend("refused".into()));
-        }
         // A latency and a period of its own per output, so the move shows in what the follower
         // reports and hands the render
         let latency = 100 * id.len() as u32;
@@ -159,6 +181,38 @@ impl Driver for FakeDriver {
             period_frames: 60 * id.len() as u32,
             output_latency_frames: latency,
         };
+        let hang = {
+            let mut room = fake.room();
+            if room.hang.as_ref().is_some_and(|hang| hang.id == id) {
+                room.hang.take()
+            } else {
+                None
+            }
+        };
+        let late = hang.map(|hang| {
+            let _ = fake.seen.send(Seen::Hung(id.clone()));
+            hang.gate.recv_timeout(HAL_WAIT).unwrap_or(Late::Fails)
+        });
+        if fake.room().refuses.contains(&id) || matches!(late, Some(Late::Fails)) {
+            let _ = fake.seen.send(Seen::Refused(id));
+            return Err(DriverError::Backend("refused".into()));
+        }
+        if let Some(Late::Starts) = late {
+            // Its stream plays apart from the room's: one block from the IO thread, then whatever
+            // stops it
+            let mut render = render;
+            let (mut left, mut right) = ([1.0; BLOCK], [1.0; BLOCK]);
+            assert_no_alloc(|| render(Stereo { left: &mut left, right: &mut right }));
+            let silent = left.iter().chain(&right).all(|sample| *sample == 0.0);
+            let _ = fake.seen.send(Seen::Late(id.clone(), silent));
+            return Ok(Running::new(info, move || {
+                drop(render);
+                let _ = fake.seen.send(Seen::Stopped(id));
+            }));
+        }
+        if fake.room().slow.contains(&id) {
+            thread::sleep(BLUETOOTH);
+        }
         let mut room = fake.room();
         room.device = Some((id.clone(), render, stats));
         room.starts.push(Instant::now());
@@ -233,22 +287,21 @@ impl Rig {
     }
 
     fn with(outputs: &[(&str, bool)], pinned: Option<&str>, panics: bool, stall: Duration) -> Self {
-        Self::starting(outputs, &[], pinned, panics, stall)
+        Self::starting(outputs, Room::default(), pinned, panics, stall)
             .unwrap_or_else(|(error, ..)| panic!("the first output opens: {error}"))
     }
 
-    /// A follower started on `outputs`, of which `refuses` will not start.
+    /// A follower started on `outputs`, in a `room` that says which will not start.
     fn starting(
         outputs: &[(&str, bool)],
-        refuses: &[&str],
+        room: Room,
         pinned: Option<&str>,
         panics: bool,
         stall: Duration,
     ) -> Result<Self, (StartError, Fake, Receiver<Seen>)> {
         let (sender, seen) = channel();
-        let fake = Fake { room: Arc::default(), seen: sender.clone() };
+        let fake = Fake { room: Arc::new(Mutex::new(room)), seen: sender.clone() };
         fake.offer(outputs);
-        fake.room().refuses = refuses.iter().map(|id| (*id).into()).collect();
         let (callback, latency) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0)));
         let counter = Counter {
             frame: 1.0,
@@ -573,7 +626,7 @@ fn a_render_that_panicked_is_never_moved() {
 fn an_output_that_will_not_start_at_open_is_named_and_leaves_nothing_behind() {
     let Err((error, fake, seen)) = Rig::starting(
         &[("monitor", true), ("built-in", false)],
-        &["monitor"],
+        Room { refuses: vec!["monitor".into()], ..Room::default() },
         None,
         false,
         NEVER_STALLS,
@@ -589,9 +642,85 @@ fn an_output_that_will_not_start_at_open_is_named_and_leaves_nothing_behind() {
     assert!(fake.room().device.is_none(), "no stream runs");
 }
 
+/// #161: the wedged monitor's start took CoreAudio's 10 s to fail, and only then did `openEngine`
+/// reject. It rejects once the bound is up, and the start that hangs ends alone later.
+#[test]
+fn an_output_whose_start_hangs_is_refused_at_open_once_the_bound_is_up() {
+    let (late, gate) = channel();
+    let began = Instant::now();
+    let Err((error, fake, seen)) = Rig::starting(
+        &[("monitor", true), ("built-in", false)],
+        Room { hang: Some(Hang { id: "monitor".into(), gate }), ..Room::default() },
+        None,
+        false,
+        NEVER_STALLS,
+    ) else {
+        panic!("the monitor never starts, so nothing opens");
+    };
+    let took = began.elapsed();
+    assert!((REFUSE_AFTER..REFUSE_AFTER + GIVE_UP).contains(&took), "refused after {took:?}");
+    let StartError::Unavailable { output: Some(output), .. } = &error else {
+        panic!("an unavailable output, not {error:?}");
+    };
+    assert_eq!(output.id, "monitor");
+    assert!(error.to_string().ends_with("did not start within 3 s"), "{error}");
+    let left: Vec<_> = seen.try_iter().filter(|seen| *seen != Seen::Listed).collect();
+    assert_eq!(left, [Seen::Hung("monitor".into()), Seen::Dropped, Seen::Unwatched]);
+
+    // The HAL gives up on the monitor, and the start fails on its own thread
+    late.send(Late::Fails).unwrap();
+    assert_eq!(seen.recv_timeout(WAIT), Ok(Seen::Refused("monitor".into())));
+    assert!(fake.room().device.is_none(), "no stream runs");
+}
+
+/// The same monitor as a new default mid-song: the song goes back to the output it left once the
+/// bound is up, and the monitor starting after all stops without playing a sample of it.
+#[test]
+fn a_move_to_an_output_whose_start_hangs_goes_back_once_the_bound_is_up() {
+    let rig = Rig::new(&[("usb", true), ("monitor", false)], None);
+    rig.expect(&[started("usb")]);
+    let before = rig.fake.pump(2);
+    let (late, gate) = channel();
+    rig.fake.room().hang = Some(Hang { id: "monitor".into(), gate });
+
+    rig.fake.offer(&[("usb", false), ("monitor", true)]);
+    rig.expect(&[stopped("usb"), Seen::Hung("monitor".into()), started("usb")]);
+    rig.settle();
+    let playing = rig.follower.as_ref().expect("following").current().get();
+    assert_eq!((playing.output.id.as_str(), playing.moves), ("usb", 1), "back where it was");
+    assert!((REFUSE_AFTER..REFUSE_AFTER + GIVE_UP).contains(&playing.gap), "{:?}", playing.gap);
+    let refused = playing.refused.expect("the refusal is reported");
+    assert_eq!(
+        (refused.output.id.as_str(), refused.error.as_str()),
+        ("monitor", "audio backend: did not start within 3 s")
+    );
+    assert!(!rig.stats.report().failed, "a refused move never faults the engine");
+    assert_eq!(rig.fake.pump(1)[0], -(before[before.len() - 1] + 1.0), "the song carries on");
+
+    late.send(Late::Starts).unwrap();
+    rig.expect(&[Seen::Late("monitor".into(), true), stopped("monitor")]);
+    assert_eq!(rig.opened().as_deref(), Some("usb"), "the song stays where it went back to");
+    assert_eq!(rig.fake.pump(1)[0], before[before.len() - 1] + 1.0 + BLOCK as f32);
+}
+
+/// A Bluetooth output can take a second or two to start, and it is where the room is listening.
+#[test]
+fn a_move_to_an_output_slow_to_start_waits_for_it() {
+    let rig = Rig::new(&[("usb", true), ("headphones", false)], None);
+    rig.expect(&[started("usb")]);
+    rig.fake.room().slow.push("headphones".into());
+
+    rig.fake.offer(&[("usb", false), ("headphones", true)]);
+    rig.expect(&[stopped("usb"), started("headphones")]);
+    rig.settle();
+    let playing = rig.follower.as_ref().expect("following").current().get();
+    assert_eq!((playing.output.id.as_str(), playing.refused), ("headphones", None));
+    assert!(playing.gap >= BLUETOOTH, "the gap was the start's own, {:?}", playing.gap);
+}
+
 #[test]
 fn an_os_with_no_output_listed_is_unavailable_with_none_named() {
-    let Err((error, ..)) = Rig::starting(&[], &[], None, false, NEVER_STALLS) else {
+    let Err((error, ..)) = Rig::starting(&[], Room::default(), None, false, NEVER_STALLS) else {
         panic!("nothing to open");
     };
     assert!(matches!(error, StartError::Unavailable { output: None, .. }), "{error:?}");

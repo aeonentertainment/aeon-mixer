@@ -57,6 +57,7 @@ fn main() -> ExitCode {
     }
 
     let stats = Arc::new(Stats::new());
+    let starting = Instant::now();
     let running = match driver(&args, Arc::clone(&stats)).start(render(args.tone)) {
         Ok(running) => running,
         Err(error) => {
@@ -64,6 +65,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let start = starting.elapsed();
     eprintln!("measure-sink: playing for {} s", args.seconds);
     let started = Instant::now();
     thread::sleep(Duration::from_secs(args.seconds));
@@ -91,6 +93,7 @@ fn main() -> ExitCode {
     );
     println!("output     {}", chosen.map(describe).unwrap_or_else(|| "?".into()));
     println!("opened     {}", stats.opened().unwrap_or("?"));
+    println!("start      {} ms, until the backend's start returned", ms(start));
     println!("rate       {} Hz", info.sample_rate);
     println!("period     {} (asked {})", frames(info.period_frames), args.request.period_frames);
     println!("latency    {}, as the OS reports it", frames(info.output_latency_frames));
