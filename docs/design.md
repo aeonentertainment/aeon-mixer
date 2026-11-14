@@ -209,6 +209,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 - **Open.** `openEngine` picks the device, or the timer clock where nothing plays locally,
   starts the driver with the silent graph, and returns once the first block has rendered. The
   engine and its audio thread last until `close`; the stream under them moves with the output.
+  When the output it picks will not start, or the OS lists none, it rejects with
+  `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
+  setting behind. The host may then open another output from the module's `outputDevices()`.
 - **Create.** `createMixer` builds the graph on the control thread: decoders, kernels, rings,
   stem buffers, everything pre-allocated. If the backing has an armed key or speed, a render
   job starts on the worker thread and `renderProgress` events report it. The mixer object
@@ -234,13 +237,9 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
   open output went away, the engine stops the old stream and starts the new one with the same
   audio thread, so the live mixer and its song carry on after a gap. The playhead holds through
   the gap, every slot starts its stream again on the new clock, a capture slot under the new
-  output's callback, the first 5 ms fade in, and
-  When the output it picks will not start, or the OS lists none, it rejects with
-  `OutputUnavailableError`, which names that output, and leaves no stream, listener or device
-  setting behind. The host may then open another output from the module's `outputDevices()`.
-  `outputChanged` fires with the new `output`. When the new output will not start, the engine
-  starts the one it left again, if the OS still lists it, and failing that the default, so the
-  song carries on after one gap.
+  output's callback, the first 5 ms fade in, and `outputChanged` fires with the new `output`.
+  When the new output will not start, the engine starts the one it left again, if the OS still
+  lists it, and failing that the default, so the song carries on after one gap.
   `output.refused` names the output that would not start until the pin or the default changes,
   and `outputChanged` fires again, with a gap of 0, when it clears. Decision
   [0016](decisions/0016-following-the-output.md) has the reasons and the numbers.
