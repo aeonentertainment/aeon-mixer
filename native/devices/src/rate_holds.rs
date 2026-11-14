@@ -33,46 +33,53 @@ impl<R: NominalRate> RateHolds<R> {
     }
 
     /// Puts `device` at 48 kHz for one stream until the hold drops. Blocks while the rate lands,
-    /// on the thread that starts the stream. The first stream on a device takes the rate it reads
-    /// as the one to put back, so a rate a person chose between songs is the one kept.
+    /// on the thread that starts the stream, with no lock held: a release on Node's event loop
+    /// never waits behind it. The first stream on a device takes the rate it reads as the one to
+    /// put back, so a rate a person chose between songs is the one kept.
     pub fn hold(&self, device: u32) -> Result<RateHold<'_, R>, DriverError> {
-        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        let at = match held.iter().position(|held| held.device == device) {
-            Some(at) => at,
-            None => {
-                held.push(Held { device, found: None, users: 0, put_back: None });
-                held.len() - 1
-            }
-        };
-        let hold = RateHold { holds: self, device };
-        let entry = &mut held[at];
-        entry.users += 1;
-        let first = entry.users == 1;
-        let landing = entry.put_back.take().is_some_and(|at| at.elapsed() < self.landing);
         let rate = f64::from(RATE);
-        let moved = match self.hal.rate(device) {
-            // A rate put back a moment ago may still read 48 kHz while it lands, so this asks
-            // again, to land last, and keeps the rate found
-            Ok(now) if now == rate && landing => self.hal.set_rate(device, rate),
-            Ok(now) if now == rate => {
-                if first {
-                    entry.found = None;
+        let asked = {
+            let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+            let at = match held.iter().position(|held| held.device == device) {
+                Some(at) => at,
+                None => {
+                    held.push(Held { device, found: None, users: 0, put_back: None });
+                    held.len() - 1
                 }
-                Ok(())
-            }
-            Ok(now) => {
-                if first {
-                    entry.found = Some(now);
-                } else {
-                    entry.found.get_or_insert(now);
+            };
+            let entry = &mut held[at];
+            entry.users += 1;
+            let first = entry.users == 1;
+            let landing = entry.put_back.take().is_some_and(|at| at.elapsed() < self.landing);
+            // Asked for under the lock, so a put back and the next ask reach the HAL in order
+            match self.hal.rate(device) {
+                // A rate put back a moment ago may still read 48 kHz while it lands, so this asks
+                // again, to land last, and keeps the rate found
+                Ok(now) if now == rate && landing => self.hal.put_rate(device, rate).map(|()| true),
+                Ok(now) if now == rate => {
+                    if first {
+                        entry.found = None;
+                    }
+                    Ok(false)
                 }
-                self.hal.set_rate(device, rate)
+                Ok(now) => {
+                    if first {
+                        entry.found = Some(now);
+                    } else {
+                        entry.found.get_or_insert(now);
+                    }
+                    self.hal.put_rate(device, rate).map(|()| true)
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
         };
-        drop(held);
         // On a failure the hold drops here, and with no other user puts the rate back
-        moved.map(|()| hold)
+        let hold = RateHold { holds: self, device };
+        match asked {
+            Ok(true) => self.hal.wait_for(device, rate).map(|()| hold),
+            Ok(false) => Ok(hold),
+            Err(error) => Err(error),
+        }
     }
 
     /// The last stream out asks for the found rate and returns without waiting for it, since a
@@ -95,19 +102,38 @@ impl<R: NominalRate> RateHolds<R> {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::thread;
+    use std::time::Duration;
 
     use super::*;
 
-    /// Devices by id with their rates, and every set and put in order. With `fails` the first set
-    /// fails: before the rate moves, or with `lands_late`, after, as a rate that lands once the
-    /// wait has given up. With `puts_wait`, a put is asked for and has not landed yet.
+    /// Devices by id with their rates, and every rate asked for in order. The first ask lands at
+    /// once, never with `First::Never`, or only once its wait has given up with `First::Late`.
+    /// With `puts_wait`, every later ask is still landing.
     #[derive(Default)]
     struct Fake {
         rates: Mutex<Vec<(u32, f64)>>,
-        fails: bool,
-        lands_late: bool,
+        first: First,
         puts_wait: bool,
         asked: Mutex<Vec<(u32, f64)>>,
+        pending: Mutex<Option<(u32, f64)>>,
+        /// A wait for this device's rate says so, then blocks until the gate's sender drops.
+        slow: Option<Slow>,
+    }
+
+    struct Slow {
+        device: u32,
+        waiting: Sender<()>,
+        gate: Mutex<Receiver<()>>,
+    }
+
+    #[derive(Default, Clone, Copy, PartialEq)]
+    enum First {
+        #[default]
+        Lands,
+        Never,
+        Late,
     }
 
     impl Fake {
@@ -142,25 +168,37 @@ mod tests {
                 .ok_or(DriverError::NoDevice)
         }
 
-        fn set_rate(&self, device: u32, rate: f64) -> Result<(), DriverError> {
-            let first = self.asked.lock().unwrap().is_empty();
-            self.asked.lock().unwrap().push((device, rate));
-            let fails = self.fails && first;
-            if !fails || self.lands_late {
-                self.land(device, rate)?;
-            }
-            match fails {
-                true => Err(DriverError::Backend("the rate did not land in time".into())),
-                false => Ok(()),
+        fn put_rate(&self, device: u32, rate: f64) -> Result<(), DriverError> {
+            let mut asked = self.asked.lock().unwrap();
+            asked.push((device, rate));
+            let first = asked.len() == 1;
+            drop(asked);
+            match (first, self.first, self.puts_wait) {
+                (true, First::Lands, _) | (false, _, false) => self.land(device, rate),
+                (true, ..) => {
+                    *self.pending.lock().unwrap() = Some((device, rate));
+                    Ok(())
+                }
+                (false, _, true) => Ok(()),
             }
         }
 
-        fn put_rate(&self, device: u32, rate: f64) -> Result<(), DriverError> {
-            self.asked.lock().unwrap().push((device, rate));
-            match self.puts_wait {
-                true => Ok(()),
-                false => self.land(device, rate),
+        fn wait_for(&self, device: u32, rate: f64) -> Result<(), DriverError> {
+            if let Some(slow) = &self.slow
+                && slow.device == device
+            {
+                let _ = slow.waiting.send(());
+                let _ = slow.gate.lock().unwrap().recv();
             }
+            if self.rate(device)? == rate {
+                return Ok(());
+            }
+            if self.first == First::Late
+                && let Some((device, rate)) = self.pending.lock().unwrap().take()
+            {
+                self.land(device, rate)?;
+            }
+            Err(DriverError::Backend("the rate did not land in time".into()))
         }
     }
 
@@ -187,7 +225,7 @@ mod tests {
 
     #[test]
     fn a_rate_that_never_lands_fails_the_hold_and_the_found_rate_is_asked_for_again() {
-        let fake = Fake { fails: true, ..Fake::new(&[(MONITOR, 44_100.0)]) };
+        let fake = Fake { first: First::Never, ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = RateHolds::new(fake);
         assert!(holds.hold(MONITOR).is_err());
         assert_eq!(holds.hal.asked(), [(MONITOR, 48_000.0), (MONITOR, 44_100.0)]);
@@ -196,7 +234,7 @@ mod tests {
 
     #[test]
     fn a_rate_that_lands_after_the_hold_failed_is_put_back() {
-        let fake = Fake { fails: true, lands_late: true, ..Fake::new(&[(MONITOR, 44_100.0)]) };
+        let fake = Fake { first: First::Late, ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = RateHolds::new(fake);
         assert!(holds.hold(MONITOR).is_err());
         assert_eq!(holds.hal.rate_of(MONITOR), 44_100.0);
@@ -235,6 +273,40 @@ mod tests {
         drop(holds.hold(MONITOR).unwrap());
         assert_eq!(holds.hal.asked().len(), before, "a device at 48 kHz is left alone");
         assert_eq!(holds.hal.rate_of(MONITOR), 48_000.0);
+    }
+
+    #[test]
+    fn a_hold_that_cannot_read_the_device_holds_nothing() {
+        let holds = RateHolds::new(Fake::new(&[]));
+        assert!(holds.hold(MONITOR).is_err());
+        assert!(holds.held.lock().unwrap().iter().all(|held| held.users == 0));
+    }
+
+    /// A close drops a house mic's hold on Node's event loop while the follower thread waits for
+    /// the room output's rate to land. The release returns while that wait still runs.
+    #[test]
+    fn a_release_never_waits_behind_another_devices_rate_landing() {
+        let (open, gate) = channel();
+        let (waiting, waits) = channel();
+        let slow = Slow { device: SPEAKERS, waiting, gate: Mutex::new(gate) };
+        let fake =
+            Fake { slow: Some(slow), ..Fake::new(&[(MONITOR, 44_100.0), (SPEAKERS, 44_100.0)]) };
+        let holds = RateHolds::new(fake);
+        let mic = holds.hold(MONITOR).unwrap();
+        thread::scope(|scope| {
+            let output = scope.spawn(|| holds.hold(SPEAKERS).map(drop));
+            waits.recv().unwrap();
+            let (released, release) = channel();
+            scope.spawn(move || {
+                drop(mic);
+                let _ = released.send(());
+            });
+            let done = release.recv_timeout(Duration::from_secs(5));
+            drop(open);
+            assert!(done.is_ok(), "the release waited behind the output's rate");
+            assert_eq!(holds.hal.rate_of(MONITOR), 44_100.0);
+            output.join().unwrap().unwrap();
+        });
     }
 
     #[test]

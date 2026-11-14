@@ -25,8 +25,7 @@ impl NominalRate for HalRate {
         }
     }
 
-    fn set_rate(&self, device: u32, rate: f64) -> Result<(), DriverError> {
-        self.put_rate(device, rate)?;
+    fn wait_for(&self, device: u32, rate: f64) -> Result<(), DriverError> {
         let step = Duration::from_millis(10);
         for _ in 0..RATE_CHANGE.as_millis() / step.as_millis() {
             if self.rate(device)? == rate {

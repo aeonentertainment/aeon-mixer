@@ -43,7 +43,9 @@ costs nothing. A device elsewhere costs one more rate change each time a stream 
 reopen of the same device after a loss or a stall puts the rate back and moves it again. Putting
 it back costs the stopping thread one property write. Moving it again waits for it to land, in a
 few ms by cpal's account and within the 1 s the engine allows, on the follower's thread, and a
-move is already bounded by the same second (decision 0016).
+move is already bounded by the same second (decision 0016). The count's lock covers the requests
+only, never the wait, so a release on Node's event loop never waits behind another device's rate
+landing.
 
 ## What others do
 
