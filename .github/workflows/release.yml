@@ -4,8 +4,9 @@
 # and install-tests the same tarball without releasing it. Running the workflow by hand with a tag
 # publishes that release's tarball to npm and builds nothing.
 #
-# Every job runs on a GitHub-hosted runner: a release is built on a clean machine, and npm's
-# trusted publishing does not accept our own runners.
+# Every job runs on a GitHub-hosted runner with no cache: a release is built on a clean machine
+# from nothing CI on our own runners wrote, and npm's trusted publishing does not accept those
+# runners.
 name: Release
 
 on:
@@ -55,14 +56,9 @@ jobs:
       - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           node-version-file: package.json
-          cache: true
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: native
-          key: release-${{ matrix.name }}
       - run: vp run build:native ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
       - if: ${{ !matrix.target }}
         run: vp test
@@ -82,7 +78,6 @@ jobs:
       - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           node-version-file: package.json
-          cache: true
       - name: The tag names the version in package.json
         if: github.ref_type == 'tag'
         run: test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
