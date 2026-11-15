@@ -1139,11 +1139,16 @@ GStreamer one, chosen by a flag.
 Done when: the engine runs a session behind the flag; the latency e2e passes at the new number;
 GStreamer and the `aeonpitch` element are deleted in a later PR.
 
-### 8.11 Session bundle: `src/bundle/`, `transport/src/record/`, `tools/replay`
+### 8.11 Session bundle: `src/bundle/`, `tools/replay`
 
 A recording of one slot says what reached it and nothing about the song around it. A session
 bundle is one song whole: a directory `replay` can play back with nothing else, and that two
 songs can be compared by. Decision [0026](decisions/0026-the-session-bundle.md) has the reasons.
+
+It is the Binding and API workstream's, with 8.8 and 8.9 (section 10). In files it does not own it
+adds one line each and changes nothing else: the frame count's store in
+`engine/src/audio_thread.rs`, which is 8.1's, and the zeroed sender address in
+`transport/src/record/`, which is 8.4's.
 
 ```
 <dir>/
@@ -1235,7 +1240,7 @@ without owning the file, as `Slot::corrector_correcting` does for `measure-corre
 | 4   | Backing             | 8.5                |
 | 5   | Kernels and effects | 8.6                |
 | 6   | Return branch       | 8.7                |
-| 7   | Binding and API     | 8.8, 8.9           |
+| 7   | Binding and API     | 8.8, 8.9, 8.11     |
 | 8   | Adapter             | 8.10               |
 
 ## 11. Divergences from the contract document

@@ -118,12 +118,8 @@ buffer, and a quiet phone.
 
 A recording holds a singer's voice and the phone's LAN address. It is made only when the host asks
 for it, and nothing in this package sends it anywhere (never-compromise 3). The host chooses the
-path, owns the file from then on, and answers for the singer's consent. Nothing here cleans up
-after it.
-
-This paragraph first said a recording "stays on the device". The package can promise what it does,
-not what a host does with a file it was asked to write, so the promise is now the first and the
-rest is named as the host's. The developer agreed the change in #180.
+path, owns the file from then on, and answers for the singer's consent: the package can promise
+what it does, not what a host does with a file it asked for. Nothing here cleans up after it.
 
 ## Not yet
 
