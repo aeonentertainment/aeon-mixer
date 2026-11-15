@@ -88,15 +88,21 @@ impl Ingest {
     /// Records every datagram the slot's port reads into a new pcap file at `path`, or stops for
     /// `None` (docs/design.md 8.4). The file and its header are written here, so a bad path is
     /// this call's error; the writer thread finishes the file on its own once the recording ends.
-    pub fn record(&self, path: Option<&str>) -> Result<()> {
+    /// `zero_sender` keeps the sender's address out of the file, as a session bundle does (8.11).
+    pub fn record(&self, path: Option<&str>, zero_sender: bool) -> Result<()> {
         let Self::Packets { port, switch, .. } = self else {
             return Err(Error::from_reason("only an rtp or l16 slot can be recorded"));
         };
         let tap = path
             .map(|path| {
-                Recording::create(Path::new(path), *port).map(|(_finishes_alone, tap)| tap).map_err(
-                    |error| Error::from_reason(format!("cannot record to {path}: {error}")),
-                )
+                Recording::create(Path::new(path), *port)
+                    .map(|(_finishes_alone, mut tap)| {
+                        tap.zero_sender = zero_sender;
+                        tap
+                    })
+                    .map_err(|error| {
+                        Error::from_reason(format!("cannot record to {path}: {error}"))
+                    })
             })
             .transpose()?;
         switch.set(tap);

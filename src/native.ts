@@ -13,6 +13,7 @@ export type NativeMixer = Binding.Mixer;
 export type NativeBackingRender = Binding.BackingRender;
 export type {
   BackingInput,
+  ClockReading,
   GuideInput,
   NativeEvent,
   OpenOptions as NativeOpenOptions,

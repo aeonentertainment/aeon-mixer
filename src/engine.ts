@@ -1,4 +1,5 @@
 import { Acks } from "./acks.ts";
+import { bundleRequest } from "./bundle/bundle-request.ts";
 import { Emitter } from "./emitter.ts";
 import { Mixer, type MixerHost } from "./mixer.ts";
 import {
@@ -157,6 +158,7 @@ export class Engine {
       swapIn: (mixer, graph, events, onTimeout) => this.#swapIn(mixer, graph, events, onTimeout),
       swapOut: (mixer) => this.#swapOut(mixer),
       onFault: (listener) => this.#events.on("fault", listener),
+      onOutputChanged: (listener) => this.#events.on("outputChanged", listener),
       hold: (release) => {
         this.#held.add(release);
         return () => this.#held.delete(release);
@@ -216,12 +218,17 @@ export class Engine {
     }
     const slots = config.slots.map((slot, i) => slotInput(`slots[${i}]`, slot));
     const destination = config.rtpReturn === undefined ? null : rtpReturn(config.rtpReturn);
+    const bundle =
+      config.bundle === undefined
+        ? null
+        : await bundleRequest(config.bundle, config.backing, this.profile.backing.stemGains);
     return new Mixer(
       this.#host,
       slots,
       new Emitter<MixerEvents>(),
       config.backing ?? null,
       destination,
+      bundle,
     );
   }
 

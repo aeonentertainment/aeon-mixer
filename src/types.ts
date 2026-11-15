@@ -77,6 +77,13 @@ export interface MixerConfig {
     stopAtMs?: number;
   };
   rtpReturn?: { host: string; port: number; payloadType: number; ssrc: number };
+  /**
+   * Writes this mixer's session bundle into a new directory at `dir`, from now until `destroy`:
+   * docs/design.md 8.11. `createMixer` rejects when `dir` exists. A bundle holds every singer's
+   * voice in the song: nothing in this package sends it anywhere, and the host owns it and
+   * answers for each singer's consent.
+   */
+  bundle?: { dir: string };
 }
 
 export interface SlotSettings {

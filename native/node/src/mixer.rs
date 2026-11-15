@@ -17,6 +17,7 @@ use transport::Network;
 use crate::backing::BackingRender;
 use crate::ingest::Ingest;
 use crate::rtp_return::{RtpReturn, RtpReturnInput, RtpReturnStats};
+use crate::session_clock::{ClockReading, SessionClock};
 use crate::slot_input::SlotInput;
 use crate::slot_stats_info::SlotStatsInfo;
 
@@ -29,6 +30,7 @@ pub struct Mixer {
     /// And what each slot's echo stages last published.
     echo_reports: Vec<Arc<EchoReport>>,
     rtp_return: Option<RtpReturn>,
+    clock: SessionClock,
 }
 
 impl Mixer {
@@ -41,6 +43,7 @@ impl Mixer {
         playout_delay_frames: Option<u32>,
         output_frames: u32,
         network: &Network,
+        clock: SessionClock,
     ) -> Result<Self> {
         if inputs.len() > MAX_SLOTS {
             return Err(Error::from_reason(format!("a mixer holds at most {MAX_SLOTS} slots")));
@@ -66,7 +69,14 @@ impl Mixer {
         let mut graph = Box::new(Graph::new(slots));
         let rtp_return =
             rtp_return.map(|input| RtpReturn::open(input, &mut graph, network)).transpose()?;
-        Ok(Self { graph: Some(graph), slots: ingests, corrector_delays, echo_reports, rtp_return })
+        Ok(Self {
+            graph: Some(graph),
+            slots: ingests,
+            corrector_delays,
+            echo_reports,
+            rtp_return,
+            clock,
+        })
     }
 
     /// The graph, once: `swap` moves it to the audio thread.
@@ -81,15 +91,17 @@ impl Mixer {
 
 #[napi]
 impl Mixer {
-    /// Moves a finished render's stems into the graph as its backing path, before `swap`.
+    /// Moves a finished render's stems into the graph as its backing path, before `swap`, and
+    /// returns their length in frames, at the armed speed.
     #[napi]
-    pub fn install_backing(&mut self, render: &mut BackingRender) -> Result<()> {
+    pub fn install_backing(&mut self, render: &mut BackingRender) -> Result<f64> {
         let graph = self
             .graph
             .as_mut()
             .ok_or_else(|| Error::from_reason("this mixer has already started"))?;
-        graph.set_backing(render.take_backing()?);
-        Ok(())
+        let (backing, frames) = render.take_backing()?;
+        graph.set_backing(backing);
+        Ok(frames as f64)
     }
 
     /// The UDP port a slot listens on, or null for a push or capture slot.
@@ -112,10 +124,18 @@ impl Mixer {
     }
 
     /// Records what reaches an `rtp` or `l16` slot's port to a new pcap file at `path`, or stops
-    /// recording it for null.
+    /// recording it for null. `zero_sender` writes every sender as 0.0.0.0, as a session bundle's
+    /// recordings do (docs/design.md 8.11).
     #[napi]
-    pub fn record_slot(&self, index: u32, path: Option<String>) -> Result<()> {
-        self.slot(index)?.record(path.as_deref())
+    pub fn record_slot(&self, index: u32, path: Option<String>, zero_sender: bool) -> Result<()> {
+        self.slot(index)?.record(path.as_deref(), zero_sender)
+    }
+
+    /// The frames the audio thread has rendered and the wall clock a recording stamps arrivals
+    /// with, read together: a session bundle's clock.
+    #[napi]
+    pub fn clock(&self) -> ClockReading {
+        self.clock.read()
     }
 
     /// Every slot's ingest counters, corrector delay and echo findings, as the audio thread last

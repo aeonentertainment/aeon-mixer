@@ -73,10 +73,10 @@ impl BackingRender {
         Arc::clone(&self.job)
     }
 
-    /// The rendered stems as a backing path, once. `src/` calls this after the events thread saw
-    /// the worker finish, so the join reaps the thread without blocking; a failed render is the
-    /// engine's message, repeated on every later call.
-    pub(crate) fn take_backing(&mut self) -> Result<Backing> {
+    /// The rendered stems as a backing path, once, with their length in frames. `src/` calls this
+    /// after the events thread saw the worker finish, so the join reaps the thread without
+    /// blocking; a failed render is the engine's message, repeated on every later call.
+    pub(crate) fn take_backing(&mut self) -> Result<(Backing, u64)> {
         if let Some(reason) = &self.failed {
             return Err(Error::from_reason(reason.clone()));
         }
@@ -84,7 +84,10 @@ impl BackingRender {
             .take()
             .ok_or_else(|| Error::from_reason("this backing is already installed"))?;
         match job.finish() {
-            Ok(stems) => Ok(Backing::new(stems, self.armed_semitones)),
+            Ok(stems) => {
+                let frames = stems.frames;
+                Ok((Backing::new(stems, self.armed_semitones), frames))
+            }
             Err(error) => {
                 let reason = error.to_string();
                 self.failed = Some(reason.clone());

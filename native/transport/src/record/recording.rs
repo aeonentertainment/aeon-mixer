@@ -68,7 +68,7 @@ impl Recording {
         let writer = thread::Builder::new()
             .name("aeon-mixer-record".into())
             .spawn(move || write_all(file, inbox, port, started, since_epoch))?;
-        let tap = Tap { records, dropped: Arc::clone(&dropped) };
+        let tap = Tap { records, dropped: Arc::clone(&dropped), zero_sender: false };
         Ok((Self { writer, dropped }, tap))
     }
 
@@ -158,6 +158,29 @@ mod tests {
             let step = (at - first) as i64 - 20_000 * k as i64;
             assert!(step.abs() <= 1, "record {k} is {step} µs off its arrival");
         }
+    }
+
+    /// A session bundle's recording holds the datagram and when it came, and not who sent it: the
+    /// address never reaches the ring, so it cannot reach the file.
+    #[test]
+    fn a_tap_told_to_zero_the_sender_writes_no_address() {
+        let path = scratch("zeroed");
+        let (recording, mut tap) = Recording::create(&path, 40_000).unwrap();
+        tap.zero_sender = true;
+        let from = SocketAddr::from(([10, 0, 0, 7], 50_000));
+        assert_no_alloc(|| tap.record(&[9; 40], from, Instant::now()));
+        drop(tap);
+        assert_eq!(recording.finish().unwrap(), Written { records: 1, dropped: 0 });
+
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let ip = pcap::GLOBAL_HEADER_LEN + pcap::RECORD_HEADER_LEN + pcap::ETHERNET_LEN;
+        let udp = ip + pcap::IPV4_LEN;
+        assert_eq!(&bytes[ip + 12..ip + 16], &[0; 4], "the source address");
+        assert_eq!(&bytes[udp..udp + 2], &[0; 2], "the source port");
+        assert_eq!(&bytes[udp + 2..udp + 4], &40_000u16.to_be_bytes(), "the slot's port stays");
+        assert!(!bytes.windows(4).any(|w| w == [10, 0, 0, 7]), "the sender is nowhere in it");
+        assert_eq!(&bytes[udp + pcap::UDP_LEN..], &[9; 40]);
     }
 
     /// A writer that falls behind costs the recording records, never the network thread a wait:

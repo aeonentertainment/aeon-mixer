@@ -7,7 +7,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::backing::Transport;
 use crate::block::{BLOCK, RATE, Stereo};
@@ -54,6 +54,9 @@ pub struct AudioThread {
     latency_heard: u32,
     /// Frames of the fade in after a move that have played; the fade is done at the swap fade.
     faded_in: u32,
+    /// The frames rendered so far, stored once a block and waited on by nobody: a session
+    /// bundle's clock (docs/design.md 8.11). It stops with a fault, as rendering does.
+    frames: Arc<AtomicU64>,
 }
 
 /// The control thread's ends of the four crossings, and the feed for the reaction voices.
@@ -63,6 +66,8 @@ pub struct Controls {
     pub events: EventConsumer,
     pub retired: RetiredConsumer,
     pub reactions: ReactionsFeed,
+    /// The audio thread's count of frames rendered, to read beside the wall clock.
+    pub frames: Arc<AtomicU64>,
 }
 
 impl AudioThread {
@@ -73,6 +78,7 @@ impl AudioThread {
         let (events, event_consumer) = event_ring();
         let (retired, retired_consumer) = retired_ring();
         let (reactions_feed, reactions) = reactions();
+        let frames = Arc::<AtomicU64>::default();
         let audio = Self {
             params,
             commands,
@@ -94,6 +100,7 @@ impl AudioThread {
             latency: Arc::default(),
             latency_heard: 0,
             faded_in: SWAP_FADE_FRAMES,
+            frames: Arc::clone(&frames),
         };
         let controls = Controls {
             params: params_writer,
@@ -101,6 +108,7 @@ impl AudioThread {
             events: event_consumer,
             retired: retired_consumer,
             reactions: reactions_feed,
+            frames,
         };
         (audio, controls)
     }
@@ -113,6 +121,7 @@ impl AudioThread {
     pub fn render(&mut self, mut out: Stereo<'_>) {
         if !self.faulted && catch_unwind(AssertUnwindSafe(|| self.render_block(&mut out))).is_ok() {
             self.fade_in(&mut out);
+            self.frames.fetch_add(BLOCK as u64, Ordering::Relaxed);
             return;
         }
         self.faulted = true;
@@ -594,6 +603,31 @@ mod tests {
         assert!(controls.reactions.play(&[1.0, 1.0].repeat(BLOCK)));
         let out = pump(&mut driver, 1);
         assert!(out.iter().all(|s| *s > CENTRE && *s < 1.0), "{} is the clipped sum", out[0]);
+    }
+
+    /// A session bundle's clock: the count is the frames rendered, whatever graph is live, and it
+    /// stops where a fault stops the rendering.
+    #[test]
+    fn the_frame_count_is_the_frames_rendered_and_stops_with_a_fault() {
+        let (audio, mut controls) = AudioThread::new();
+        let frames = Arc::clone(&controls.frames);
+        let mut driver = OfflineDriver::new(audio.into_render());
+        assert_eq!(frames.load(Ordering::Relaxed), 0);
+        pump(&mut driver, 3);
+        assert_eq!(frames.load(Ordering::Relaxed), 3 * BLOCK as u64);
+
+        controls.commands.push(Command::Swap { id: 1, graph: dc_graph(1.0) }).ok().unwrap();
+        pump(&mut driver, 2);
+        assert_eq!(frames.load(Ordering::Relaxed), 5 * BLOCK as u64);
+
+        let panicking = Box::new(Graph::new(vec![Slot::new(Box::new(Panics))]));
+        controls.commands.push(Command::Swap { id: 2, graph: panicking }).ok().unwrap();
+        // Not under the guard: the panic allocates its payload
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        driver.pump(4);
+        std::panic::set_hook(hook);
+        assert_eq!(frames.load(Ordering::Relaxed), 5 * BLOCK as u64);
     }
 
     #[test]

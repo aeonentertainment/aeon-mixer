@@ -23,6 +23,8 @@ pub(super) struct Record {
 pub struct Tap {
     pub(super) records: rtrb::Producer<Record>,
     pub(super) dropped: Arc<AtomicU32>,
+    /// A session bundle's tap sets this, and every record's sender is 0.0.0.0 (docs/design.md 8.11).
+    pub zero_sender: bool,
 }
 
 impl Tap {
@@ -30,6 +32,7 @@ impl Tap {
     /// the record is dropped and counted, and the slot's packet is untouched.
     pub fn record(&mut self, datagram: &[u8], from: SocketAddr, at: Instant) {
         let len = datagram.len().min(DATAGRAM);
+        let from = if self.zero_sender { SocketAddr::from(([0; 4], 0)) } else { from };
         let mut record = Record { at, from, len: len as u16, datagram: [0; DATAGRAM] };
         record.datagram[..len].copy_from_slice(&datagram[..len]);
         if self.records.push(record).is_err() {
