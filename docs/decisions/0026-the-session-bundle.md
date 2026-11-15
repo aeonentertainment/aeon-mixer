@@ -16,7 +16,7 @@ the file".
 
 ## A directory of plain files
 
-`manifest.json`, one pcap per recorded slot, `events.jsonl`, `stats.jsonl` and a `host/` directory
+`manifest.json`, `profile.json` (decision 0027), one pcap per recorded slot, `events.jsonl`, `stats.jsonl` and a `host/` directory
 the engine never reads. docs/design.md 8.11 has the contents.
 
 - **The pcaps are 0017's, unchanged in format**, so Wireshark and libwebrtc's tools still open
@@ -86,6 +86,4 @@ quotes `tap_cost` with eight slots recording. Everything else is the control thr
 
 - A `push` or `capture` slot's PCM. A house mic has no packets, so format 1 lists the slot as
   unrecorded and replays it as silence.
-- The settings profile, #180's second contract. Until it lands the manifest holds the engine
-  options as given.
 - Scoring a replay against a baseline. `--json` is the output a scorer would read.
