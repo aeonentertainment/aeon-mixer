@@ -134,6 +134,8 @@ a decision record and the developer's agreement.
 
 - Keep things simple. Build the smallest model that makes the correct behaviour unsurprising.
   The mixer is a fixed topology, not a graph engine.
+- A fix removes the cause. A second patch on the same code means the approach is wrong: rethink
+  it before adding more.
 - Domain-driven design with hexagonal boundaries where it earns its keep: the engine crate is
   pure and knows no device, socket or Node; devices, transport and the binding are adapters at
   the edge. One class per file.
