@@ -296,7 +296,7 @@ native/
                         the measure-sink and measure-clock binaries
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
   tools/measure-latency/  the mic path's latency: the engine's share offline, the output's on hardware
-  tools/replay/         a slot's recording through the real chain on the offline driver
+  tools/replay/         a slot's recording, or a session bundle, through the real chain on the offline driver
   tools/measure-echo/   the echo stages' numbers beside GStreamer's, the bleed run, the live howl check
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
@@ -526,6 +526,11 @@ export interface MixerConfig {
   };
   /** `host` is an IP literal, never a name; `payloadType` is dynamic, 96 to 127. */
   rtpReturn?: { host: string; port: number; payloadType: number; ssrc: number };
+  /**
+   * Writes this mixer's session bundle into a new directory at `dir`, from now until `destroy`
+   * (8.11). `createMixer` rejects when `dir` exists. A bundle holds every singer's voice.
+   */
+  bundle?: { dir: string };
 }
 
 export interface SlotSettings {
@@ -959,9 +964,12 @@ ring into the jitter buffer at the top of each block.
   bad path fails the call. Each record is written whole, so a process that dies leaves a file
   that reads up to its last packet. A host turns recording on after `start`, so a replay begins
   where the live slot did. A `push` or `capture` slot records nothing yet.
-- A recording holds a singer's voice and their phone's LAN address. One is made only when a
-  person turns it on, it stays on the device, and nothing in this package sends it anywhere
-  (never-compromise 3). The host decides where it goes and when it is deleted.
+- A recording holds a singer's voice, and `recordSlot`'s holds their phone's LAN address too. One
+  is made only when the host asks for it, and nothing in this package sends it anywhere
+  (never-compromise 3). The host chooses the path, owns the file from then on, and answers for
+  the singer's consent. Nothing here deletes it.
+- `MixerConfig.bundle` records every `rtp` and `l16` slot this way from `createMixer`, beside the
+  rest of the song (8.11).
 
 Done when: a test feeds synthetic RTP with reordering, 30 ms jitter spikes and 5 percent loss
 through the offline driver and the output matches the source within the concealment's expected
@@ -1121,6 +1129,8 @@ recorded arrival. The same file replays to the same samples every time. It print
 level beside libopus's own decode of the same packets, placed on their RTP timestamps, and the
 slot's counters as `stats()` gives them.
 
+Given a session bundle's directory in place of a file, it replays the whole song (8.11).
+
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
 The class behind Aeon Karaoke's mixing-engine port that drives this package, beside the
@@ -1128,6 +1138,72 @@ GStreamer one, chosen by a flag.
 
 Done when: the engine runs a session behind the flag; the latency e2e passes at the new number;
 GStreamer and the `aeonpitch` element are deleted in a later PR.
+
+### 8.11 Session bundle: `src/bundle/`, `tools/replay`
+
+A recording of one slot says what reached it and nothing about the song around it. A session
+bundle is one song whole: a directory `replay` can play back with nothing else, and that two
+songs can be compared by. Decision [0026](decisions/0026-the-session-bundle.md) has the reasons.
+
+It is the Binding and API workstream's, with 8.8 and 8.9 (section 10). In files it does not own it
+adds one line each and changes nothing else: the frame count's store in
+`engine/src/audio_thread.rs`, which is 8.1's, and the zeroed sender address in
+`transport/src/record/`, which is 8.4's.
+
+```
+<dir>/
+  manifest.json    written once, as the mixer is created
+  slots/<n>.pcap   one per rtp or l16 slot, the file recordSlot writes (8.4)
+  events.jsonl     every call that changes what is heard, and what the engine reported
+  stats.jsonl      stats() once a second
+  host/            the host's own files; the engine makes it and never looks inside
+```
+
+- **The clock.** The audio thread adds each block to a count of output frames, an atomic it
+  stores once a block and nothing waits on. Every line of `events.jsonl` and `stats.jsonl`
+  carries `frame`, that count as the control thread read it, and `us`, the wall clock the pcaps
+  stamp arrivals with, read in the same call. A line a second ties the two clocks together and
+  shows them drift. A setting changed at `frame` is taken up by the block that starts at or after
+  it, live and in a replay.
+- **`manifest.json`** holds `format`, 1; the package's version and the platform; the output's
+  rate, period, latency and name; `frame` and `us` at creation; each slot's index and kind and
+  whether it is recorded; the engine options the mixer runs under; and the backing: each stem's
+  kind, SHA-256 and length in frames, with key, speed, stem gains and `stopAtMs`. A stem is named
+  by its hash and never copied, since a song is large and may not be the host's to copy. No path
+  on the host's disk and no device id is written.
+- **`events.jsonl`** holds, each with its arguments: `setSlot`, `setSlotEffects`, `setSlotGuide`
+  with the whole guide, `resetSlot`, `start`, `seek`, `pause`, `resume`, `setBackingKey`,
+  `setStemGain`, and the engine's `outputChanged`, `error` and `backingEnded`. A command's line is
+  written when its ack arrives and carries the backing position the ack gave. `destroy` writes
+  `{"type":"end"}` last, so a bundle without one was cut short. `level` and `pitch` are left out:
+  a replay makes them again.
+- **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
+  thread that keeps no process alive.
+- **Sender addresses are zero.** A bundle's pcaps write 0.0.0.0 where `recordSlot` writes the
+  phone's address. A replay never reads it, so a bundle has no reason to hold it.
+- **A `push` or `capture` slot is listed with `recorded: false`** and replays as silence. Its PCM
+  is format 2's.
+- **Nothing here touches the audio thread but that one store.** The pcaps cost the network thread
+  what decision 0017 measured, once per slot. Events and stats are written on the control thread,
+  each line whole, so a process that dies leaves a bundle that reads to its last line.
+- **Privacy.** A bundle holds every singer's voice in the song. It is made only when the host
+  asks for one, nothing in this package sends it anywhere (never-compromise 3), and the host
+  owns it and answers for each singer's consent (8.4).
+- **Replay.** `replay DIR [--backing STEMS] [--wav OUT] [--json]` builds the mixer the manifest
+  describes on the offline driver, converts each arrival to a frame through the `stats.jsonl`
+  pairs either side of it, pushes it before the block that starts after that frame, and applies
+  each event at its own. `--backing` names a directory it searches for stems by hash; without it
+  the mic path replays alone. `--wav` writes each slot and the mix, and `--json` prints the
+  replay's own `stats()` and levels. A format it does not know, or a bundle with no `end`, it
+  names; the first it refuses, the second it plays as far as it goes.
+- The same bundle replays to the same samples every time. Against the live song it can differ by
+  a block: the pairs place an arrival to within the callback's own jitter, so a packet read at a
+  block's edge can land either side.
+
+Done when: a bundle written during a song on the offline driver replays to the same samples
+twice, under the allocation guard, with an effect change and a seek mid-song landing on the same
+blocks; a bundle with no `end` line replays to its last line; a `format` the tool does not know
+is refused by name; and `tap_cost` with eight slots recording is quoted in the PR.
 
 ## 9. Verification
 
@@ -1164,7 +1240,7 @@ without owning the file, as `Slot::corrector_correcting` does for `measure-corre
 | 4   | Backing             | 8.5                |
 | 5   | Kernels and effects | 8.6                |
 | 6   | Return branch       | 8.7                |
-| 7   | Binding and API     | 8.8, 8.9           |
+| 7   | Binding and API     | 8.8, 8.9, 8.11     |
 | 8   | Adapter             | 8.10               |
 
 ## 11. Divergences from the contract document

@@ -116,9 +116,10 @@ buffer, and a quiet phone.
 
 ## Privacy
 
-A recording holds a singer's voice and the phone's LAN address. It is made only when a person turns
-it on, stays on the device, and nothing in this package sends it anywhere (never-compromise 3).
-The host chooses the path and deletes the file. Nothing here cleans up after it.
+A recording holds a singer's voice and the phone's LAN address. It is made only when the host asks
+for it, and nothing in this package sends it anywhere (never-compromise 3). The host chooses the
+path, owns the file from then on, and answers for the singer's consent: the package can promise
+what it does, not what a host does with a file it asked for. Nothing here cleans up after it.
 
 ## Not yet
 
