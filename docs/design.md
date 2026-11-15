@@ -458,7 +458,29 @@ export interface OpenEngineOptions {
   output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   slots?: number; // fixed for the engine's life, default 8, at most 16
   playoutDelayMs?: number; // pins the ingest jitter buffer; left out, each slot chooses its own (8.4)
+  /** The settings nobody chose in the moment (8.12). Left out, `defaultProfile`. The two options above win over it. */
+  profile?: SettingsProfile;
 }
+
+/** Every setting the engine takes that is not a singer's or a host's choice in the moment (8.12). */
+export interface SettingsProfile {
+  version: 1;
+  output: { periodFrames: 64 | 128 };
+  ingest: { playoutDelayMs: number | "auto" }; // "auto": each slot chooses its own (8.4)
+  slot: {
+    gain: number;
+    pan: number;
+    effects: {
+      "pitch-correction": { strength: number; retuneMs: number };
+      reverb: { roomSize: number; mix: number };
+      voice: { formantSemitones: number };
+    };
+  };
+  backing: { stemGains: Record<StemKind, number> };
+}
+export const defaultProfile: SettingsProfile;
+/** A profile from JSON. Throws naming the field that is missing, unknown or out of range, or the version it does not know. */
+export function parseProfile(value: unknown): SettingsProfile;
 
 export interface OutputInfo {
   sampleRate: 48000;
@@ -492,6 +514,8 @@ export interface Engine {
   readonly capabilities: ReadonlySet<Capability>;
   /** The output playing now: what it was opened on, and after a move, what it moved to. */
   readonly output: OutputInfo;
+  /** The profile in force, with `periodFrames` and `playoutDelayMs` folded in where they were given. */
+  readonly profile: SettingsProfile;
   /** The module's `outputDevices()` on a device engine; none on the timer and offline clocks. */
   outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>>;
   /** The module's `inputDevices()`: the inputs a `capture` slot may name. None offline. */
@@ -521,7 +545,7 @@ export interface MixerConfig {
     stems: ReadonlyArray<{ kind: StemKind; path: string }>;
     key: number; // semitones, rendered before start
     speed: number; // factor, rendered before start
-    stemGains: Record<StemKind, number>;
+    stemGains?: Partial<Record<StemKind, number>>; // a stem left out takes the profile's
     stopAtMs?: number;
   };
   /** `host` is an IP literal, never a name; `payloadType` is dynamic, 96 to 127. */
@@ -539,10 +563,11 @@ export interface SlotSettings {
   mute: boolean;
   solo: boolean;
 }
+/** A parameter left out takes the profile's value (8.12). */
 export type SlotEffect =
-  | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
-  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
-  | { kind: "voice"; enabled: boolean; formantSemitones: number }
+  | { kind: "pitch-correction"; enabled: boolean; strength?: number; retuneMs?: number }
+  | { kind: "reverb"; enabled: boolean; roomSize?: number; mix?: number }
+  | { kind: "voice"; enabled: boolean; formantSemitones?: number }
   | { kind: "cleanup"; enabled: boolean }
   | { kind: "echo-cancel"; enabled: boolean }
   | { kind: "howl-guard"; enabled: boolean };
@@ -1153,6 +1178,7 @@ adds one line each and changes nothing else: the frame count's store in
 ```
 <dir>/
   manifest.json    written once, as the mixer is created
+  profile.json     the engine's profile as the mixer is created (8.12)
   slots/<n>.pcap   one per rtp or l16 slot, the file recordSlot writes (8.4)
   events.jsonl     every call that changes what is heard, and what the engine reported
   stats.jsonl      stats() once a second
@@ -1167,7 +1193,7 @@ adds one line each and changes nothing else: the frame count's store in
   it, live and in a replay.
 - **`manifest.json`** holds `format`, 1; the package's version and the platform; the output's
   rate, period, latency and name; `frame` and `us` at creation; each slot's index and kind and
-  whether it is recorded; the engine options the mixer runs under; and the backing: each stem's
+  whether it is recorded; and the backing: each stem's
   kind, SHA-256 and length in frames, with key, speed, stem gains and `stopAtMs`. A stem is named
   by its hash and never copied, since a song is large and may not be the host's to copy. No path
   on the host's disk and no device id is written.
@@ -1189,8 +1215,9 @@ adds one line each and changes nothing else: the frame count's store in
 - **Privacy.** A bundle holds every singer's voice in the song. It is made only when the host
   asks for one, nothing in this package sends it anywhere (never-compromise 3), and the host
   owns it and answers for each singer's consent (8.4).
-- **Replay.** `replay DIR [--backing STEMS] [--wav OUT] [--json]` builds the mixer the manifest
-  describes on the offline driver, converts each arrival to a frame through the `stats.jsonl`
+- **Replay.** `replay DIR [--profile FILE] [--backing STEMS] [--wav OUT] [--json]` builds the
+  mixer the manifest describes on the offline driver, under the bundle's profile or the one
+  `--profile` names (8.12), converts each arrival to a frame through the `stats.jsonl`
   pairs either side of it, pushes it before the block that starts after that frame, and applies
   each event at its own. `--backing` names a directory it searches for stems by hash; without it
   the mic path replays alone. `--wav` writes each slot and the mix, and `--json` prints the
@@ -1204,6 +1231,47 @@ Done when: a bundle written during a song on the offline driver replays to the s
 twice, under the allocation guard, with an effect change and a seek mid-song landing on the same
 blocks; a bundle with no `end` line replays to its last line; a `format` the tool does not know
 is refused by name; and `tap_cost` with eight slots recording is quoted in the PR.
+
+### 8.12 Settings profile: `src/profile/`
+
+Settings had no one home: a host named every effect value on every call, pinned the playout delay
+in an option and kept its own defaults for the rest. A profile is the one object that holds what
+the engine does when nobody chose, so a session says which settings it ran under and another can
+be tried against the same singing. Decision [0027](decisions/0027-the-settings-profile.md) has the
+reasons.
+
+- **A choice is not a default.** A value a call names is someone's choice: the singer turning
+  correction to full, the host muting a slot. The profile holds the rest. `mute`, `solo`, an
+  effect's `enabled` and a melody guide are always choices and have no place in it.
+- **`defaultProfile`** is a period of 128 frames; a playout delay of `"auto"`; a slot at gain 1,
+  pan 0; correction at strength 0.6 with a 40 ms retune; reverb at room size 0.5, mix 0.25; a
+  voice at 0 semitones; the instrumental at gain 1 and the guide vocals at 0. The effect values
+  are the ones Aeon Karaoke has been sung with, so a host that moves to the profile hears no
+  change.
+- **Where it applies.** `openEngine` takes it for the engine's life. `periodFrames` and
+  `playoutDelayMs`, given, win over it, and `Engine.profile` reads back the result. A slot starts
+  at the profile's gain and pan with every effect off. `setSlotEffects` fills each parameter a
+  call leaves out from the profile, and `createMixer` each stem gain.
+- **Nothing a host does today changes.** Every field that becomes optional was required, and a
+  call that names it means what it meant.
+- **`parseProfile`** checks each value against the range its setter does, and refuses a missing
+  field, an unknown field and an unknown `version` by name. An unknown field is refused, not
+  ignored, so a misspelt setting never passes as one that did nothing.
+- **The engine's own constants are not in it.** The gate, the compressor and the delay chooser
+  hold some thirty. A constant joins the profile under a `tuning` key, documented as free to
+  change in any minor version, in the PR that first needs to sweep it.
+- **In a bundle and a replay.** A bundle's `profile.json` is `Engine.profile` as the mixer was
+  created, and `events.jsonl` holds each call as the host made it, with what it left out left
+  out. So `replay --profile` changes exactly what nobody chose, and keeps every choice.
+- It is the Binding and API workstream's (section 10). The profile is resolved on the control
+  thread into the `Params` and options the engine already takes, so nothing below the binding
+  changes.
+
+Done when: `openEngine` with no profile behaves as before for a host that names every value;
+`setSlotEffects` with a parameter left out takes the profile's, proven by output on the offline
+driver; `parseProfile` refuses a missing field, an unknown field, a value out of range and an
+unknown version, each by name; and one bundle replayed under a second profile differs only in the
+slots whose calls left that value out.
 
 ## 9. Verification
 
@@ -1231,17 +1299,17 @@ A measuring tool may add a read-only accessor to a kernel or engine type another
 one function that reports state, with no change to behaviour. That is how a tool reads state
 without owning the file, as `Slot::corrector_correcting` does for `measure-corrector`.
 
-| #   | Workstream          | Owns               |
-| --- | ------------------- | ------------------ |
-| 0   | Skeleton            | 8.0                |
-| 1   | Graph               | 8.1, 8.2           |
-| 2   | Devices             | 8.3, decision 0003 |
-| 3   | Ingest              | 8.4                |
-| 4   | Backing             | 8.5                |
-| 5   | Kernels and effects | 8.6                |
-| 6   | Return branch       | 8.7                |
-| 7   | Binding and API     | 8.8, 8.9, 8.11     |
-| 8   | Adapter             | 8.10               |
+| #   | Workstream          | Owns                 |
+| --- | ------------------- | -------------------- |
+| 0   | Skeleton            | 8.0                  |
+| 1   | Graph               | 8.1, 8.2             |
+| 2   | Devices             | 8.3, decision 0003   |
+| 3   | Ingest              | 8.4                  |
+| 4   | Backing             | 8.5                  |
+| 5   | Kernels and effects | 8.6                  |
+| 6   | Return branch       | 8.7                  |
+| 7   | Binding and API     | 8.8, 8.9, 8.11, 8.12 |
+| 8   | Adapter             | 8.10                 |
 
 ## 11. Divergences from the contract document
 
