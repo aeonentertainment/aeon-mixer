@@ -5,8 +5,9 @@
 all-features = true
 
 [advisories]
-# Unmaintained crates are reported for the whole graph, yanked ones fail
-unmaintained = "all"
+# An unmaintained crate fails only when we depend on it directly, so a transitive one never
+# turns an unrelated PR red. A yanked crate always fails.
+unmaintained = "workspace"
 yanked = "deny"
 
 [licenses]
@@ -24,8 +25,6 @@ allow = [
   "Unlicense",
   "Zlib",
 ]
-# Our own crates never publish to crates.io; the package's licence covers them
-private = { ignore = true }
 
 [bans]
 multiple-versions = "allow"
