@@ -5,17 +5,22 @@ import type {
   NativeMixer,
   StemGainsInput,
 } from "./native.ts";
+import type { SettingsProfile } from "./profile/settings-profile.ts";
 import type { MixerConfig, StemKind } from "./types.ts";
 import { msToFrames } from "./units.ts";
-import { finiteIn, integerIn } from "./validate.ts";
+import { finiteIn, integerIn, RANGES } from "./validate.ts";
 
 export type BackingConfig = NonNullable<MixerConfig["backing"]>;
 
 /**
  * `config` checked, before anything opens: a mixer runs this ahead of its native mixer, so bad
- * backing settings reject `createMixer` with no port bound and no input held.
+ * backing settings reject `createMixer` with no port bound and no input held. A stem gain it
+ * leaves out is `defaults`', the profile's.
  */
-export function backingSettings(config: BackingConfig) {
+export function backingSettings(
+  config: BackingConfig,
+  defaults: SettingsProfile["backing"]["stemGains"],
+) {
   return {
     input: toInput(config),
     stopAtFrames:
@@ -23,8 +28,16 @@ export function backingSettings(config: BackingConfig) {
         ? undefined
         : msToFrames(finiteIn("stopAtMs", config.stopAtMs, 0, Number.MAX_SAFE_INTEGER)),
     stemGains: {
-      instrumental: finiteIn("stemGains.instrumental", config.stemGains.instrumental, 0, 4),
-      guide: finiteIn("stemGains.guideVocals", config.stemGains.guideVocals, 0, 4),
+      instrumental: finiteIn(
+        "stemGains.instrumental",
+        config.stemGains?.instrumental ?? defaults.instrumental,
+        ...RANGES.stemGain,
+      ),
+      guide: finiteIn(
+        "stemGains.guideVocals",
+        config.stemGains?.guideVocals ?? defaults.guideVocals,
+        ...RANGES.stemGain,
+      ),
     },
   };
 }
@@ -123,7 +136,7 @@ export class Backing {
   }
 
   setStemGain(kind: StemKind, gain: number) {
-    const checked = finiteIn(`${kind} gain`, gain, 0, 4);
+    const checked = finiteIn(`${kind} gain`, gain, ...RANGES.stemGain);
     this.#stemGains =
       kind === "instrumental"
         ? { ...this.#stemGains, instrumental: checked }

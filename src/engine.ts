@@ -17,8 +17,20 @@ import type {
   OutputInfo,
 } from "./types.ts";
 import { OutputUnavailableError } from "./output-unavailable-error.ts";
+import { defaultProfile } from "./profile/default-profile.ts";
+import { deepFreeze } from "./profile/deep-freeze.ts";
+import { parseProfile } from "./profile/parse-profile.ts";
+import type { SettingsProfile } from "./profile/settings-profile.ts";
 import { framesToMs, msToFrames } from "./units.ts";
-import { finiteIn, integerIn, pcm, rtpReturn, slotInput } from "./validate.ts";
+import {
+  finiteIn,
+  integerIn,
+  pcm,
+  outputPeriod,
+  RANGES,
+  rtpReturn,
+  slotInput,
+} from "./validate.ts";
 
 type State = "running" | "faulted" | "closed";
 
@@ -38,37 +50,49 @@ export function openEngine(
 export function openEngine(options: OpenEngineOptions): Promise<Engine>;
 export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
   const slots = integerIn("slots", options.slots ?? 8, 1, 16);
+  const profile = resolveProfile(options);
   const batches: Batches = new Emitter();
   // The events thread starts as the open resolves and its first batch lands on a later turn of the
   // event loop, after the engine below listens
   const deliver = (batch: NativeEvent[]) => batches.emit("batch", batch);
   try {
-    const native = await NativeEngine.open(nativeOptions(options), deliver);
-    return new Engine(native, slots, "offline" in options.output, batches);
+    const native = await NativeEngine.open(nativeOptions(options.output, profile), deliver);
+    return new Engine(native, slots, profile, "offline" in options.output, batches);
   } catch (error) {
     throw OutputUnavailableError.from(error);
   }
 }
 
-/** The addon's options for `options.output`, with every value checked. */
-function nativeOptions(options: OpenEngineOptions): NativeOpenOptions {
-  // A pinned delay can never rise, so under 5 ms, two blocks, ordinary jitter would be all late
-  // packets for good. A slot left to choose goes as low as 3.67 ms, because it rises when packets
-  // come late. 100 ms stays inside the 64 packets the buffer holds, 160 ms of the shortest frame
-  const pinned =
-    options.playoutDelayMs === undefined
-      ? {}
-      : {
-          playoutDelayFrames: msToFrames(
-            finiteIn("playoutDelayMs", options.playoutDelayMs, 5, 100),
-          ),
-        };
-  if ("offline" in options.output) return { clock: "offline", periodFrames: 128, ...pinned };
-  if ("timer" in options.output) return { clock: "timer", periodFrames: 128, ...pinned };
-  const { device, periodFrames = 128 } = options.output;
-  if (periodFrames !== 64 && periodFrames !== 128) {
-    throw new RangeError(`periodFrames must be 64 or 128, got ${String(periodFrames)}`);
+/**
+ * The profile the engine runs under: `options.profile`, checked and copied so the host's object
+ * can change without it, with `output.periodFrames` and `playoutDelayMs` folded in where given.
+ */
+function resolveProfile(options: OpenEngineOptions): SettingsProfile {
+  const profile = parseProfile(options.profile ?? defaultProfile);
+  const period = "periodFrames" in options.output ? options.output.periodFrames : undefined;
+  if (period !== undefined) {
+    profile.output.periodFrames = outputPeriod("periodFrames", period);
   }
+  if (options.playoutDelayMs !== undefined) {
+    profile.ingest.playoutDelayMs = finiteIn(
+      "playoutDelayMs",
+      options.playoutDelayMs,
+      ...RANGES.playoutDelayMs,
+    );
+  }
+  return deepFreeze(profile);
+}
+
+/** The addon's options for `output` under `profile`. The timer and offline clocks have no period of their own. */
+function nativeOptions(
+  output: OpenEngineOptions["output"],
+  { output: { periodFrames }, ingest: { playoutDelayMs } }: SettingsProfile,
+): NativeOpenOptions {
+  const pinned =
+    playoutDelayMs === "auto" ? {} : { playoutDelayFrames: msToFrames(playoutDelayMs) };
+  if ("offline" in output) return { clock: "offline", periodFrames: 128, ...pinned };
+  if ("timer" in output) return { clock: "timer", periodFrames: 128, ...pinned };
+  const { device } = output;
   return { clock: "device", periodFrames, ...pinned, ...(device === undefined ? {} : { device }) };
 }
 
@@ -82,6 +106,8 @@ export class Engine {
     "pause",
     "level",
   ]);
+  /** The profile in force, with `periodFrames` and `playoutDelayMs` folded in where they were given. */
+  readonly profile: SettingsProfile;
   #output: OutputInfo;
   /** How many slots a mixer may have, fixed at open. */
   readonly #slots: number;
@@ -102,9 +128,16 @@ export class Engine {
   #state: State = "running";
 
   /** Built by `openEngine` around the engine the addon opened, whose events `batches` relays. */
-  constructor(native: NativeEngine, slots: number, offline: boolean, batches: Batches) {
+  constructor(
+    native: NativeEngine,
+    slots: number,
+    profile: SettingsProfile,
+    offline: boolean,
+    batches: Batches,
+  ) {
     this.#native = native;
     this.#slots = slots;
+    this.profile = profile;
     batches.on("batch", (batch) => {
       this.#deliver(batch);
     });
@@ -114,6 +147,7 @@ export class Engine {
     this.#output = outputInfo(this.#native.output);
     this.#host = {
       native: this.#native,
+      profile,
       output: () => this.#output,
       command: (send, onTimeout) => this.#command(send, onTimeout),
       watchRender: (id, onProgress) =>

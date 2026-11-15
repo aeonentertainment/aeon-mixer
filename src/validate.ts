@@ -46,7 +46,34 @@ export function rtpReturn(value: NonNullable<MixerConfig["rtpReturn"]>): RtpRetu
   };
 }
 
-export function finiteIn(name: string, value: number, min: number, max: number) {
+/**
+ * The range each setting takes wherever it is set: a setter, a mixer's config or a settings
+ * profile.
+ */
+export const RANGES = {
+  gain: [0, 4],
+  pan: [-1, 1],
+  strength: [0, 1],
+  retuneMs: [0, 1000],
+  roomSize: [0, 1],
+  mix: [0, 1],
+  formantSemitones: [-12, 12],
+  stemGain: [0, 4],
+  // A pinned delay can never rise, so under 5 ms, two blocks, ordinary jitter would be all late
+  // packets for good. A slot left to choose goes as low as 3.67 ms, because it rises when packets
+  // come late. 100 ms stays inside the 64 packets the buffer holds, 160 ms of the shortest frame
+  playoutDelayMs: [5, 100],
+} as const;
+
+export function outputPeriod(name: string, value: unknown) {
+  if (value !== 64 && value !== 128) {
+    throw new RangeError(`${name} must be 64 or 128, got ${String(value)}`);
+  }
+  return value;
+}
+
+/** `value` is `unknown` so a profile read from JSON is checked by the code the setters use. */
+export function finiteIn(name: string, value: unknown, min: number, max: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError(`${name} must be a finite number, got ${String(value)}`);
   }
