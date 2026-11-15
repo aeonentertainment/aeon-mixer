@@ -1,0 +1,38 @@
+# cargo deny check: what CI lets into the addon we ship. A new advisory, licence or source
+# fails the build until a person decides.
+
+[graph]
+all-features = true
+
+[advisories]
+# Unmaintained crates are reported for the whole graph, yanked ones fail
+unmaintained = "all"
+yanked = "deny"
+
+[licenses]
+# What the addon's dependencies are under today. MPL-2.0 is symphonia's and triple_buffer's,
+# file-level copyleft that an MIT package may ship as long as their source stays theirs.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-1-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+# Our own crates never publish to crates.io; the package's licence covers them
+private = { ignore = true }
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# The workspace's own crates depend on each other by path, which reads as a wildcard
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
