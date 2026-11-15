@@ -3,6 +3,7 @@
 //! filling the slot's packet ring, which the host may record, or a `capture` slot's input
 //! stream. Dropping it closes the port and ends any recording, or stops the stream.
 
+use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -30,7 +31,8 @@ pub enum Ingest {
 impl Ingest {
     /// Builds a slot's source for `kind` and keeps this end of it. An `rtp` or `l16` slot binds
     /// a port of the OS's choice and joins the network thread here, so a failure is the caller's
-    /// to see before the mixer exists.
+    /// to see before the mixer exists. An `rtp` slot listens on every interface for phones; an
+    /// `l16` slot on loopback only, since its sender is the house-mic sender on this machine.
     /// `playout_delay_frames` pins the delay; without it, each stream chooses its own.
     pub fn open(
         kind: &str,
@@ -44,9 +46,9 @@ impl Ingest {
             }
             "rtp" => {
                 let codec = Codec::opus().map_err(|error| Error::from_reason(error.to_string()))?;
-                Self::listen(codec, playout_delay_frames, network)
+                Self::listen(codec, Ipv4Addr::UNSPECIFIED, playout_delay_frames, network)
             }
-            "l16" => Self::listen(Codec::L16, playout_delay_frames, network),
+            "l16" => Self::listen(Codec::L16, Ipv4Addr::LOCALHOST, playout_delay_frames, network),
             other => Err(Error::from_reason(format!("unknown slot kind {other:?}"))),
         }
     }
@@ -65,11 +67,12 @@ impl Ingest {
 
     fn listen(
         codec: Codec,
+        ip: Ipv4Addr,
         playout_delay_frames: Option<u32>,
         network: &Network,
     ) -> Result<(Self, Box<dyn Source>)> {
         let (producer, consumer) = packet_ring(RING_CAPACITY);
-        let receiver = Receiver::bind(None, producer)?;
+        let receiver = Receiver::bind(ip, producer)?;
         let port = receiver.port()?;
         let jitter = match playout_delay_frames {
             Some(frames) => JitterBuffer::new(frames, codec),

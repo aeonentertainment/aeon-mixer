@@ -30,10 +30,12 @@ pub struct Receiver {
 }
 
 impl Receiver {
-    /// Binds on every interface at `port`, or at a port of the OS's choice for `None`, which
-    /// `port` reports. The phone's grant flow and mediasoup send to whichever it is.
-    pub fn bind(port: Option<u16>, packets: PacketProducer) -> io::Result<Self> {
-        let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port.unwrap_or(0)));
+    /// Binds on `ip` at a port of the OS's choice, which `port` reports. The phone's grant flow
+    /// and mediasoup send to whichever it is. `ip` is `Ipv4Addr::UNSPECIFIED` for a sender on the
+    /// LAN and `Ipv4Addr::LOCALHOST` for one on this machine, so nothing else on the LAN can reach
+    /// that slot.
+    pub fn bind(ip: Ipv4Addr, packets: PacketProducer) -> io::Result<Self> {
+        let address = SocketAddr::from((ip, 0));
         let socket = UdpSocket::bind(address)?;
         let (switch, switched) = mpsc::channel();
         Ok(Self { socket, packets, datagram: Box::new([0; DATAGRAM]), switch, switched, tap: None })
