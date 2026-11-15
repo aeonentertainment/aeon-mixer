@@ -457,7 +457,8 @@ export interface OpenEngineOptions {
   // `timer`: no device; the engine's own thread renders on the OS's clock (decision 0011)
   output: { device?: string; periodFrames?: 64 | 128 } | { timer: true } | { offline: true };
   slots?: number; // fixed for the engine's life, default 8, at most 16
-  playoutDelayMs?: number; // pins the ingest jitter buffer; left out, each slot chooses its own (8.4)
+  // pins the ingest jitter buffer; left out, the profile's `ingest.playoutDelayMs` (8.12)
+  playoutDelayMs?: number;
   /** The settings nobody chose in the moment (8.12). Left out, `defaultProfile`. The two options above win over it. */
   profile?: SettingsProfile;
 }
@@ -852,7 +853,8 @@ ring into the jitter buffer at the top of each block.
   plays on time; a later one arriving first counts the awaited one lost. Lateness is judged on
   the timestamp: a packet whose time the buffer has concealed is late. The marker bit a sender
   sets after a pause is a SHOULD, so nothing relies on it.
-- A slot chooses its own delay unless the host pins one with `playoutDelayMs`. A stream opens at
+- A slot chooses its own delay under the profile's `"auto"` (8.12), unless the host pins one
+  there or with `playoutDelayMs`. A stream opens at
   15 ms. Every half second the buffer notes the slack of the half second's latest and earliest
   packets against their due times. Once 20 notes, ten seconds, leave at least a block of room,
   the anchor moves earlier, once, until the latest of them would have a millisecond and a quarter
