@@ -12,7 +12,8 @@ report, work with you on a fix, and credit you in the advisory unless you prefer
 ## Scope
 
 - This repository's source and release artifacts.
-- The LAN audio transport once it ships. It is unencrypted by design today, the same trust model
-  as the device's WebSocket; a report that shows a practical attack within that model is welcome.
+- The LAN audio transport: RTP over UDP to each slot's port. It is unencrypted and
+  unauthenticated by design, the same trust model as the device's WebSocket. A report that shows a
+  practical attack within that model is welcome.
 
 Vulnerabilities in Aeon Karaoke itself belong to that repository's policy.
