@@ -413,7 +413,7 @@ pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_a
 /// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
 pub trait Task: Send + 'static { fn register(&mut self, registry: &Registry, token: Token) -> io::Result<()>; fn deregister(&mut self, registry: &Registry) -> io::Result<()>; fn ready(&mut self); fn tick(&mut self) {} }
 pub struct Network;        // spawn(); add(impl Task) -> TaskHandle, whose drop removes the task; drop stops the thread
-pub struct Receiver;       // a Task: bind(port: Option<u16>, PacketProducer); port(); switch() -> RecordSwitch, taken before the task is added
+pub struct Receiver;       // a Task: bind(ip: Ipv4Addr, PacketProducer) at a port of the OS's choice; port(); switch() -> RecordSwitch, taken before the task is added
 pub struct RecordSwitch;   // the control thread's hold on a receiver's recording: set(Some(Tap)) starts one, set(None) ends it; 8.4
 pub struct Recording;      // create(path, port) -> (Recording, Tap): a new pcap file and the writer thread that appends to it; finish() waits for it to close
 pub struct Tap;            // the network thread's end: record(datagram, from, at) copies into a fixed ring and never blocks or wakes anyone; dropping it ends the recording
@@ -840,6 +840,10 @@ mediasoup loopback keep working unchanged, polls them with a timeout, parses the
 pushes fixed-size packets into the slot's ring. The RTCP mediasoup multiplexes onto the same
 port is dropped by its payload type, RFC 5761's reserved range. The audio thread drains the
 ring into the jitter buffer at the top of each block.
+
+An `rtp` slot listens on every interface, since phones send over the LAN. An `l16` slot listens
+on loopback only: its sender is the house-mic sender on the device, and nothing else on the LAN
+should reach that slot.
 
 - The jitter buffer anchors the first packet's RTP timestamp to the output clock plus the
   playout delay, and a single late packet never moves that anchor. A missing packet at its due
