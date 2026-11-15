@@ -46,15 +46,18 @@ scope and missing tests belong to `/pr-review`.
      where the score reads all of them, a path check that two spellings of one folder get past.
 3. Prove each candidate against the code before it becomes a finding: name the lines that make
    the scenario reachable, and look for the guard that already prevents it. A candidate you
-   cannot tie to reachable lines is dropped. Keep at most eight findings, the most severe.
+   cannot tie to reachable lines is dropped. Candidates with one cause are one finding. Keep at
+   most eight, the most severe.
 4. Grade each finding. **P1**: a host using the API as documented hits it, the room hears it,
    or a tool reports a wrong number. **P2**: real, but it needs an unusual sequence or setup.
 5. In CI, post one inline comment per finding on the line where the fix belongs:
    `**P1** **<what goes wrong, in five words>**`, then the scenario as numbered events ending
-   in the wrong result, then the smallest fix. Then write the summary into your Claude comment
+   in the wrong result, then the cause: the rule this code fails to keep, the other places that
+   rely on that rule, and where a fix belongs (this line, a caller, or the design). Then write
+   the summary into your Claude comment
    on the PR: one line per finding with its grade and a pointer to its inline comment, then
    one line per lens that found nothing, saying what you checked. A local run has neither
    tool: give the findings and the summary in the session.
 
 Done when every lens in step 2 has a line in the summary and every inline comment carries a
-grade, a scenario and a fix.
+grade, a scenario and a cause.
