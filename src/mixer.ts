@@ -13,6 +13,7 @@ import type {
   SlotInput,
   SlotParamsInput,
 } from "./native.ts";
+import type { SettingsProfile } from "./profile/settings-profile.ts";
 import type {
   IngestKind,
   MelodyGuide,
@@ -24,10 +25,12 @@ import type {
   StemKind,
 } from "./types.ts";
 import { framesToMs, msToFrames } from "./units.ts";
-import { finiteIn, integerIn, pcm } from "./validate.ts";
+import { finiteIn, integerIn, pcm, RANGES } from "./validate.ts";
 
 /** What a mixer needs from its engine. Internal to the package. */
 export interface MixerHost extends RenderHost {
+  /** The engine's settings profile: what a call that leaves a value out takes. */
+  readonly profile: SettingsProfile;
   /** The output playing now; it changes when the engine moves. */
   output(): OutputInfo;
   /**
@@ -64,19 +67,20 @@ export interface MixerHost extends RenderHost {
 
 type Phase = "armed" | "starting" | "live" | "destroyed";
 
-function defaultSlotParams(): SlotParamsInput {
+type Effects = Pick<
+  SlotParamsInput,
+  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel" | "howlGuard"
+>;
+
+/** Every effect off: a slot's chain as it starts, and what `setSlotEffects` builds on. */
+function effectsOff(): Effects {
   return {
-    gain: 1,
-    pan: 0,
-    mute: false,
-    solo: false,
     corrector: { enabled: false, strength: 0, retuneMs: 0 },
     reverb: { enabled: false, roomSize: 0, mix: 0 },
     voice: { enabled: false, formantSemitones: 0 },
     echoCancel: { enabled: false },
     cleanup: { enabled: false },
     howlGuard: { enabled: false },
-    guideOffsetMs: 0,
   };
 }
 
@@ -122,11 +126,19 @@ export class Mixer {
     this.#events = events;
     // Checked before the native mixer binds its ports and opens its inputs, which a throw after it
     // would leave held with no mixer to destroy
-    const settings = backing === null ? null : backingSettings(backing);
+    const { slot, backing: backingDefaults } = host.profile;
+    const settings = backing === null ? null : backingSettings(backing, backingDefaults.stemGains);
     this.#native = host.native.createMixer([...inputs], rtpReturn);
     this.#letGo = host.hold(() => this.#release());
     this.slots = inputs.map(({ kind }, index) => ({ index, kind, port: this.#native.port(index) }));
-    this.#params = inputs.map(defaultSlotParams);
+    this.#params = inputs.map(() => ({
+      gain: slot.gain,
+      pan: slot.pan,
+      mute: false,
+      solo: false,
+      ...effectsOff(),
+      guideOffsetMs: 0,
+    }));
     this.#guides = inputs.map(() => null);
     this.#backing =
       settings === null
@@ -145,37 +157,52 @@ export class Mixer {
     const current = this.#paramsOf(slot);
     this.#write(slot, {
       ...current,
-      gain: settings.gain === undefined ? current.gain : finiteIn("gain", settings.gain, 0, 4),
-      pan: settings.pan === undefined ? current.pan : finiteIn("pan", settings.pan, -1, 1),
+      gain:
+        settings.gain === undefined
+          ? current.gain
+          : finiteIn("gain", settings.gain, ...RANGES.gain),
+      pan: settings.pan === undefined ? current.pan : finiteIn("pan", settings.pan, ...RANGES.pan),
       mute: settings.mute ?? current.mute,
       solo: settings.solo ?? current.solo,
     });
   }
 
-  /** The slot's whole chain: an effect not in `effects` is disabled. */
+  /**
+   * The slot's whole chain: an effect not in `effects` is disabled, and a parameter an effect
+   * leaves out is the profile's.
+   */
   setSlotEffects(index: number, effects: ReadonlyArray<SlotEffect>) {
     const slot = this.#slot(index);
-    const next = { ...this.#paramsOf(slot), ...defaultEffects() };
+    const next = { ...this.#paramsOf(slot), ...effectsOff() };
+    const defaults = this.#host.profile.slot.effects;
     for (const effect of effects) {
       switch (effect.kind) {
-        case "pitch-correction":
+        case "pitch-correction": {
+          const { strength, retuneMs } = defaults["pitch-correction"];
           next.corrector = {
             enabled: effect.enabled,
-            strength: finiteIn("strength", effect.strength, 0, 1),
-            retuneMs: finiteIn("retuneMs", effect.retuneMs, 0, 1000),
+            strength: finiteIn("strength", effect.strength ?? strength, ...RANGES.strength),
+            retuneMs: finiteIn("retuneMs", effect.retuneMs ?? retuneMs, ...RANGES.retuneMs),
           };
           break;
-        case "reverb":
+        }
+        case "reverb": {
+          const { roomSize, mix } = defaults.reverb;
           next.reverb = {
             enabled: effect.enabled,
-            roomSize: finiteIn("roomSize", effect.roomSize, 0, 1),
-            mix: finiteIn("mix", effect.mix, 0, 1),
+            roomSize: finiteIn("roomSize", effect.roomSize ?? roomSize, ...RANGES.roomSize),
+            mix: finiteIn("mix", effect.mix ?? mix, ...RANGES.mix),
           };
           break;
+        }
         case "voice":
           next.voice = {
             enabled: effect.enabled,
-            formantSemitones: finiteIn("formantSemitones", effect.formantSemitones, -12, 12),
+            formantSemitones: finiteIn(
+              "formantSemitones",
+              effect.formantSemitones ?? defaults.voice.formantSemitones,
+              ...RANGES.formantSemitones,
+            ),
           };
           break;
         case "echo-cancel":
@@ -418,14 +445,6 @@ export class Mixer {
       this.#host.native.setSlotParams(slot, params);
     }
   }
-}
-
-function defaultEffects(): Pick<
-  SlotParamsInput,
-  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel" | "howlGuard"
-> {
-  const { corrector, reverb, voice, cleanup, echoCancel, howlGuard } = defaultSlotParams();
-  return { corrector, reverb, voice, cleanup, echoCancel, howlGuard };
 }
 
 function toGuideInput(guide: MelodyGuide): GuideInput {

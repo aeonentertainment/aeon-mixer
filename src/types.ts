@@ -1,6 +1,8 @@
 // The public types of docs/design.md 7.2 that are inputs to the API. What the API returns is
 // inferred from the implementation.
 
+import type { SettingsProfile } from "./profile/settings-profile.ts";
+
 export type Capability =
   | "guideVocal"
   | "key"
@@ -22,10 +24,16 @@ export interface OpenEngineOptions {
   /** Fixed for the engine's life, default 8, at most 16. */
   slots?: number;
   /**
-   * Pins the ingest jitter buffer to this delay. Leave it out and each slot chooses its own from
-   * what its stream shows, opening at 15; `stats()` reports where each one is.
+   * Pins the ingest jitter buffer to this delay. Left out, the profile's `ingest.playoutDelayMs`:
+   * by default each slot chooses its own from what its stream shows, opening at 15, and `stats()`
+   * reports where each one is.
    */
   playoutDelayMs?: number;
+  /**
+   * The settings nobody chose in the moment. Left out, `defaultProfile`. `output.periodFrames` and
+   * `playoutDelayMs` above win over it.
+   */
+  profile?: SettingsProfile;
 }
 
 export interface OutputInfo {
@@ -64,7 +72,8 @@ export interface MixerConfig {
     key: number;
     /** A factor, rendered before start. */
     speed: number;
-    stemGains: Record<StemKind, number>;
+    /** A stem left out takes the profile's gain. */
+    stemGains?: Partial<Record<StemKind, number>>;
     stopAtMs?: number;
   };
   rtpReturn?: { host: string; port: number; payloadType: number; ssrc: number };
@@ -79,14 +88,15 @@ export interface SlotSettings {
   solo: boolean;
 }
 
+/** A parameter left out takes the profile's value. */
 export type SlotEffect =
-  | { kind: "pitch-correction"; enabled: boolean; strength: number; retuneMs: number }
-  | { kind: "reverb"; enabled: boolean; roomSize: number; mix: number }
+  | { kind: "pitch-correction"; enabled: boolean; strength?: number; retuneMs?: number }
+  | { kind: "reverb"; enabled: boolean; roomSize?: number; mix?: number }
   /**
    * A formant move in semitones from the singer's own, -12 to 12, with no change of pitch and no
    * added delay. Decision 0014 has the first voices' settings.
    */
-  | { kind: "voice"; enabled: boolean; formantSemitones: number }
+  | { kind: "voice"; enabled: boolean; formantSemitones?: number }
   /** Takes the room's echo of the mix out of the slot's input, with no added delay. */
   | { kind: "echo-cancel"; enabled: boolean }
   /**

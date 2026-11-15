@@ -58,6 +58,12 @@ await engine.close();
 - **The backing** is any format Symphonia decodes, resampled to 48 kHz. The armed key and speed
   are rendered before `start` resolves. Live, it supports seek, pause, resume, a key change and
   stem gains, and `start`, `seek` and `resume` report the position the lyric clock follows.
+- **A settings profile** holds what the engine does when nobody chose: the output period, the
+  playout delay, a slot's starting gain and pan, each effect's parameters and the stem gains.
+  `openEngine({ profile })` takes one for the engine's life, `defaultProfile` when left out, and
+  `engine.profile` reads back the one in force. An effect parameter or a stem gain a call leaves
+  out takes the profile's; one it names is the caller's choice. `parseProfile` reads one from
+  JSON and refuses a missing field, an unknown field or a value out of range by name.
 - **`rtpReturn`** sends the mix to mediasoup's PlainTransport as 10 ms Opus with in-band FEC.
   `host` is an IP address, never a name.
 - **Reactions** play through `engine.reactions.play` between songs and during them.

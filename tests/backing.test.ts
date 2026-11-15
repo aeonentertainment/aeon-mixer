@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vite-plus/test";
-import { type Mixer, type MixerConfig, type OfflineEngine, openEngine } from "../src/index.ts";
+import {
+  defaultProfile,
+  type Mixer,
+  type MixerConfig,
+  type OfflineEngine,
+  openEngine,
+} from "../src/index.ts";
 
 const RATE = 48000;
 const BLOCK = 128;
@@ -314,6 +320,23 @@ test("a stem gain is held while armed, then ramps over 50 ms when changed live",
   const ended = onceEnded(mixer);
   engine.pump(2 * SECOND_BLOCKS);
   await ended;
+  await destroyLive(engine, mixer);
+  await engine.close();
+});
+
+test("a stem gain the config leaves out is the profile's", async () => {
+  const engine = await openEngine({
+    output: { offline: true },
+    profile: { ...defaultProfile, backing: { stemGains: { instrumental: 0.5, guideVocals: 0.5 } } },
+  });
+  const { stemGains: _, ...config } = backing(constant(0.25, 2), { guide: constant(0.25, 2) });
+  const mixer = await engine.createMixer({
+    slots: [],
+    backing: { ...config, stemGains: { guideVocals: 1 } },
+  });
+  await rendered(mixer);
+  await startLive(engine, mixer);
+  expect(left(engine.pump(1)).every((sample) => Math.abs(sample - 0.375) < 1e-3)).toBe(true);
   await destroyLive(engine, mixer);
   await engine.close();
 });
