@@ -169,10 +169,12 @@ jobs:
             --title "$GITHUB_REF_NAME" --notes "npm integrity: \`$integrity\`"
 
   # Publishes the tarball already attached to the GitHub release, so npm gets the bytes the install
-  # tests ran. Off until the npm package names this workflow as its trusted publisher; the
-  # repository variable NPM_PUBLISH turns it on. No token: npm trades the job's OIDC identity for one.
+  # tests ran. No token: npm trades the job's OIDC identity for one, and it trusts only a job in
+  # the npm environment. That environment takes a `v*` tag or main and waits for a maintainer's
+  # approval, so a branch that rewrites this file still cannot publish. NPM_PUBLISH switches it off.
   npm:
     name: npm publish
+    environment: npm
     if: >-
       always() && vars.NPM_PUBLISH == 'true' &&
       (github.event_name == 'workflow_dispatch' || needs.release.result == 'success')
