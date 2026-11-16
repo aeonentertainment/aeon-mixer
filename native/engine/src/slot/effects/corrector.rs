@@ -231,7 +231,7 @@ mod tests {
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 let frame = (index * BLOCK) as i64;
-                corrector.process(&ON, Some(&guide), frame, 0, block, |r| readings.push(r));
+                corrector.process(&ON, Some(&guide), playing(frame), block, |r| readings.push(r));
             }
         });
         let sure: Vec<_> = readings.iter().filter(|r| r.confidence >= 0.9).collect();
@@ -272,7 +272,7 @@ mod tests {
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 let frame = (index * BLOCK) as i64;
-                corrector.process(&ON, None, frame, 0, block, |r| readings.push(r));
+                corrector.process(&ON, None, playing(frame), block, |r| readings.push(r));
             }
         });
         let worst = readings
