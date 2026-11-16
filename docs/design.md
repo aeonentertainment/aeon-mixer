@@ -145,16 +145,16 @@ The topology is fixed. Adding a feature means adding a stage to a chain, a stem 
 path or an output to the master, never a general graph.
 
 **A slot**, in order: source, echo canceller, howl guard, high-pass, gate, pitch corrector,
-meter, compressor, voice, reverb, gain and pan into the stereo bus. The echo canceller and the howl
+meter, tone, compressor, voice, reverb, gain and pan into the stereo bus. The echo canceller and the howl
 guard are off until a host turns them on, for a house mic near the speakers or a phone that might
 howl; off, each hands the slot over bit for bit and does no work. The canceller comes first
 because what it models is the room's path from the master to the mic, and it hears that path as
 the source hands it over. After the gate, which opens and closes with the singing, the corrector,
 whose delay moves with the voice, or the voice, which moves formants, the path it had to learn
 would move with the singing. The meter sits after the
-corrector and before the compressor, voice, reverb and gain, so the level words tell the singer
-about their singing, not the compressor's evening out, the effect or the room, and mute never
-changes them. Pitch readings come from the corrector, ahead of the voice, so the display's trail
+corrector and before the tone stage, compressor, voice, reverb and gain, so the level words tell
+the singer about their singing, not the tone stage's reshaping, the compressor's evening out, the
+effect or the room, and mute never changes them. Pitch readings come from the corrector, ahead of the voice, so the display's trail
 and the score judge the singing. The voice moves formants only and adds no sample. It comes after
 the corrector, which reads the singer's own voice, and before the reverb, so the room hears the
 voice the singer chose. Decision [0014](decisions/0014-the-first-voices.md) has the reasons. The
@@ -162,6 +162,15 @@ high-pass, gate and compressor are one effect, cleanup, which a host turns on pe
 ahead or buffers, so a click leaves on the sample it entered, but the high-pass's phase shift
 delays a voice's fundamental near its corner: 1.8 ms at 110 Hz, 0.4 at 220. Decision
 [0012](decisions/0012-cleaning-the-voice.md) has the reasons for their order and numbers. The
+tone stage makes a phone sound like a good vocal mic: bands a host hands in for a mic it knows or
+a blind match for one it does not, a plosive guard, an air shelf and a de-esser. It comes after
+the corrector and the meter, so every pitch reading and level word is the same with it on as off,
+and before the compressor, so a pop or a boomy phone is gone before the compressor would duck a
+line for it. Its filters are minimum-phase and read no sample ahead, so a click leaves on the
+sample it entered. A filter that holds no sample still delays what it lifts, so the stage caps
+that: the bands and the air may leave no frequency from 80 Hz up more than 0.2 ms late, and the
+guard adds at most 0.2 ms while it ducks a pop. Decision
+[0029](decisions/0029-the-tone-stage.md) has the reasons and the numbers. The
 corrector costs a singer who asks for it a delay that moves with the voice,
 from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
 stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
@@ -347,7 +356,7 @@ pub struct Params { pub slots: [SlotParams; MAX_SLOTS], pub stems: StemGains }
 #[derive(Clone, Copy)]
 pub struct SlotParams { pub gain: f32, pub pan: f32, pub mute: bool, pub solo: bool, pub effects: EffectParams, pub guide_offset_ms: f32 }
 #[derive(Clone, Copy)]
-pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams, pub cleanup: CleanupParams, pub echo_cancel: EchoCancelParams, pub howl_guard: HowlGuardParams }
+pub struct EffectParams { pub corrector: CorrectorParams, pub reverb: ReverbParams, pub voice: VoiceParams, pub cleanup: CleanupParams, pub echo_cancel: EchoCancelParams, pub howl_guard: HowlGuardParams, pub tone: ToneParams }
 #[derive(Clone, Copy)]
 pub struct VoiceParams { pub enabled: bool, pub formant_semitones: f32 }   // -12 to 12; off is the voice itself
 #[derive(Clone, Copy)]
@@ -356,6 +365,14 @@ pub struct CleanupParams { pub enabled: bool }
 pub struct EchoCancelParams { pub enabled: bool }
 #[derive(Clone, Copy)]
 pub struct HowlGuardParams { pub enabled: bool }
+pub const TONE_BANDS: usize = 8;
+#[derive(Clone, Copy)]
+pub struct ToneParams { pub enabled: bool, pub bands: ToneBands, pub plosive_db: f32, pub air_db: f32, pub de_ess_db: f32 }   // an amount at 0 leaves its part out of the path; check() -> Result<(), ToneRefusal> on the control thread, before the params cross (8.6)
+#[derive(Clone, Copy)]
+pub enum ToneBands { None, Given { count: u8, bands: [ToneBand; TONE_BANDS] }, Match }
+#[derive(Clone, Copy)]
+pub enum ToneBand { Peak { hz: f32, gain_db: f32, q: f32 }, LowShelf { hz: f32, gain_db: f32 }, HighShelf { hz: f32, gain_db: f32 } }
+pub enum ToneRefusal { Late { hz: f32, delay_ms: f32 }, Lifted { hz: f32, lift_db: f32 } }   // the frequency the bands and the air treat worst, and by how much
 
 // engine/src/command.rs
 pub enum Command {
@@ -394,6 +411,7 @@ pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16 }   // built on the c
 pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
 pub struct CorrectorDelay;  // published once a block; Slot::corrector_delay() hands the control thread its Arc
 pub struct EchoReport;      // findings() -> Option<EchoFindings>, howl_catches(); published once a block; Slot::echo_report() hands the control thread its Arc
+pub struct ToneReport;      // findings() -> Option<ToneFindings>: the match's band gains and counted singing, the de-esser's cut, the guard's catches; published once a block; Slot::tone_report() hands the control thread its Arc
 pub struct Shared<'a> { pub any_solo: bool, pub cue: Cue, pub history: &'a EchoHistory }   // what every slot shares for one block: Slot::render(index, params, shared, out, events)
 
 // engine/src/master.rs
@@ -571,7 +589,29 @@ export type SlotEffect =
   | { kind: "voice"; enabled: boolean; formantSemitones?: number }
   | { kind: "cleanup"; enabled: boolean }
   | { kind: "echo-cancel"; enabled: boolean }
-  | { kind: "howl-guard"; enabled: boolean };
+  | { kind: "howl-guard"; enabled: boolean }
+  /**
+   * Makes a phone sound like a good vocal mic and holds no sample (8.6). `bands` is the host's
+   * correction for the mic it knows, at most 8, or "match" for the stage to find broad ones from
+   * the singing. `plosiveDb` 0 to 12, `airDb` 0 to 6 and `deEssDb` 0 to 12 are amounts. They are
+   * not in the profile: left out, each is 0 and its part is out of the path. Throws when the
+   * bands and the air together leave a frequency over 0.2 ms late or lift one over 6 dB.
+   */
+  | {
+      kind: "tone";
+      enabled: boolean;
+      bands?: ReadonlyArray<ToneBand> | "match";
+      plosiveDb?: number;
+      airDb?: number;
+      deEssDb?: number;
+    };
+/**
+ * One filter of a tone stage's `bands`: the Audio EQ Cookbook's peaking or shelf biquad at
+ * 48 kHz, a shelf at slope 1. `hz` 80 to 16 000, `gainDb` -12 to 6, `q` 0.3 to 8.
+ */
+export type ToneBand =
+  | { kind: "peak"; hz: number; gainDb: number; q: number }
+  | { kind: "low-shelf" | "high-shelf"; hz: number; gainDb: number };
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
   keyMask: number; // the key's pitch classes as bits, C in bit 0
@@ -589,6 +629,17 @@ export interface SlotStats {
   correctorMaxDelayMs: number;
   echo: { pathMs: number; bleedDb: number; removedDb: number } | null;
   howlCatches: number;
+  /**
+   * What the tone stage did; null while it is off. `match` is where the blind match's filters
+   * stand and how much singing it has counted since it last started over; null unless `bands` is
+   * "match". `deEssDb` is the most the de-esser took off in the last second. `plosives` counts
+   * the pops the guard has ducked.
+   */
+  tone: {
+    match: { bands: ReadonlyArray<{ hz: number; gainDb: number }>; countedMs: number } | null;
+    deEssDb: number;
+    plosives: number;
+  } | null;
 }
 
 export interface Mixer {
@@ -690,7 +741,7 @@ writes the device buffer and the return ring, and pushes events.
 - Solo: when any slot is soloed, every unsoloed slot's effective gain is zero. Mute wins over
   solo. The effective gain ramps across the block like any other gain change.
 - Meters publish RMS and peak over the last 100 ms at 10 Hz, from after the corrector and before
-  the compressor.
+  the tone stage and the compressor.
 - The reaction voices are the engine's, not a graph's. The audio thread renders them once a
   block, and every graph rendering in that block sums them ahead of its master through
   `Graph::render_with`, so a reaction plays straight through a swap fade and is clipped and
@@ -1092,6 +1143,58 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   takes up to 18 dB off between lines. The compressor is 3:1 over -30 dBFS with at most 6 dB of
   makeup, so it never brings a slot more than 6 dB closer to feedback. Off, each fades to unity
   over a block and then costs nothing.
+- The tone stage is `slot::effects::tone`, Rust biquads of its own with no kernel, run after the
+  meter: `Tone::process(params, voiced, block)`, where `voiced` says the corrector's last reading
+  was a voice it is sure of. In order it is the plosive guard, the bands or the match, the air
+  shelf and the de-esser, so the match never averages a pop and the de-esser judges the sibilance
+  that leaves the stage. Decision [0029](decisions/0029-the-tone-stage.md) has each part's
+  reasons and its starting numbers. In 8.1's `params.rs` and `slot/mod.rs` and in 8.8's `src/`
+  it adds its own lines and changes nothing else: the params, its place after the meter, its
+  report, and the effect's validation and stats.
+- Bands are a capture profile: what a host knows of one mic, as up to eight filters that undo its
+  colour and move it to the curve of a good vocal mic. The engine knows no phone model. The host
+  owns the table and whatever keys it. Each band is the Audio EQ Cookbook's peaking or shelf
+  biquad at 48 kHz, a shelf at slope 1, so a host's fitting tool and the engine draw the same
+  curve from the same numbers. A profile is true for audio as the mic heard it: a phone that
+  sends its own voice processing or automatic gain has a colour that moves, and no band undoes
+  that.
+- A minimum-phase filter holds no sample, but it delays what it lifts and the skirts of what it
+  cuts: a 12 dB lift of Q 4 at 100 Hz leaves 100 Hz 19 ms late. So `ToneParams::check` judges the
+  bands and the air shelf as one cascade from 80 Hz to 16 kHz, and `setSlotEffects` throws when
+  any frequency comes out over 0.2 ms late, the phase the voice stage already costs, or lifted
+  over 6 dB, the most cleanup's makeup may bring a slot toward feedback. The error names the
+  frequency and the figure. The check is the engine's, so the filters judged are the filters
+  that run.
+- The match is for a mic the host has no bands for. It keeps the level of the singing in a few
+  broad bands, each against the mean of them all so that loudness cancels, and moves three broad
+  filters toward the curve of a good vocal mic, an engine constant. It cannot tell a phone's
+  colour from a singer's own, so everything about it is bounded:
+  - It counts a block only while the corrector's last reading is a voice it is sure of,
+    confidence over 0.9, and the slot stands 12 dB over the room's level, which a follower like
+    the gate's keeps on the stage's own input. A quiet room and the backing in the mic between
+    lines count for nothing, and time that does not count moves nothing: the filters hold.
+  - It moves nothing until it has counted 5 s. After that each filter moves at most 0.5 dB for
+    each second counted, to at most 6 dB from flat, and never to a setting `check` would refuse.
+  - It reads the voice ahead of its own filters, so what it does is a function of what it heard
+    and it cannot chase itself.
+  - It starts over, its count at zero and its filters ramping to flat, only on `resetSlot`, which
+    a host calls when a slot's sender changes. A pause, a gap or a new SSRC from the same phone
+    keeps what it learned.
+- The plosive guard is a first-order low shelf whose cut follows a burst under the voice, to at
+  most `plosiveDb`. At rest it is out of the path. While it ducks it leaves the voice just over
+  its corner at most 0.2 ms late, for as long as the pop lasts, and a held low note does not set
+  it off. The de-esser is a high shelf whose cut follows how far the voice over 5 kHz stands
+  above the rest of it, to at most `deEssDb`, so it needs no threshold per phone; while it cuts,
+  nothing is over 0.05 ms late. Neither reads ahead, so the first millisecond of a pop or an s
+  passes. Air is a high shelf at 10 kHz that lifts by `airDb`, hiss included.
+- Off, the tone stage crosses to the untouched voice over a block and then does no work: the slot
+  is bit for bit what it is with no stage. On with no bands and every amount at 0 it is the same.
+  A change of bands, of an amount or of on and off ramps and never steps.
+- `stats()` gives each slot `tone`: where the match's filters stand and how much singing it has
+  counted, the most the de-esser took off in the last second, and how many pops the guard has
+  ducked. A session bundle (8.11) holds each `setSlotEffects` call with its bands and `stats()`
+  once a second, so a replay runs the profile the song ran and a scorecard reads what the stage
+  did.
 
 Done when: the corrector through its shim pulls harmonic tones from 82 to 880 Hz onto the asked
 pitch class within the tolerances the C++ tests use; the stretcher moves a tone by the asked
@@ -1103,7 +1206,19 @@ leaves the slot on the frame it entered, `measure-latency` reads the mic path ag
 the gate takes at least 15 dB off a room between lines without moving a soft note by 1 dB, and a
 12 dB level swing comes out 5 dB wide; on the offline driver, the canceller takes a room's echo
 out of a house mic by the tolerances in decision 0020, the singer in the master and singing, and
-the guard catches a loop running away.
+the guard catches a loop running away; the tone stage off, or on with no bands and every amount
+at 0, is bit-identical to no stage; a click leaves on the sample it entered with bands at the
+cap, the match moved, the plosive guard ducking and the de-esser cutting; tones from 80 Hz to
+16 kHz through bands and air at the cap come out at most 0.2 ms late, and 0.4 with the guard held
+at its deepest; each band is within 0.1 dB of the cookbook's curve; `check` refuses a cascade
+over either cap by the frequency it breaks at; every `Pitch` and `Level` event is the same with
+the stage on as off; at `plosiveDb` 12 a pop loses at least 6 dB under 100 Hz and a held 82 Hz
+note moves by under 1 dB; at `deEssDb` 6 an s 10 dB hot loses at least 4 dB over 5 kHz and a
+vowel moves by under 0.5 dB; the match, given a voice through a known tilt, comes back toward its
+target inside its rate and range, holds through silence, noise and a backing track alone, moves
+nothing in its first 5 s and starts over on `resetSlot`; all of it runs under the allocation
+guard; and on the bench's paired recordings the rows decision 0029 names show each test phone
+nearer the reference mic with the stage on, by an amount the PR states, and no other row worse.
 
 ### 8.7 Return branch: `engine/src/return_ring.rs`, the push in `engine/src/master.rs`, `transport/src/{packetizer,send}.rs`
 
@@ -1150,9 +1265,10 @@ output is the evidence a PR quotes.
 
 A new ingest kind is a variant of `Ingest`, and a new stage on the mic path that holds samples,
 such as correction, is a new row in the offline table with its own guard. A stage that holds none,
-such as the voice, the echo canceller or the howl guard, proves it instead with a test that a click
-leaves on the sample it entered while the stage is engaged: shaping a voice, cancelling an echo it
-has learned, or ducking. The offline table's chirp would not engage them, so a row would show
+such as the voice, the tone stage, the echo canceller or the howl guard, proves it instead with a
+test that a click leaves on the sample it entered while the stage is engaged: shaping a voice,
+cancelling an echo it has learned, or ducking. The tone stage also shifts phase where it changes
+level, so its test measures tones against its cap as well (8.6). The offline table's chirp would not engage them, so a row would show
 nothing the test does not.
 
 `native/tools/measure-corrector` opens no device. It runs the corrector through the real slot
@@ -1271,7 +1387,8 @@ reasons.
 - **Where it applies.** `openEngine` takes it for the engine's life. `periodFrames` and
   `playoutDelayMs`, given, win over it, and `Engine.profile` reads back the result. A slot starts
   at the profile's gain and pan with every effect off. `setSlotEffects` fills each parameter a
-  call leaves out from the profile, and `createMixer` each stem gain.
+  call leaves out from the profile, and `createMixer` each stem gain. The tone stage's amounts
+  have no value in it yet: left out, each is 0 (8.6).
 - **Nothing a host does today changes.** Every field that becomes optional was required, and a
   call that names it means what it meant.
 - **`parseProfile`** checks each value against the range its setter does, and refuses a missing
@@ -1365,6 +1482,10 @@ Each is deliberate and here so no one reverts it by accident.
   three tracks before paying for a licence.
 - Stem storage on a LAN box: planar f32 is about 23 MB per stem minute; int16 storage or
   streaming decode if a box cannot hold two stems.
+- Whether a capture profile may warm a phone's low end past the tone stage's cap: a 6 dB low shelf
+  at 200 Hz leaves 95 Hz 0.53 ms late. That is a cost on the mic path, so it takes a listen on the
+  bench's pairs that says the warmth is worth it. The same pairs decide whether the match is good
+  enough to be a host's default, and whether a capture with no top octave needs an exciter.
 - Choosing a slot's delay before `start`, from the packets a phone already sends to an armed mixer,
   so the first ten seconds of a song have the chosen delay too. Nothing here measures how long a
   mixer sits armed yet.
