@@ -400,7 +400,7 @@ pub struct Shared<'a> { pub any_solo: bool, pub cue: Cue, pub history: &'a EchoH
 impl Master { pub fn history(&self) -> &EchoHistory; }   // what the graph has sent to the device, pushed after the clipper every block
 
 // engine/src/ingest/
-pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub len: u16, pub payload: [u8; 1500] }
+pub struct Packet { pub seq: u16, pub timestamp: u32, pub ssrc: u32, pub marker: bool, pub from: SocketAddr, pub len: u16, pub payload: [u8; 1500] }   // from: the sender's address, which the receiver fills; Packet::new leaves it unspecified
 pub fn packet_ring(capacity: usize) -> (PacketProducer, PacketConsumer);   // SPSC, fixed-size
 pub enum Codec { Opus(OpusDecoder), L16 }   // Codec::opus() creates the decoder, on the control thread
 pub struct JitterBuffer;   // new(playout_delay_frames, codec) pins the delay; chosen(codec) lets each stream choose; push(&Packet); pull one block of f32 mono; stats(); shared_stats() for the control thread
@@ -413,7 +413,7 @@ pub struct SlotStats { pub pushed: u32, pub lost: u32, pub late: u32, pub late_a
 /// What the network thread runs: one socket under one token, serviced on readiness and ticked after every poll, at least every 5 ms.
 pub trait Task: Send + 'static { fn register(&mut self, registry: &Registry, token: Token) -> io::Result<()>; fn deregister(&mut self, registry: &Registry) -> io::Result<()>; fn ready(&mut self); fn tick(&mut self) {} }
 pub struct Network;        // spawn(); add(impl Task) -> TaskHandle, whose drop removes the task; drop stops the thread
-pub struct Receiver;       // a Task: bind(ip: Ipv4Addr, PacketProducer) at a port of the OS's choice; port(); switch() -> RecordSwitch, taken before the task is added
+pub struct Receiver;       // a Task: bind(ip: Ipv4Addr, PacketProducer) at a port of the OS's choice, putting each datagram's source address on its packet; port(); switch() -> RecordSwitch, taken before the task is added
 pub struct RecordSwitch;   // the control thread's hold on a receiver's recording: set(Some(Tap)) starts one, set(None) ends it; 8.4
 pub struct Recording;      // create(path, port) -> (Recording, Tap): a new pcap file and the writer thread that appends to it; finish() waits for it to close
 pub struct Tap;            // the network thread's end: record(datagram, from, at) copies into a fixed ring and never blocks or wakes anyone; dropping it ends the recording
@@ -598,8 +598,10 @@ export interface Mixer {
   setSlotEffects(index: number, effects: ReadonlyArray<SlotEffect>): void;
   setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number): void;
   /**
-   * Forget the stream a slot was hearing; the next packets are a new singer. On a `capture` slot it
-   * resets the corrector only: the input is the same device, and its ring keeps its fill.
+   * Forget the stream a slot was hearing; the next packets are a new singer. Call it whenever a
+   * slot's sender changes: the sender it released is turned away until it has been quiet a second
+   * (8.4). On a `capture` slot it resets the corrector only: the input is the same device, and its
+   * ring keeps its fill.
    */
   resetSlot(index: number): void;
   /**
@@ -884,9 +886,17 @@ should reach that slot.
   over with it.
   Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
   keeps the FIFO at one frame.
-- A new SSRC, a gap over a second on either clock, or `resetSlot` starts a new stream: the
-  buffer re-anchors and the slot's corrector resets. A gap is a second without a packet, or a
-  timestamp a second away from where the stream is; the second one is a sender that paused.
+- A slot keeps its sender. The receiver puts each datagram's source address on its packet, and
+  the address of the first packet a slot takes holds it: a packet from another address is
+  dropped before it touches the stream, counted nowhere. `resetSlot` or a second without a packet
+  from the sender frees the slot, and the next packet from any address takes it, except the
+  sender `resetSlot` released, which is refused until it has been quiet a second. A move to
+  another output ends the stream and keeps the sender. Decision
+  [0028](decisions/0028-keeping-the-sender.md) has the reasons and what it leaves open.
+- A new SSRC from the slot's sender, a gap over a second on either clock, or `resetSlot` starts
+  a new stream: the buffer re-anchors and the slot's corrector resets. A gap is a second without
+  a packet, or a timestamp a second away from where the stream is; the second one is a sender
+  that paused.
   A stream quiet for a second stops concealing, so an idle slot costs no decodes.
 - Decoding happens in the callback, bounded to the packets due this block. The decoder is
   created on the control thread; libopus allocates nothing after that.
@@ -1179,7 +1189,11 @@ songs can be compared by. Decision [0026](decisions/0026-the-session-bundle.md) 
 It is the Binding and API workstream's, with 8.8 and 8.9 (section 10). In files it does not own it
 adds one line each and changes nothing else: the frame count's store in
 `engine/src/audio_thread.rs`, which is 8.1's, and the zeroed sender address in
-`transport/src/record/`, which is 8.4's.
+`transport/src/record/`, which is 8.4's. 8.4 in turn passes each datagram's source to
+`packet_from` at its call sites in `tools/replay`, and `replay` says when a capture has more
+than one sender, since the slot plays one at a time and the libopus reference decodes them all
+(decision 0028). In 8.8's `src/mixer.ts`, 8.4 keeps `resetSlot`'s comment saying what the
+released sender meets, as 7.2 does.
 
 ```
 <dir>/
@@ -1332,9 +1346,9 @@ Each is deliberate and here so no one reverts it by accident.
   zero latency.
 - **One live mixer.** The device runs one room, so the engine hosts one live graph and any
   number of mixers being armed.
-- **No `relinkSlot`.** A slot's port is stable. A new sender is a new SSRC, which re-anchors
-  the jitter buffer and resets the corrector. `resetSlot` exists for the host that wants to
-  force it.
+- **No `relinkSlot`.** A slot's port is stable. A phone that rejoins sends a new SSRC, which
+  re-anchors the jitter buffer and resets the corrector, at once from the same address and after
+  the old stream's second of quiet from a new one. `resetSlot` frees the slot at once.
 - **Decode in the callback.** Decoding on the network thread would need one more buffer between
   the two threads. Decoding a due packet in the callback costs tens of microseconds and no
   latency.
