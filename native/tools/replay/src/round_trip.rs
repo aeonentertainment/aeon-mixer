@@ -19,6 +19,9 @@ use crate::stream::{Arrival, Stream};
 const FRAME: usize = 960;
 const DELAY: u32 = RATE * 15 / 1000;
 const PORT: u16 = 40_000;
+/// The one sender in a round trip, live and recorded alike.
+const PHONE: SocketAddr =
+    SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 168, 1, 30), 50_000));
 
 /// A harmonic voice in `on` seconds of singing and `off` of silence, so DTX has pauses to take.
 fn voice(seconds: f32, on: f32, off: f32) -> Vec<f32> {
@@ -101,7 +104,7 @@ fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<Sent> {
 fn live(sent: &[Sent]) -> Vec<Arrival> {
     sent.iter()
         .filter_map(|s| {
-            Some(Arrival { at: s.at, packet: transport::receive::packet_from(&s.datagram)? })
+            Some(Arrival { at: s.at, packet: transport::receive::packet_from(&s.datagram, PHONE)? })
         })
         .collect()
 }
@@ -112,12 +115,11 @@ fn recorded(sent: &[Sent], name: &str) -> (Stream, Written) {
     let path = std::env::temp_dir().join(format!("aeon-replay-{}-{name}.pcap", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let (recording, mut tap) = Recording::create(&path, PORT).unwrap();
-    let from = SocketAddr::from(([192, 168, 1, 30], 50_000));
     let base = Instant::now();
     for s in sent {
         let at =
             base + Duration::from_nanos((s.at as u64 * 1_000_000_000).div_ceil(u64::from(RATE)));
-        assert_no_alloc::assert_no_alloc(|| tap.record(&s.datagram, from, at));
+        assert_no_alloc::assert_no_alloc(|| tap.record(&s.datagram, PHONE, at));
     }
     drop(tap);
     let written = recording.finish().unwrap();

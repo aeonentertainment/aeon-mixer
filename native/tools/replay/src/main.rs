@@ -103,6 +103,13 @@ fn run(options: &Options) -> Result<(), String> {
     let senders: Vec<String> =
         stream.senders.iter().map(|(ip, port)| format!("{ip}:{port}")).collect();
     println!("from {}", senders.join(", "));
+    if senders.len() > 1 {
+        // Decision 0028: the slot takes one address at a time, and the capture holds no resetSlot
+        println!(
+            "several senders: the slot plays one at a time and libopus alone decodes them all, so \
+             their levels can differ by what the slot refused"
+        );
+    }
     let s = replayed.stats;
     println!(
         "slot stats: pushed {} lost {} late {} concealed {} resyncs {} jitter {:.2} ms, ring full {}",
