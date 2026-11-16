@@ -236,7 +236,8 @@ export class Mixer {
 
   /**
    * Forget the stream a slot was hearing; the next packets, or the next pushed audio, are a new
-   * singer. An armed mixer has heard nothing yet, so there is nothing to forget.
+   * singer. Call it whenever a slot's sender changes: the sender it released is turned away until
+   * it has been quiet a second. An armed mixer has heard nothing yet, so there is nothing to forget.
    */
   resetSlot(index: number) {
     const slot = this.#slot(index);
