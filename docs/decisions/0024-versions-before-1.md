@@ -1,15 +1,15 @@
 # 0024: Before 1.0, a breaking change takes the next minor version
 
-**Status:** proposed, 2026-11-14. Needs the developer's agreement: it is how never-compromise rule
-4 in AGENTS.md reads until 1.0.
+**Status:** accepted, 2026-11-15, with the developer's agreement: it is how never-compromise rule 4
+in AGENTS.md reads until 1.0.
 
 ## The problem
 
 Rule 4 says a breaking change to an exported type or behaviour is "a deliberate major bump with a
 note in the decision log". The package is at 0.x, and the releases so far read "major" as the
 minor number without saying so anywhere: 0007 and 0009 each mention it in passing for one change.
-0.8.0 removes `Engine` as a value export (#169), the first change that breaks code using the API as
-it was, so the reading needs to be written down before it ships.
+0.8.0 removes `Engine` as a value export (#169), the first release to remove an export, so the
+reading needs to be written down before it ships.
 
 ## Decision
 
