@@ -68,20 +68,20 @@ pub struct JitterBuffer {
     streams: u32,
     /// Output frames pulled since the buffer was made: the clock every due time is on.
     now: i64,
-    /// The one address the slot takes packets from, until it has been quiet a second.
-    sender: Option<Heard>,
-    /// The sender `reset` released, turned away until it has been quiet a second, so a packet
+    /// The one address with a claim on the slot, until it has been quiet a second: decision 0028.
+    /// It holds the slot, and once `reset` releases it, it is turned away instead, so a packet
     /// still in flight from it cannot take the slot from the next singer.
-    released: Option<Heard>,
+    holder: Option<Heard>,
     stats: SlotStats,
     shared: Arc<SharedStats>,
 }
 
-/// An address and the output frame it last sent at.
+/// An address, the output frame it last sent at, and whether `reset` released it.
 #[derive(Clone, Copy)]
 struct Heard {
     from: SocketAddr,
     at: i64,
+    released: bool,
 }
 
 struct Stream {
@@ -153,8 +153,7 @@ impl JitterBuffer {
             spliced: 0,
             streams: 0,
             now: 0,
-            sender: None,
-            released: None,
+            holder: None,
             stats,
             shared,
         }
@@ -191,8 +190,8 @@ impl JitterBuffer {
     /// `ResetSlot`: forget the stream and release its sender. The next packet is a new singer
     /// and re-anchors.
     pub fn reset(&mut self) {
-        if let Some(sender) = self.sender.take() {
-            self.released = Some(sender);
+        if let Some(holder) = &mut self.holder {
+            holder.released = true;
         }
         self.restart();
     }
@@ -210,7 +209,7 @@ impl JitterBuffer {
         if self.refuses(packet) {
             return;
         }
-        self.sender = Some(Heard { from: packet.from, at: self.now });
+        self.holder = Some(Heard { from: packet.from, at: self.now, released: false });
         self.stats.pushed += 1;
         let Some(stream) = &mut self.stream else { return self.anchor(packet) };
         if packet.ssrc != stream.ssrc {
@@ -303,19 +302,17 @@ impl JitterBuffer {
         self.shared.publish(&self.stats);
     }
 
-    /// Another address than the sender's, or the released sender's: decision 0028. A refused
-    /// packet from the released sender starts its second of quiet again.
+    /// Another address than the holder's, or the holder's once it is released: decision 0028. A
+    /// refused packet from a released holder starts its second of quiet again.
     fn refuses(&mut self, packet: &Packet) -> bool {
-        if self.sender.is_some_and(|sender| sender.from != packet.from) {
-            return true;
+        let Some(holder) = &mut self.holder else { return false };
+        if holder.from != packet.from {
+            return !holder.released;
         }
-        match &mut self.released {
-            Some(released) if released.from == packet.from => {
-                released.at = self.now;
-                true
-            }
-            _ => false,
+        if holder.released {
+            holder.at = self.now;
         }
+        holder.released
     }
 
     /// Nothing for a second ends the stream, so an idle slot stops concealing and costs no
@@ -327,11 +324,8 @@ impl JitterBuffer {
         if self.stream.as_ref().is_some_and(|stream| quiet(stream.last_arrival)) {
             self.restart();
         }
-        if self.sender.is_some_and(|sender| quiet(sender.at)) {
-            self.sender = None;
-        }
-        if self.released.is_some_and(|released| quiet(released.at)) {
-            self.released = None;
+        if self.holder.is_some_and(|holder| quiet(holder.at)) {
+            self.holder = None;
         }
     }
 
