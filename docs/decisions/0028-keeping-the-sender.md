@@ -28,9 +28,15 @@ Once a slot plays a stream, it plays only that stream's sender, until the stream
   channel leaves its slot. A second with no packet from the sender ends it as it always has
   (`REANCHOR_GAP`), and the next packet from any address anchors a new one. Opus DTX sends
   through a pause, so a singer who stops singing keeps the slot.
+- **`resetSlot` turns the old sender away.** After a reset, the sender it released is refused
+  until it has been quiet a second, and each packet it sends meanwhile starts that second again.
+  Without this, a packet still in flight from the old phone, or an old phone that missed its
+  leave and keeps sending, would anchor the freed slot first and lock the next singer out. Any
+  other address anchors at once.
 - **The audio thread holds it.** The stream, the gap and `resetSlot` all live in the jitter
   buffer already, so the lock is one comparison there and no new signal crosses between the
-  threads.
+  threads. The buffer ends a quiet stream, and forgets a quiet released sender, in one place at
+  the end of each block, so a packet never meets a stream that is already over.
 - **No new API, one changed behaviour.** The host passes nothing new and no exported type
   changes. A slot now changes hands at once only through `resetSlot`. Before, a new phone's SSRC
   took the slot whether the host reset it or not, so a host that hands a slot over without
@@ -49,6 +55,10 @@ is refused until its old stream has been quiet a second, then anchors as a new s
 singer loses up to a second, concealed, that a same-SSRC move used to play through. A rejoin
 with a new SSRC re-anchored before this too; the change is the second's wait.
 
+A phone handed back the slot it was just reset out of waits for the same second of quiet, since
+the slot cannot tell it from a straggler. That costs only a phone that keeps sending across the
+handover.
+
 ## mediasoup and RTCP
 
 mediasoup sends each slot from one PlainTransport on loopback, from a fixed address, so it holds
@@ -61,6 +71,12 @@ type in the receiver, before a packet exists to compare.
   `resetSlot` or a second's quiet.
 - **A spoofed source address gets through.** A sender on the LAN that writes the phone's address
   and port into its datagrams looks like the phone.
+- **Replay sees what a capture holds.** A `recordSlot` capture keeps each sender's address, so a
+  replay of it refuses a second sender as the slot did. It holds no `resetSlot`, so a handover in
+  it replays as the second's wait. The libopus reference `replay` prints beside the slot decodes
+  every sender, and `replay` says so when a capture has more than one. A session bundle's pcaps
+  write 0.0.0.0 for a sender's IP (8.11), so a bundle replays the slot as live only while the
+  port still tells its senders apart: #204.
 - **A flood still costs.** Refused packets fill the slot's ring before the audio thread drops
   them, so a flood can crowd out the singer's packets. That is a denial of service, not a
   takeover, and outside this decision.

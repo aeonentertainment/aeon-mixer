@@ -887,7 +887,8 @@ should reach that slot.
 - A stream keeps its sender. The receiver puts each datagram's source address on its packet,
   and while a stream plays, a packet from another address is dropped before it touches the
   stream, counted nowhere. The slot is free again when the stream ends, by `resetSlot` or a
-  second's gap, and the next packet from any address anchors. Decision
+  second's gap, and the next packet from any address anchors, except the sender `resetSlot`
+  released, which is refused until it has been quiet a second. Decision
   [0028](decisions/0028-keeping-the-sender.md) has the reasons and what it leaves open.
 - A new SSRC from the stream's sender, a gap over a second on either clock, or `resetSlot` starts
   a new stream: the buffer re-anchors and the slot's corrector resets. A gap is a second without
@@ -1185,7 +1186,10 @@ songs can be compared by. Decision [0026](decisions/0026-the-session-bundle.md) 
 It is the Binding and API workstream's, with 8.8 and 8.9 (section 10). In files it does not own it
 adds one line each and changes nothing else: the frame count's store in
 `engine/src/audio_thread.rs`, which is 8.1's, and the zeroed sender address in
-`transport/src/record/`, which is 8.4's.
+`transport/src/record/`, which is 8.4's. 8.4 in turn passes each datagram's source to
+`packet_from` at its call sites in `tools/replay`, and `replay` says when a capture has more
+than one sender, since the slot plays one at a time and the libopus reference decodes them all
+(decision 0028).
 
 ```
 <dir>/
