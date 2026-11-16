@@ -1192,7 +1192,8 @@ adds one line each and changes nothing else: the frame count's store in
 `transport/src/record/`, which is 8.4's. 8.4 in turn passes each datagram's source to
 `packet_from` at its call sites in `tools/replay`, and `replay` says when a capture has more
 than one sender, since the slot plays one at a time and the libopus reference decodes them all
-(decision 0028).
+(decision 0028). In 8.8's `src/mixer.ts`, 8.4 keeps `resetSlot`'s comment saying what the
+released sender meets, as 7.2 does.
 
 ```
 <dir>/
