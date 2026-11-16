@@ -6,10 +6,12 @@
 //! sequence number; RFC 3551 4.1 has a pause hold the sequence number while the timestamp runs on.
 //! A packet arriving after its time is counted late and dropped, and the stream plays on. Clock
 //! skew is corrected one frame at a time, by moving the anchor a frame and dropping or concealing
-//! the frame that makes. A new SSRC, a gap over a second on either clock, or `reset` starts a new
-//! stream.
+//! the frame that makes. A stream plays only its sender's packets, so another address cannot take
+//! it over; a new SSRC from that sender, a gap over a second on either clock, or `reset` starts a
+//! new stream, and the next packet from any address anchors it.
 //! A buffer made with `chosen` lets each stream move its own delay, as `DelayChooser` decides.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use super::codec::Codec;
@@ -71,6 +73,8 @@ pub struct JitterBuffer {
 }
 
 struct Stream {
+    /// The only address the stream takes packets from, until it ends: decision 0028.
+    from: SocketAddr,
     ssrc: u32,
     anchor_ts: u32,
     /// The output frame `anchor_ts` plays at. It moves only by a skew correction, one frame.
@@ -181,6 +185,9 @@ impl JitterBuffer {
 
     /// Takes one packet from the ring, on the audio thread.
     pub fn push(&mut self, packet: &Packet) {
+        if self.stream.as_ref().is_some_and(|stream| stream.refuses(packet, self.now)) {
+            return;
+        }
         self.stats.pushed += 1;
         let Some(stream) = &mut self.stream else { return self.anchor(packet) };
         if packet.ssrc != stream.ssrc || self.now - stream.last_arrival > REANCHOR_GAP {
@@ -288,6 +295,7 @@ impl JitterBuffer {
         self.playout_delay = self.opening;
         let plays_at = self.now + self.playout_delay;
         let mut stream = Stream {
+            from: packet.from,
             ssrc: packet.ssrc,
             anchor_ts: packet.timestamp,
             anchor_out: plays_at,
@@ -417,6 +425,11 @@ fn fill(
 }
 
 impl Stream {
+    /// Another sender's packet, while this stream still plays: dropped and counted nowhere.
+    fn refuses(&self, packet: &Packet, now: i64) -> bool {
+        packet.from != self.from && now - self.last_arrival <= REANCHOR_GAP
+    }
+
     fn owns(&self, packet: &Packet, seq: u16) -> bool {
         packet.ssrc == self.ssrc && packet.seq == seq
     }
@@ -804,6 +817,61 @@ mod tests {
         let fit = compare(&signal, 0, &out, anchor_of(&arrivals[200..]), 0);
         assert!(fit.error < 1e-6, "{fit:?}");
         assert_eq!(jitter.stats().resyncs, 1);
+    }
+
+    const PHONE: SocketAddr = SocketAddr::V4(std::net::SocketAddrV4::new(
+        std::net::Ipv4Addr::new(192, 168, 1, 20),
+        50_000,
+    ));
+    const LAPTOP: SocketAddr = SocketAddr::V4(std::net::SocketAddrV4::new(
+        std::net::Ipv4Addr::new(192, 168, 1, 77),
+        41_000,
+    ));
+
+    fn sent_from(arrivals: Vec<Arrival>, from: SocketAddr) -> Vec<Arrival> {
+        arrivals.into_iter().map(|a| Arrival { packet: Packet { from, ..a.packet }, ..a }).collect()
+    }
+
+    /// A second sender on the singer's port mid-song, with its own sound and either its own SSRC
+    /// or the singer's: the room hears only the singer, and the stream is never re-anchored.
+    #[test]
+    fn another_sender_never_takes_a_playing_stream() {
+        let song = quantized(&source(2 * RATE as usize));
+        let singer = sent_from(L16Sender::new(240, 40).send_all(&song, 0, 1.0), PHONE);
+        let sound = quantized(&voice(RATE as usize));
+        for ssrc in [41, 40] {
+            let intruder = L16Sender::new(240, ssrc).send_all(&sound, SECOND / 2, 1.0);
+            let mut arrivals = [singer.clone(), sent_from(intruder, LAPTOP)].concat();
+            arrivals.sort_by_key(|a| a.at);
+            let mut rig = Rig::new(Codec::L16);
+            rig.run(&arrivals, 2 * SECOND + 4800);
+            let fit = compare(&song, 0, &rig.out, anchor_of(&singer), 0);
+            assert!(fit.error < 1e-6, "SSRC {ssrc}: {fit:?}");
+            let stats = rig.stats();
+            assert_eq!(stats.resyncs, 0, "SSRC {ssrc}: {stats:?}");
+            assert_eq!(stats.pushed, singer.len() as u32, "the intruder's packets count nowhere");
+        }
+    }
+
+    /// The slot is free again once its stream ends: a new singer on another address after
+    /// `resetSlot`, then the first singer back from a new address after a second's quiet, as a
+    /// phone that changed networks is.
+    #[test]
+    fn the_slot_takes_a_new_sender_once_its_stream_ends() {
+        let roamed = SocketAddr::from(([10, 0, 0, 20], 50_002));
+        let verse = quantized(&source(RATE as usize));
+        let first = sent_from(L16Sender::new(240, 50).send_all(&verse, 0, 1.0), PHONE);
+        let next = sent_from(L16Sender::new(240, 51).send_all(&verse, SECOND + 4800, 1.0), LAPTOP);
+        let back = sent_from(L16Sender::new(240, 52).send_all(&verse, 7 * SECOND / 2, 1.0), roamed);
+        let arrivals = [first, next.clone(), back.clone()].concat();
+        let mut rig = Rig::new(Codec::L16);
+        rig.run(&arrivals, SECOND + 2400);
+        rig.reset_slot();
+        rig.run(&arrivals, 5 * SECOND);
+        for (who, sent) in [("after resetSlot", &next), ("after a second's quiet", &back)] {
+            let fit = compare(&verse, 0, &rig.out, anchor_of(sent), 0);
+            assert!(fit.error < 1e-6, "{who}: {fit:?}");
+        }
     }
 
     #[test]
