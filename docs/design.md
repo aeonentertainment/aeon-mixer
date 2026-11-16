@@ -884,13 +884,14 @@ should reach that slot.
   over with it.
   Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
   keeps the FIFO at one frame.
-- A stream keeps its sender. The receiver puts each datagram's source address on its packet,
-  and while a stream plays, a packet from another address is dropped before it touches the
-  stream, counted nowhere. The slot is free again when the stream ends, by `resetSlot` or a
-  second's gap, and the next packet from any address anchors, except the sender `resetSlot`
-  released, which is refused until it has been quiet a second. Decision
+- A slot keeps its sender. The receiver puts each datagram's source address on its packet, and
+  the address of the first packet a slot takes holds it: a packet from another address is
+  dropped before it touches the stream, counted nowhere. `resetSlot` or a second without a packet
+  from the sender frees the slot, and the next packet from any address takes it, except the
+  sender `resetSlot` released, which is refused until it has been quiet a second. A move to
+  another output ends the stream and keeps the sender. Decision
   [0028](decisions/0028-keeping-the-sender.md) has the reasons and what it leaves open.
-- A new SSRC from the stream's sender, a gap over a second on either clock, or `resetSlot` starts
+- A new SSRC from the slot's sender, a gap over a second on either clock, or `resetSlot` starts
   a new stream: the buffer re-anchors and the slot's corrector resets. A gap is a second without
   a packet, or a timestamp a second away from where the stream is; the second one is a sender
   that paused.

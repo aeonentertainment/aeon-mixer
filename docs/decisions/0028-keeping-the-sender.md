@@ -17,17 +17,20 @@ unauthenticated sender can do inside that model. It is not authentication.
 Once a slot plays a stream, it plays only that stream's sender, until the stream ends.
 
 - **The sender is the address.** The receiver puts each datagram's source address on the packet
-  it pushes, and the jitter buffer keeps the address with the stream it anchors. The SSRC is no
-  sender's proof: it is a field in the packet that anyone can copy.
-- **Another address is refused.** While a stream plays, a packet from another address is
-  dropped before it touches the stream. It counts in no stat, and it does not keep the stream
-  alive.
+  it pushes, and the jitter buffer holds the address of the first packet it takes as the slot's
+  sender. The SSRC is no sender's proof: it is a field in the packet that anyone can copy.
+- **Another address is refused.** While the sender holds the slot, a packet from another
+  address is dropped before it touches the stream. It counts in no stat, and it does not keep
+  the stream alive.
 - **The same address, a new SSRC,** is the same phone starting its stream over, and re-anchors at
   once, as before.
-- **Ending a stream frees the slot.** `resetSlot` ends it at once, which Aeon Karaoke calls when a
-  channel leaves its slot. A second with no packet from the sender ends it as it always has
-  (`REANCHOR_GAP`), and the next packet from any address anchors a new one. Opus DTX sends
-  through a pause, so a singer who stops singing keeps the slot.
+- **Two things free the slot.** `resetSlot` frees it at once, which Aeon Karaoke calls when a
+  channel leaves its slot. A second with no packet from the sender frees it too, the same second
+  that ends a stream (`REANCHOR_GAP`), and the next packet from any address anchors a new one.
+  Opus DTX sends through a pause, so a singer who stops singing keeps the slot.
+- **A move keeps the sender.** A move to another output ends the stream, since the stopped
+  clock paced it, and keeps its sender, whose next packet re-anchors. Another address cannot take
+  the slot in the gap the move makes. Before this, a move ran the slot's reset.
 - **`resetSlot` turns the old sender away.** After a reset, the sender it released is refused
   until it has been quiet a second, and each packet it sends meanwhile starts that second again.
   Without this, a packet still in flight from the old phone, or an old phone that missed its
@@ -35,8 +38,8 @@ Once a slot plays a stream, it plays only that stream's sender, until the stream
   other address anchors at once.
 - **The audio thread holds it.** The stream, the gap and `resetSlot` all live in the jitter
   buffer already, so the lock is one comparison there and no new signal crosses between the
-  threads. The buffer ends a quiet stream, and forgets a quiet released sender, in one place at
-  the end of each block, so a packet never meets a stream that is already over.
+  threads. The buffer ends a quiet stream and frees a quiet sender or released sender in one place,
+  at the end of each block, so a packet never meets a stream that is already over.
 - **No new API, one changed behaviour.** The host passes nothing new and no exported type
   changes. A slot now changes hands at once only through `resetSlot`. Before, a new phone's SSRC
   took the slot whether the host reset it or not, so a host that hands a slot over without
