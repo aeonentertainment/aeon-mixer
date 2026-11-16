@@ -32,11 +32,13 @@ such range by itself, which is the side effect rule 4 forbids.
 
 ## Breaking changes
 
-| Release | Change                                                                                                                                               | Record                    |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| 0.8.0   | `Engine` is exported as a type only. `new Engine()` and `instanceof Engine` no longer work; `openEngine` is how an engine is made, as it always was. | #169, design.md section 7 |
-| 0.7.0   | `OutputInfo` gains a required `refused` field, which a hand-built fake must add.                                                                     | #155, #156                |
-| 0.6.0   | `IngestKind` gains `"capture"`, so a switch over every kind needs a case; `close()` releases every mixer the engine still holds.                     | #109                      |
-| 0.5.0   | A slot that doesn't pin `playoutDelayMs` chooses its own delay, so the default moves.                                                                | 0007                      |
-| 0.4.0   | `OutputInfo` gains a required `device` field.                                                                                                        | #104                      |
-| 0.3.0   | Pitch correction engages when a slot asks for it; until then the engine forced it off.                                                               | 0009                      |
+| Release | Change                                                                                                                                                                                             | Record                    |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 0.8.0   | `Engine` is exported as a type only. `new Engine()` and `instanceof Engine` no longer work; `openEngine` is how an engine is made, as it always was.                                               | #169, design.md section 7 |
+| 0.8.0   | An `rtp` slot keeps the sender it is receiving from. A new sender waits for the old one's second of quiet unless the host calls `resetSlot`, so call `resetSlot` whenever a slot's sender changes. | #203, 0028                |
+| 0.8.0   | An `l16` slot listens on `127.0.0.1` only, so an `l16` sender on another machine no longer reaches it.                                                                                             | #194, #195                |
+| 0.7.0   | `OutputInfo` gains a required `refused` field, which a hand-built fake must add.                                                                                                                   | #155, #156                |
+| 0.6.0   | `IngestKind` gains `"capture"`, so a switch over every kind needs a case; `close()` releases every mixer the engine still holds.                                                                   | #109                      |
+| 0.5.0   | A slot that doesn't pin `playoutDelayMs` chooses its own delay, so the default moves.                                                                                                              | 0007                      |
+| 0.4.0   | `OutputInfo` gains a required `device` field.                                                                                                                                                      | #104                      |
+| 0.3.0   | Pitch correction engages when a slot asks for it; until then the engine forced it off.                                                                                                             | 0009                      |
