@@ -31,7 +31,13 @@ Once a slot plays a stream, it plays only that stream's sender, until the stream
 - **The audio thread holds it.** The stream, the gap and `resetSlot` all live in the jitter
   buffer already, so the lock is one comparison there and no new signal crosses between the
   threads.
-- **No API change.** The host passes nothing new.
+- **No new API, one changed behaviour.** The host passes nothing new and no exported type
+  changes. A slot now changes hands at once only through `resetSlot`. Before, a new phone's SSRC
+  took the slot whether the host reset it or not, so a host that hands a slot over without
+  `resetSlot` now waits for the old phone's second of quiet, and waits for good if the old phone
+  keeps sending. That breaks such a host, so the change ships in the next minor release, and its
+  notes say to call `resetSlot` when a slot changes hands. Aeon Karaoke already calls it when a
+  channel leaves its slot.
 
 ## Roaming and rejoining
 
