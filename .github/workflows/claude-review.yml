@@ -13,8 +13,10 @@
 # --permission-mode default keeps --allowedTools the whole list: the action's own
 # default, auto, lets a safety review run calls that no rule allows.
 #
-# One review of each kind per PR: it runs when the PR opens, leaves draft or is reopened,
-# never on a push. Close and reopen a PR to review it again.
+# Every push is reviewed again, and a newer push cancels the review of an older one, so
+# the reviews on a PR are always of its head. The job runs on a GitHub-hosted runner: it
+# only calls APIs, and a review that waits behind the build queue finds the head has moved
+# and is refused by the action.
 #
 # Required repo secrets, one per author, each from `claude setup-token` run by
 # that person: CLAUDE_CODE_OAUTH_TOKEN_<github login>, looked up
@@ -25,7 +27,7 @@ name: claude-review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened, synchronize]
 
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
@@ -37,7 +39,7 @@ jobs:
   review:
     # Drafts get no review, and a fork's PR has no secrets to review with.
     if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -71,6 +73,20 @@ jobs:
       # working tree before it installs its own, so checkout must persist it.
       - if: steps.token.outputs.present == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every earlier review thread on this PR, with its answers and whether it is resolved,
+      # so a review of a later push does not repeat what is already there. The reviewer
+      # cannot read threads itself: its tools have no gh api.
+      - if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # shellcheck disable=SC2016 # the query and the jq program are literals
+          gh api graphql -F owner="${REPO%/*}" -F name="${REPO#*/}" -F pr="$PR" \
+            -f query='query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100){nodes{path line isResolved comments(first:20){nodes{author{login} body}}}}}}}' \
+            --jq '.data.repository.pullRequest.reviewThreads.nodes[] | "## \(.path):\(.line // "outdated") (\(if .isResolved then "resolved" else "open" end))\n" + ([.comments.nodes[] | "[\(.author.login)] \(.body[0:2000])"] | join("\n\n")) + "\n"' \
+            > .claude-review-history.md || echo "::warning::Could not read earlier review threads."
       - if: steps.token.outputs.present == 'true'
         uses: anthropics/claude-code-action@8a29bc6f0ae11a363721054b6739feba6adabe57 # v1
         with:
@@ -84,5 +100,6 @@ jobs:
             --model claude-opus-5-5
             --max-turns ${{ matrix.turns }}
             --permission-mode default
+            --append-system-prompt "This pull request may have been reviewed before. The file .claude-review-history.md in the working directory, when it has content, lists every earlier review thread: its file and line, each comment and reply, and whether it is resolved. Read it before you post. Post no finding that an existing thread already covers. Where a thread was answered and the head still has the defect, say so in your summary and open no new thread. A finding in code that was changed to answer an earlier thread starts its title with Second patch:."
             --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment"
             --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash(git:*),mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files"
