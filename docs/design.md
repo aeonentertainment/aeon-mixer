@@ -598,8 +598,10 @@ export interface Mixer {
   setSlotEffects(index: number, effects: ReadonlyArray<SlotEffect>): void;
   setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number): void;
   /**
-   * Forget the stream a slot was hearing; the next packets are a new singer. On a `capture` slot it
-   * resets the corrector only: the input is the same device, and its ring keeps its fill.
+   * Forget the stream a slot was hearing; the next packets are a new singer. Call it whenever a
+   * slot's sender changes: the sender it released is turned away until it has been quiet a second
+   * (8.4). On a `capture` slot it resets the corrector only: the input is the same device, and its
+   * ring keeps its fill.
    */
   resetSlot(index: number): void;
   /**

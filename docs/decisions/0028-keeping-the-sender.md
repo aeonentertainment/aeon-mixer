@@ -45,8 +45,10 @@ Once a slot plays a stream, it plays only that stream's sender, until the stream
   took the slot whether the host reset it or not, so a host that hands a slot over without
   `resetSlot` now waits for the old phone's second of quiet, and waits for good if the old phone
   keeps sending. That breaks such a host, so the change ships in the next minor release, and its
-  notes say to call `resetSlot` when a slot changes hands. Aeon Karaoke already calls it when a
-  channel leaves its slot.
+  notes say to call `resetSlot` whenever a slot's sender changes. Aeon Karaoke calls it when a
+  channel leaves its slot, but not when a phone moves from the mediasoup relay to sending
+  direct: that switch loses up to a second of the phone's audio, refused while the relay's
+  address still holds the slot, until Aeon Karaoke calls `resetSlot` after closing the relay.
 
 ## Roaming and rejoining
 
@@ -60,7 +62,8 @@ with a new SSRC re-anchored before this too; the change is the second's wait.
 
 A phone handed back the slot it was just reset out of waits for the same second of quiet, since
 the slot cannot tell it from a straggler. That costs only a phone that keeps sending across the
-handover.
+handover, and one that keeps sending, as DTX does through a pause, does not get the slot back
+until it stops.
 
 ## mediasoup and RTCP
 
@@ -71,7 +74,8 @@ type in the receiver, before a packet exists to compare.
 ## What it does not do
 
 - **The first sender wins.** A sender that reaches an idle slot before the phone holds it until
-  `resetSlot` or a second's quiet.
+  `resetSlot` or a second's quiet. A released phone that keeps sending is turned away only until
+  another sender takes the slot; once the slot is idle again, it is such a sender.
 - **A spoofed source address gets through.** A sender on the LAN that writes the phone's address
   and port into its datagrams looks like the phone.
 - **Replay sees what a capture holds.** A `recordSlot` capture keeps each sender's address, so a
