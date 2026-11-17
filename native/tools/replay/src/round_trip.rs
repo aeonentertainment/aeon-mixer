@@ -24,7 +24,7 @@ const PHONE: SocketAddr =
     SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 168, 1, 30), 50_000));
 
 /// A harmonic voice in `on` seconds of singing and `off` of silence, so DTX has pauses to take.
-fn voice(seconds: f32, on: f32, off: f32) -> Vec<f32> {
+pub(crate) fn voice(seconds: f32, on: f32, off: f32) -> Vec<f32> {
     let mut phase = 0.0f32;
     (0..(seconds * RATE as f32) as usize)
         .map(|i| {
@@ -39,16 +39,16 @@ fn voice(seconds: f32, on: f32, off: f32) -> Vec<f32> {
 }
 
 /// A datagram and the output frame it reached the socket at.
-struct Sent {
-    at: i64,
-    datagram: Vec<u8>,
+pub(crate) struct Sent {
+    pub at: i64,
+    pub datagram: Vec<u8>,
 }
 
 /// What a phone sends: Opus in 20 ms frames at 32 kb/s with FEC, and DTX when asked, which
 /// sends one silent frame and then nothing until the voice comes back. A sender report goes
 /// with every 50th packet. A LAN delays each by 5 ms and up to `jitter` frames more, and when it
 /// `swaps`, trades the arrivals of one pair of neighbours in twenty. Deterministic.
-fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<Sent> {
+pub(crate) fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<Sent> {
     let mut encoder =
         opus::Encoder::new(RATE, opus::Channels::Mono, opus::Application::Voip).unwrap();
     encoder.set_bitrate(opus::Bitrate::Bits(32_000)).unwrap();

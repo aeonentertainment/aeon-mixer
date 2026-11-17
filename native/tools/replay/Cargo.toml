@@ -1,6 +1,6 @@
 [package]
 name = "replay"
-description = "A slot's recording through the real packet ring, jitter buffer and slot on the offline driver, beside libopus's own decode."
+description = "A slot's recording, or a session bundle's whole song, through the real chain on the offline driver."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,4 +10,7 @@ publish.workspace = true
 assert_no_alloc = "1.1"
 engine = { workspace = true }
 opus = "0.4.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 transport = { workspace = true }

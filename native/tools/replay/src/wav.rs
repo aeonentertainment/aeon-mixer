@@ -1,10 +1,11 @@
-//! Mono 16-bit PCM at 48 kHz, for a person to listen to what the slot and the reference made.
+//! 16-bit PCM at 48 kHz, for a person to listen to what a replay made.
 
 use std::path::Path;
 
 use engine::block::RATE;
 
-pub fn write_mono(path: &Path, samples: &[f32]) -> Result<(), String> {
+/// Writes `samples`, interleaved when `channels` is more than one.
+pub fn write(path: &Path, samples: &[f32], channels: u16) -> Result<(), String> {
     let data = (samples.len() * 2) as u32;
     let mut bytes = Vec::with_capacity(44 + data as usize);
     bytes.extend(b"RIFF");
@@ -12,10 +13,10 @@ pub fn write_mono(path: &Path, samples: &[f32]) -> Result<(), String> {
     bytes.extend(b"WAVEfmt ");
     bytes.extend(16u32.to_le_bytes());
     bytes.extend(1u16.to_le_bytes());
-    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(channels.to_le_bytes());
     bytes.extend(RATE.to_le_bytes());
-    bytes.extend((RATE * 2).to_le_bytes());
-    bytes.extend(2u16.to_le_bytes());
+    bytes.extend((RATE * 2 * u32::from(channels)).to_le_bytes());
+    bytes.extend((2 * channels).to_le_bytes());
     bytes.extend(16u16.to_le_bytes());
     bytes.extend(b"data");
     bytes.extend(data.to_le_bytes());
