@@ -640,6 +640,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scorecard"
+version = "0.0.0"
+dependencies = [
+ "assert_no_alloc",
+ "engine",
+ "replay",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"

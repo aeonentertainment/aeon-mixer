@@ -1,0 +1,79 @@
+{
+  "format": 1,
+  "bundles": {
+    "duet": {
+      "master.levelMedianDb": {
+        "value": -18.81,
+        "tolerance": 1.0
+      },
+      "master.levelTopTenthDb": {
+        "value": -16.51,
+        "tolerance": 1.0
+      },
+      "slot0.bleedDb": {
+        "value": -4.42,
+        "tolerance": 1.0
+      },
+      "slot0.concealed": {
+        "value": 25.0,
+        "tolerance": 2.0
+      },
+      "slot0.correctorDelayMs": {
+        "value": 4.49,
+        "tolerance": 0.5
+      },
+      "slot0.echoRemovedDb": {
+        "value": -0.5,
+        "tolerance": 1.0
+      },
+      "slot0.howlCatches": {
+        "value": 0.0,
+        "tolerance": 0.0
+      },
+      "slot0.late": {
+        "value": 0.0,
+        "tolerance": 0.0
+      },
+      "slot0.levelMedianDb": {
+        "value": -15.73,
+        "tolerance": 1.0
+      },
+      "slot0.levelTopTenthDb": {
+        "value": -13.43,
+        "tolerance": 1.0
+      },
+      "slot0.pitchErrorCents": {
+        "value": 45.04,
+        "tolerance": 5.0
+      },
+      "slot0.playoutDelayMs": {
+        "value": 15.0,
+        "tolerance": 0.0
+      },
+      "slot1.concealed": {
+        "value": 60.0,
+        "tolerance": 2.0
+      },
+      "slot1.howlCatches": {
+        "value": 0.0,
+        "tolerance": 0.0
+      },
+      "slot1.late": {
+        "value": 0.0,
+        "tolerance": 0.0
+      },
+      "slot1.levelMedianDb": {
+        "value": -17.51,
+        "tolerance": 1.0
+      },
+      "slot1.levelTopTenthDb": {
+        "value": -15.19,
+        "tolerance": 1.0
+      },
+      "slot1.playoutDelayMs": {
+        "value": 15.0,
+        "tolerance": 0.0
+      }
+    }
+  }
+}

@@ -1,18 +1,4 @@
-//! replay: a slot's recording through the real chain on the offline driver, beside libopus's
-//! own decode of the same packets (docs/design.md 8.9, decision 0017), or a session bundle's
-//! whole song (8.11). It opens no device and no socket. The same input replays to the same
-//! samples every time.
-
-mod bundle;
-mod capture;
-mod levels;
-mod reference;
-mod slot_replay;
-mod stream;
-mod wav;
-
-#[cfg(test)]
-mod round_trip;
+//! `replay`: prints what a slot's recording or a session bundle's song played as (lib.rs).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,9 +6,10 @@ use std::process::ExitCode;
 use engine::block::RATE;
 use engine::ingest::Codec;
 
-use crate::levels::Levels;
-use crate::reference::Kind;
-use crate::stream::Stream;
+use replay::levels::Levels;
+use replay::reference::Kind;
+use replay::stream::Stream;
+use replay::{bundle, capture, reference, slot_replay, wav};
 
 const USAGE: &str = "\
 usage: replay RECORDING.pcap [--port N] [--codec opus|l16] [--playout-delay-ms MS] [--wav DIR]
@@ -184,8 +171,3 @@ fn main() -> ExitCode {
         }
     }
 }
-
-// Tests wrap every pump in `assert_no_alloc`; this allocator is what makes it panic.
-#[cfg(test)]
-#[global_allocator]
-static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;

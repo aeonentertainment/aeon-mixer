@@ -1,0 +1,24 @@
+{
+  "backing": {
+    "key": 0,
+    "speed": 1,
+    "stemGains": {},
+    "stems": [
+      {
+        "kind": "instrumental",
+        "sha256": "76b8ba03950ff9ca6a20289403da107296a9482f0f8cc470495959796fb7e7f1"
+      }
+    ],
+    "stopAtMs": null
+  },
+  "format": 1,
+  "frame": 384,
+  "output": { "latencyMs": 0, "name": null, "periodFrames": 128, "sampleRate": 48000 },
+  "package": "0.9.0",
+  "platform": "test",
+  "slots": [
+    { "index": 0, "kind": "rtp", "recorded": true },
+    { "index": 1, "kind": "rtp", "recorded": true }
+  ],
+  "us": 1794923132871062
+}

@@ -20,8 +20,8 @@ pub struct Options {
     pub json: bool,
 }
 
-/// Replays the bundle in `dir`, writing its mix into `wav` when given.
-pub fn run(dir: &Path, options: &Options, wav: Option<&Path>) -> Result<(), String> {
+/// The bundle in `dir`, played under the profile and with the stems `options` name.
+pub fn play(dir: &Path, options: &Options) -> Result<(Bundle, Played), String> {
     let bundle = Bundle::read(dir)?;
     let profile = match &options.profile {
         Some(path) => {
@@ -36,6 +36,12 @@ pub fn run(dir: &Path, options: &Options, wav: Option<&Path>) -> Result<(), Stri
         _ => None,
     };
     let played = song::play(&bundle, &profile, stems)?;
+    Ok((bundle, played))
+}
+
+/// Replays the bundle in `dir`, writing its mix into `wav` when given.
+pub fn run(dir: &Path, options: &Options, wav: Option<&Path>) -> Result<(), String> {
+    let (bundle, played) = play(dir, options)?;
     if let Some(out) = wav {
         wav::write(&out.join("mix.wav"), &played.mix, 2)?;
     }
