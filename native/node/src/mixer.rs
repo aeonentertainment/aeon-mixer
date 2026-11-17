@@ -124,11 +124,11 @@ impl Mixer {
     }
 
     /// Records what reaches an `rtp` or `l16` slot's port to a new pcap file at `path`, or stops
-    /// recording it for null. `zero_sender` writes every sender as 0.0.0.0, as a session bundle's
-    /// recordings do (docs/design.md 8.11).
+    /// recording it for null. `hide_senders` writes each sender as 0.0.0.0 at a port of its own, as a
+    /// session bundle's recordings do (docs/design.md 8.11).
     #[napi]
-    pub fn record_slot(&self, index: u32, path: Option<String>, zero_sender: bool) -> Result<()> {
-        self.slot(index)?.record(path.as_deref(), zero_sender)
+    pub fn record_slot(&self, index: u32, path: Option<String>, hide_senders: bool) -> Result<()> {
+        self.slot(index)?.record(path.as_deref(), hide_senders)
     }
 
     /// The frames the audio thread has rendered and the wall clock a recording stamps arrivals

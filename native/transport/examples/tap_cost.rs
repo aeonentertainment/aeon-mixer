@@ -2,7 +2,7 @@
 //! copy into the writer's channel. Everything else, the pcap framing and the file write, is the
 //! writer thread's. Run it with `cargo run --release -p transport --example tap_cost -- DIR`;
 //! it writes one throwaway recording into DIR and deletes it. `tap_cost DIR SLOTS` records that
-//! many slots at once with their senders zeroed, as a session bundle does (docs/design.md 8.11):
+//! many slots at once with their senders hidden, as a session bundle does (docs/design.md 8.11):
 //! each turn of the loop is one datagram for every slot, and each datagram is timed on its own.
 //!
 //! Paced is one datagram every 2.5 ms, as a phone's shortest frames come, so each record lands on
@@ -41,7 +41,9 @@ fn main() -> std::io::Result<()> {
         for slot in 0..slots {
             let path = dir.join(format!("tap-cost-{}-{slot}.pcap", std::process::id()));
             let (recording, mut tap) = Recording::create(&path, 40_000)?;
-            tap.zero_sender = bundle.is_some();
+            if bundle.is_some() {
+                tap.hide_senders();
+            }
             paths.push(path);
             recordings.push(recording);
             taps.push(tap);

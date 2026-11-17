@@ -68,7 +68,7 @@ impl Recording {
         let writer = thread::Builder::new()
             .name("aeon-mixer-record".into())
             .spawn(move || write_all(file, inbox, port, started, since_epoch))?;
-        let tap = Tap { records, dropped: Arc::clone(&dropped), zero_sender: false };
+        let tap = Tap { records, dropped: Arc::clone(&dropped), stand_in: None };
         Ok((Self { writer, dropped }, tap))
     }
 
@@ -160,27 +160,49 @@ mod tests {
         }
     }
 
-    /// A session bundle's recording holds the datagram and when it came, and not who sent it: the
-    /// address never reaches the ring, so it cannot reach the file.
+    /// A session bundle's recording holds each datagram, when it came and which sender it came
+    /// from, and not who that sender was: each address becomes a port of its own at 0.0.0.0, so a
+    /// replay refuses who the live slot refused (decision 0028) and learns no address.
     #[test]
-    fn a_tap_told_to_zero_the_sender_writes_no_address() {
-        let path = scratch("zeroed");
+    fn a_tap_that_hides_senders_keeps_them_apart_and_writes_no_address() {
+        let path = scratch("hidden");
         let (recording, mut tap) = Recording::create(&path, 40_000).unwrap();
-        tap.zero_sender = true;
-        let from = SocketAddr::from(([10, 0, 0, 7], 50_000));
-        assert_no_alloc(|| tap.record(&[9; 40], from, Instant::now()));
+        tap.hide_senders();
+        let phone = SocketAddr::from(([10, 0, 0, 7], 50_000));
+        let other = SocketAddr::from(([10, 0, 0, 8], 50_000));
+        let same_host = SocketAddr::from(([10, 0, 0, 7], 50_002));
+        assert_no_alloc(|| {
+            for (payload, from) in [(1, phone), (2, other), (3, phone), (4, same_host)] {
+                tap.record(&[payload; 40], from, Instant::now());
+            }
+        });
         drop(tap);
-        assert_eq!(recording.finish().unwrap(), Written { records: 1, dropped: 0 });
+        assert_eq!(recording.finish().unwrap(), Written { records: 4, dropped: 0 });
 
         let bytes = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        let ip = pcap::GLOBAL_HEADER_LEN + pcap::RECORD_HEADER_LEN + pcap::ETHERNET_LEN;
+        let ip = pcap::RECORD_HEADER_LEN + pcap::ETHERNET_LEN;
         let udp = ip + pcap::IPV4_LEN;
-        assert_eq!(&bytes[ip + 12..ip + 16], &[0; 4], "the source address");
-        assert_eq!(&bytes[udp..udp + 2], &[0; 2], "the source port");
-        assert_eq!(&bytes[udp + 2..udp + 4], &40_000u16.to_be_bytes(), "the slot's port stays");
-        assert!(!bytes.windows(4).any(|w| w == [10, 0, 0, 7]), "the sender is nowhere in it");
-        assert_eq!(&bytes[udp + pcap::UDP_LEN..], &[9; 40]);
+        let record = pcap::FRAMING_LEN + 40;
+        let senders: Vec<u16> = bytes[pcap::GLOBAL_HEADER_LEN..]
+            .chunks(record)
+            .enumerate()
+            .map(|(k, r)| {
+                assert_eq!(&r[ip + 12..ip + 16], &[0; 4], "record {k}'s source address");
+                assert_eq!(&r[udp + 2..udp + 4], &40_000u16.to_be_bytes(), "the slot's port stays");
+                assert_eq!(&r[udp + pcap::UDP_LEN..], &[k as u8 + 1; 40], "record {k}'s datagram");
+                u16::from_be_bytes([r[udp], r[udp + 1]])
+            })
+            .collect();
+        let [phone, other, again, same_host] = senders[..] else { panic!("{senders:?}") };
+        assert_eq!(phone, again, "one sender, one port");
+        assert!(phone != other && phone != same_host && other != same_host, "{senders:?}");
+        assert!(senders.iter().all(|&port| port != 0 && port != 50_000), "{senders:?}");
+        let addresses = [[10, 0, 0, 7], [10, 0, 0, 8]];
+        assert!(
+            !bytes.windows(4).any(|w| addresses.iter().any(|a| a == w)),
+            "no address is anywhere in it"
+        );
     }
 
     /// A writer that falls behind costs the recording records, never the network thread a wait:

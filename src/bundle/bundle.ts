@@ -18,7 +18,7 @@ export interface BundleSource {
   readonly slots: ReadonlyArray<{ index: number; kind: IngestKind }>;
   /** The frames rendered and the wall clock the pcaps stamp arrivals with, read in one call. */
   clock(): ClockReading;
-  /** Records a slot's datagrams to a new pcap at `path`, each sender written as 0.0.0.0. */
+  /** Records a slot's datagrams to a new pcap at `path`, each sender hidden behind a port of its own. */
   record(slot: number, path: string): void;
   /** `stats()` and the backing's position as the engine last reported it, null before it has. */
   stats(): {

@@ -4,6 +4,7 @@
 //! recording costs the network thread a copy and no system call. Dropping the tap ends the
 //! recording.
 
+use std::hash::{BuildHasher, RandomState};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -23,16 +24,26 @@ pub(super) struct Record {
 pub struct Tap {
     pub(super) records: rtrb::Producer<Record>,
     pub(super) dropped: Arc<AtomicU32>,
-    /// A session bundle's tap sets this, and every record's sender is 0.0.0.0 (docs/design.md 8.11).
-    pub zero_sender: bool,
+    /// The key a hidden sender's stand-in is hashed under, drawn by `hide_senders`.
+    pub(super) stand_in: Option<RandomState>,
 }
 
 impl Tap {
+    /// From here on each sender is written as 0.0.0.0 at a port of its own, a hash of its address
+    /// under a key drawn here and never written, as a session bundle's recordings are: a replay
+    /// tells senders apart and learns nobody's address (docs/design.md 8.11).
+    pub fn hide_senders(&mut self) {
+        self.stand_in = Some(RandomState::new());
+    }
+
     /// Never blocks. When the writer is behind by the whole ring, or has stopped on a write error,
     /// the record is dropped and counted, and the slot's packet is untouched.
     pub fn record(&mut self, datagram: &[u8], from: SocketAddr, at: Instant) {
         let len = datagram.len().min(DATAGRAM);
-        let from = if self.zero_sender { SocketAddr::from(([0; 4], 0)) } else { from };
+        let from = match &self.stand_in {
+            Some(key) => SocketAddr::from(([0; 4], 1 + (key.hash_one(from) % 65_535) as u16)),
+            None => from,
+        };
         let mut record = Record { at, from, len: len as u16, datagram: [0; DATAGRAM] };
         record.datagram[..len].copy_from_slice(&datagram[..len]);
         if self.records.push(record).is_err() {
