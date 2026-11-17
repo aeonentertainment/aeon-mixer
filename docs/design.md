@@ -1333,9 +1333,10 @@ bundle is one song whole: a directory `replay` can play back with nothing else, 
 songs can be compared by. Decision [0026](decisions/0026-the-session-bundle.md) has the reasons.
 
 It is the Binding and API workstream's, with 8.8 and 8.9 (section 10). In files it does not own it
-adds two things and changes nothing else: in 8.1's `engine/src/audio_thread.rs`, the frame
-count, an atomic the block adds to; in 8.4's `transport/src/record/tap.rs`, the sender's
-stand-in, a key the recording draws and the hash of each sender under it. 8.4 in turn passes each datagram's source to
+adds these and changes nothing else: in 8.1's `engine/src/audio_thread.rs`, the frame count,
+an atomic the block adds to; in 8.4's `transport/src/record/`, the sender's stand-in, a key the
+recording draws and the hash of each sender under it, and the `WallClock` a recording is given
+to stamp arrivals on, so a bundle's pcaps and lines share one. 8.4 in turn passes each datagram's source to
 `packet_from` at its call sites in `tools/replay`, and `replay` says when a capture has more
 than one sender, since the slot plays one at a time and the libopus reference decodes them all
 (decision 0028). In 8.8's `src/mixer.ts`, 8.4 keeps `resetSlot`'s comment saying what the
@@ -1354,7 +1355,8 @@ released sender meets, as 7.2 does.
 - **The clock.** The audio thread adds each block to a count of output frames, an atomic it
   stores once a block and nothing waits on. Every line of `events.jsonl` and `stats.jsonl`
   carries `frame`, that count as the control thread read it, and `us`, the wall clock the pcaps
-  stamp arrivals with, read in the same call. A line a second ties the two clocks together and
+  stamp arrivals with, read in the same call: the mixer holds one `WallClock` and gives it to
+  each of the bundle's recordings. A line a second ties the two clocks together and
   shows them drift. A setting changed at `frame` is taken up by the block that starts at or after
   it, live and in a replay.
 - **`manifest.json`** holds `format`, 1; the package's version and the platform; the output's
