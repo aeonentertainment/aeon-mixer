@@ -6,6 +6,7 @@ import {
   STOP_FADE_MS,
 } from "./backing.ts";
 import { Bundle } from "./bundle/bundle.ts";
+import type { CommandCall } from "./bundle/bundle-event.ts";
 import { bundleOutput } from "./bundle/bundle-manifest.ts";
 import type { BundleRequest } from "./bundle/bundle-request.ts";
 import type { Emitter } from "./emitter.ts";
@@ -350,6 +351,7 @@ export class Mixer {
     }
     // From here the graph is the audio thread's, so the mixer is live whatever the acks say.
     this.#phase = "live";
+    record?.({ type: "start" });
     this.#guides.forEach((guide, slot) => {
       if (guide) this.#host.native.setGuide(slot, guide);
     });
@@ -360,7 +362,7 @@ export class Mixer {
         ? undefined
         : this.#command(() => this.#host.native.stopAt(stopAtFrames, msToFrames(STOP_FADE_MS)));
     const [, position] = await Promise.all([swapped, started, stopping]);
-    record?.({ type: "start", positionMs: this.#heard(position) });
+    this.#bundle?.event({ type: "ack", call: "start", positionMs: this.#heard(position) });
     const { latencyMs } = this.#host.output();
     return {
       startedAt: Date.now() + latencyMs,
@@ -500,12 +502,14 @@ export class Mixer {
 
   /**
    * Sends a backing command and resolves with the position its ack carries, in milliseconds. A
-   * bundle's line for it is stamped as the command is sent and written when the ack arrives.
+   * bundle's line for it is written as the command is sent, and its ack's as the ack arrives.
    */
-  async #steer(send: () => number, call: SteerCall) {
+  async #steer(send: () => number, call: CommandCall) {
     const record = this.#bundle?.stamp();
-    const positionMs = this.#heard(await this.#command(send));
-    record?.({ ...call, positionMs });
+    const acked = this.#command(send);
+    record?.(call);
+    const positionMs = this.#heard(await acked);
+    this.#bundle?.event({ type: "ack", call: call.type, positionMs });
     return positionMs;
   }
 
@@ -541,12 +545,6 @@ export class Mixer {
     }
   }
 }
-
-/** A backing command's bundle line, before its ack gives it a position. */
-type SteerCall =
-  | { type: "seek"; toMs: number }
-  | { type: "pause" | "resume" }
-  | { type: "setBackingKey"; semitones: number };
 
 function toGuideInput(guide: MelodyGuide): GuideInput {
   return {

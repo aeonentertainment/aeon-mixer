@@ -103,6 +103,11 @@ function jsonLines(path: string) {
     .map((line): Line => JSON.parse(line));
 }
 
+/** The event lines of the bundle `name`, as their types and frames in the file's order. */
+function calls(name: string) {
+  return jsonLines(join(dir, name, "events.jsonl")).map(({ type, frame }) => ({ type, frame }));
+}
+
 /** Checks a line's `us` and returns the rest of it, which a test can know exactly. */
 function onTheWallClock({ us, ...line }: Line) {
   expectNow(us);
@@ -248,7 +253,8 @@ test("an effect change and a seek mid-song each leave a line with the call as ma
   const events = jsonLines(join(path, "events.jsonl"));
   expect(events.map(onTheWallClock)).toStrictEqual([
     { type: "backingRendered", frame: 0, frames: 3 * RATE },
-    { type: "start", frame: startedAt, positionMs: 0 },
+    { type: "start", frame: startedAt },
+    { type: "ack", frame: startedAt + FADE_BLOCKS * BLOCK, call: "start", positionMs: 0 },
     {
       type: "setSlotEffects",
       frame: effectsAt,
@@ -267,8 +273,9 @@ test("an effect change and a seek mid-song each leave a line with the call as ma
       guideOffsetMs: 40,
     },
     { type: "setStemGain", frame: effectsAt, kind: "instrumental", gain: 0.5 },
-    // Stamped as the seek was sent, written when its ack came with where it landed
-    { type: "seek", frame: seekAt, toMs: 2000, positionMs: 2000 },
+    // Written as the seek was sent; its ack, with where it landed, has a line of its own
+    { type: "seek", frame: seekAt, toMs: 2000 },
+    { type: "ack", frame: seekAt + SEEK_FADE_BLOCKS * BLOCK, call: "seek", positionMs: 2000 },
     { type: "end", frame: endAt },
   ]);
 });
@@ -321,11 +328,63 @@ test("a mixer destroyed armed, destroyed mid-song or closed with its engine leav
   await startLive(pump, live);
   live.resetSlot(0);
   await destroyLive(engine, live);
-  expect(types("live")).toEqual(["start", "resetSlot", "end"]);
+  expect(types("live")).toEqual(["start", "ack", "resetSlot", "end"]);
 
   await engine.createMixer({ slots: [], bundle: { dir: join(dir, "closed") } });
   await engine.close();
   expect(types("closed")).toEqual(["end"]);
+});
+
+test("a resetSlot in start's block is written on the side of start it was made on", async () => {
+  const { engine, pump, frames } = await countingEngine();
+  const mixer = (name: string) =>
+    engine.createMixer({ slots: [{ kind: "rtp" }], bundle: { dir: join(dir, name) } });
+  const destroy = async (live: Mixer) => {
+    const destroyed = live.destroy();
+    pump(FADE_BLOCKS);
+    await destroyed;
+  };
+
+  // Made while armed, the reset reaches nothing, and a replay that reads it before start skips it
+  const before = await mixer("reset-before");
+  const beforeAt = frames();
+  before.resetSlot(0);
+  await startLive(pump, before);
+  await destroy(before);
+  expect(calls("reset-before")).toEqual([
+    { type: "resetSlot", frame: beforeAt },
+    { type: "start", frame: beforeAt },
+    { type: "ack", frame: beforeAt + FADE_BLOCKS * BLOCK },
+    { type: "end", frame: beforeAt + FADE_BLOCKS * BLOCK },
+  ]);
+
+  // Made once start has sent its swap, the reset reaches the live slot in the same block
+  const after = await mixer("reset-after");
+  const afterAt = frames();
+  const started = after.start();
+  after.resetSlot(0);
+  pump(FADE_BLOCKS);
+  await started;
+  await destroy(after);
+  expect(calls("reset-after")).toEqual([
+    { type: "start", frame: afterAt },
+    { type: "resetSlot", frame: afterAt },
+    { type: "ack", frame: afterAt + FADE_BLOCKS * BLOCK },
+    { type: "end", frame: afterAt + FADE_BLOCKS * BLOCK },
+  ]);
+
+  // Destroyed before its acks came, the song still started, so the bundle still says so
+  const cut = await mixer("destroyed-starting");
+  const cutAt = frames();
+  const starting = cut.start();
+  const destroyed = cut.destroy();
+  pump(FADE_BLOCKS);
+  await Promise.all([starting, destroyed]);
+  expect(calls("destroyed-starting")).toEqual([
+    { type: "start", frame: cutAt },
+    { type: "end", frame: cutAt },
+  ]);
+  await engine.close();
 });
 
 test("a process that dies mid-song leaves files that read to their last line", async () => {
@@ -343,6 +402,7 @@ test("a process that dies mid-song leaves files that read to their last line", a
   const events = jsonLines(join(path, "events.jsonl"));
   expect(events.map(({ type, frame }) => ({ type, frame }))).toEqual([
     { type: "start", frame: 0 },
+    { type: "ack", frame: 3 * BLOCK },
     { type: "setSlotEffects", frame: 3 * BLOCK },
     { type: "setSlot", frame: 11 * BLOCK },
   ]);

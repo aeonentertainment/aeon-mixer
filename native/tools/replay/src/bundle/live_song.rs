@@ -204,7 +204,7 @@ impl LiveSong {
 
     /// `start`, as the mixer makes it: the graph swapped in, then the backing started.
     pub fn start(&mut self) {
-        self.line(json!({ "type": "start", "positionMs": 0 }));
+        self.line(json!({ "type": "start" }));
         let graph = self.graph.take().unwrap();
         self.command(|id| Command::Swap { id, graph });
         self.command(|id| Command::Start { id });

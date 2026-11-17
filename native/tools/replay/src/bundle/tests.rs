@@ -79,8 +79,10 @@ fn a_song_replays_to_the_samples_it_played_with_an_effect_change_and_a_seek_on_t
     song.line(json!({ "type": "setStemGain", "kind": "instrumental", "gain": 0.5 }));
     song.params(|p| p.stems.instrumental = 0.5);
     song.play_to(SECOND * 3 / 2);
-    song.line(json!({ "type": "seek", "toMs": 3000, "positionMs": 3000 }));
+    song.line(json!({ "type": "seek", "toMs": 3000 }));
     song.command(|id| Command::Seek { id, to_frame: 3 * SECOND });
+    song.play_to(SECOND * 3 / 2 + 1_024);
+    song.line(json!({ "type": "ack", "call": "seek", "positionMs": 3000 }));
     song.play_to(3 * SECOND);
     let (dir, live) = song.end();
 

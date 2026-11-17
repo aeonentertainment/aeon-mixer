@@ -329,7 +329,8 @@ impl Desk<'_> {
             Event::Error { message } => {
                 self.notes.push(format!("the song reported an error: {message}"));
             }
-            Event::BackingEnded {} | Event::End {} => {}
+            // The replay's own engine acks the commands it is sent
+            Event::Ack {} | Event::BackingEnded {} | Event::End {} => {}
         }
         Ok(())
     }
