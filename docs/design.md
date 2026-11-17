@@ -165,8 +165,8 @@ delays a voice's fundamental near its corner: 1.8 ms at 110 Hz, 0.4 at 220. Deci
 tone stage makes a phone sound like a good vocal mic: bands a host hands in for a mic it knows or
 a blind match for one it does not, a plosive guard, an air shelf and a de-esser. It comes after
 the corrector and the meter, so every pitch reading and level word is the same with it on as off,
-and before the compressor, so a pop or a boomy phone is gone before the compressor would duck a
-line for it. Its filters are minimum-phase and read no sample ahead, so a click leaves on the
+and before the compressor, so a boomy phone, and a pop that stands far under the voice, are gone
+before the compressor would duck a line for them. Its filters are minimum-phase and read no sample ahead, so a click leaves on the
 sample it entered. A filter that holds no sample still delays what it lifts, so the stage caps
 that: the bands and the air may leave no frequency from 80 Hz up more than 0.2 ms late, and the
 guard adds at most 0.2 ms while it ducks a pop. Decision
@@ -618,6 +618,7 @@ export type SlotEffect =
    * the singing. `plosiveDb` 0 to 12, `airDb` 0 to 6 and `deEssDb` 0 to 12 are amounts. They are
    * not in the profile: left out, each is 0 and its part is out of the path. Throws when the
    * bands and the air together leave a frequency over 0.2 ms late or lift one over 6 dB.
+   * "match" throws until the blind match has its target (decision 0029).
    */
   | {
       kind: "tone";
@@ -654,8 +655,8 @@ export interface SlotStats {
   /**
    * What the tone stage did; null while it is off. `match` is where the blind match's filters
    * stand and how much singing it has counted since it last started over; null unless `bands` is
-   * "match". `deEssDb` is the most the de-esser took off in the last second. `plosives` counts
-   * the pops the guard has ducked.
+   * "match", so null until the match has its target. `deEssDb` is the most the de-esser took off
+   * in the last second. `plosives` counts the pops the guard has ducked.
    */
   tone: {
     match: { bands: ReadonlyArray<{ hz: number; gainDb: number }>; countedMs: number } | null;

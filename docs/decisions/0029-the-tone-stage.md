@@ -87,7 +87,8 @@ After the corrector and the meter, before the compressor.
 - **After the meter**, so level words describe the singing and not a profile. A pop would read
   as a peak, and it does today.
 - **Before the compressor**, so it levels the voice the room will hear. A compressor ahead of the
-  guard would duck a whole line for a pop the guard was about to remove.
+  guard would duck a whole line for a pop far under the voice that the guard was about to take
+  down.
 - **Before the voice and the reverb.** The voice is the character a singer chose on top of a
   clean capture, and sibilance sent into a reverb splashes.
 - **After the echo canceller and the howl guard.** The canceller learns the room's path as the
