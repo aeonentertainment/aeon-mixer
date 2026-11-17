@@ -1371,8 +1371,8 @@ released sender meets, as 7.2 does.
   stores once a block and nothing waits on. Every line of `events.jsonl` and `stats.jsonl`
   carries `frame`, that count as the control thread read it, and `us`, the wall clock the pcaps
   stamp arrivals with, read in the same call: the mixer holds one `WallClock` and gives it to
-  each of the bundle's recordings. A line a second ties the two clocks together and
-  shows them drift. A setting changed at `frame` is taken up by the block that starts at or after
+  each of the bundle's recordings. Every line's pair ties the two clocks together, and the
+  stats line each second shows them drift. A setting changed at `frame` is taken up by the block that starts at or after
   it, live and in a replay.
 - **`manifest.json`** holds `format`, 1; the package's version and the platform; the output's
   rate, period, latency and name; `frame` and `us` at creation; each slot's index and kind and
