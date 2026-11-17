@@ -14,7 +14,7 @@ use engine::ingest::{Codec, JitterBuffer, PacketSource, SharedStats, SlotStats, 
 use engine::slot::source::Source;
 use napi::bindgen_prelude::*;
 use transport::receive::Receiver;
-use transport::record::{RecordSwitch, Recording};
+use transport::record::{RecordSwitch, Recording, WallClock};
 use transport::{Network, TaskHandle};
 
 /// 30 ms: the most a push slot plays behind the newest frame it holds (docs/design.md 8.4). Three
@@ -88,16 +88,17 @@ impl Ingest {
     /// Records every datagram the slot's port reads into a new pcap file at `path`, or stops for
     /// `None` (docs/design.md 8.4). The file and its header are written here, so a bad path is
     /// this call's error; the writer thread finishes the file on its own once the recording ends.
-    /// `hide_senders` keeps every sender's address out of the file, as a session bundle does (8.11).
-    pub fn record(&self, path: Option<&str>, hide_senders: bool) -> Result<()> {
+    /// `bundle` is the clock of the session bundle the recording belongs to: arrivals are stamped
+    /// on it, as the bundle's lines are, and every sender is hidden (8.11).
+    pub fn record(&self, path: Option<&str>, bundle: Option<WallClock>) -> Result<()> {
         let Self::Packets { port, switch, .. } = self else {
             return Err(Error::from_reason("only an rtp or l16 slot can be recorded"));
         };
         let tap = path
             .map(|path| {
-                Recording::create(Path::new(path), *port)
+                Recording::create(Path::new(path), *port, bundle.unwrap_or_else(WallClock::now))
                     .map(|(_finishes_alone, mut tap)| {
-                        if hide_senders {
+                        if bundle.is_some() {
                             tap.hide_senders();
                         }
                         tap

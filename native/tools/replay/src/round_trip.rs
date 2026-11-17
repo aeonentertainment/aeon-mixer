@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use engine::block::RATE;
 use engine::ingest::Codec;
-use transport::record::{Recording, Written};
+use transport::record::{Recording, WallClock, Written};
 use transport::rtp::Header;
 
 use crate::capture;
@@ -114,7 +114,7 @@ fn live(sent: &[Sent]) -> Vec<Arrival> {
 fn recorded(sent: &[Sent], name: &str) -> (Stream, Written) {
     let path = std::env::temp_dir().join(format!("aeon-replay-{}-{name}.pcap", std::process::id()));
     let _ = std::fs::remove_file(&path);
-    let (recording, mut tap) = Recording::create(&path, PORT).unwrap();
+    let (recording, mut tap) = Recording::create(&path, PORT, WallClock::now()).unwrap();
     let base = Instant::now();
     for s in sent {
         let at =

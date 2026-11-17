@@ -95,10 +95,10 @@ export declare class Mixer {
   push(index: number, stereo: Float32Array): number
   /**
    * Records what reaches an `rtp` or `l16` slot's port to a new pcap file at `path`, or stops
-   * recording it for null. `hide_senders` writes each sender as 0.0.0.0 at a port of its own, as a
-   * session bundle's recordings do (docs/design.md 8.11).
+   * recording it for null. `for_bundle` makes it the mixer's session bundle's: stamped on the
+   * bundle's clock, with each sender written as 0.0.0.0 at a port of its own (docs/design.md 8.11).
    */
-  recordSlot(index: number, path: string | undefined | null, hideSenders: boolean): void
+  recordSlot(index: number, path: string | undefined | null, forBundle: boolean): void
   /**
    * The frames the audio thread has rendered and the wall clock a recording stamps arrivals
    * with, read together: a session bundle's clock.

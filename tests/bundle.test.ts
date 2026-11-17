@@ -94,7 +94,7 @@ interface Line {
   [field: string]: unknown;
 }
 
-function jsonLines(path: string): Line[] {
+function jsonLines(path: string) {
   const text = readFileSync(path, "utf8");
   expect(text === "" || text.endsWith("\n"), "every line is whole").toBe(true);
   return text

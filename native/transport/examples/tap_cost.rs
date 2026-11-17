@@ -2,11 +2,11 @@
 //! copy into the writer's channel. Everything else, the pcap framing and the file write, is the
 //! writer thread's. Run it with `cargo run --release -p transport --example tap_cost -- DIR`;
 //! it writes one throwaway recording into DIR and deletes it. `tap_cost DIR SLOTS` records that
-//! many slots at once with their senders hidden, as a session bundle does (docs/design.md 8.11):
-//! each turn of the loop is one datagram for every slot, and each datagram is timed on its own.
+//! many slots at once with their senders hidden, as a session bundle does (docs/design.md 8.11).
 //!
-//! Paced is one datagram every 2.5 ms, as a phone's shortest frames come, so each record lands on
-//! a thread that has just slept. "off" times the same paced loop with no tap in it: what the
+//! Paced is one datagram every 2.5 ms for each slot, as a phone's shortest frames come, so with
+//! SLOTS the thread sleeps 2.5 ms / SLOTS before each one and every record lands on a thread that
+//! has just slept. "off" times the same paced loop with no tap in it: what the
 //! machine itself adds to any 2.5 ms of a thread's life. A burst is the network thread catching
 //! up after a stall.
 
@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use transport::record::{Recording, Written};
+use transport::record::{Recording, WallClock, Written};
 
 const RECORDS: usize = 4000;
 
@@ -25,9 +25,9 @@ fn main() -> std::io::Result<()> {
     let slots = bundle.unwrap_or(1);
     let from = SocketAddr::from(([192, 168, 1, 30], 50_000));
     let datagram = [0x80u8; 112]; // a 32 kb/s Opus frame of 20 ms with its RTP header
-    let pace = Duration::from_micros(2500);
+    let pace = Duration::from_micros(2500) / slots as u32;
     let mut off = Vec::with_capacity(RECORDS);
-    for _ in 0..RECORDS {
+    for _ in 0..RECORDS * slots {
         let started = Instant::now();
         let _ = std::hint::black_box(Instant::now());
         off.push(started.elapsed().as_nanos() as u64);
@@ -40,7 +40,7 @@ fn main() -> std::io::Result<()> {
         let mut taps = Vec::with_capacity(slots);
         for slot in 0..slots {
             let path = dir.join(format!("tap-cost-{}-{slot}.pcap", std::process::id()));
-            let (recording, mut tap) = Recording::create(&path, 40_000)?;
+            let (recording, mut tap) = Recording::create(&path, 40_000, WallClock::now())?;
             if bundle.is_some() {
                 tap.hide_senders();
             }
@@ -55,9 +55,9 @@ fn main() -> std::io::Result<()> {
                 let at = Instant::now();
                 tap.record(&datagram, from, at);
                 costs.push(started.elapsed().as_nanos() as u64);
-            }
-            if let Some(pace) = pace {
-                std::thread::sleep(pace);
+                if let Some(pace) = pace {
+                    std::thread::sleep(pace);
+                }
             }
         }
         drop(taps);

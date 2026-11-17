@@ -222,6 +222,8 @@ export class Engine {
       config.bundle === undefined
         ? null
         : await bundleRequest(config.bundle, config.backing, this.profile.backing.stemGains);
+    // The engine can fault or close while the stems hash, and a mixer is built on a running one
+    this.#assertRunning();
     return new Mixer(
       this.#host,
       slots,
