@@ -680,8 +680,8 @@ export interface Mixer {
   /**
    * Writes every datagram that reaches an `rtp` or `l16` slot's port to a new pcap file at `path`,
    * with the moment the network thread read it, until `null`, another path or `destroy`. Throws
-   * for a `push` or `capture` slot, or a path that exists. A recording holds a singer's voice:
-   * section 8.4.
+   * for a `push` or `capture` slot, a path that exists, or a mixer writing a session bundle,
+   * whose slots already record (8.11). A recording holds a singer's voice: section 8.4.
    */
   recordSlot(index: number, path: string | null): void;
   /**
@@ -1334,7 +1334,7 @@ songs can be compared by. Decision [0026](decisions/0026-the-session-bundle.md) 
 
 It is the Binding and API workstream's, with 8.8 and 8.9 (section 10). In files it does not own it
 adds one line each and changes nothing else: the frame count's store in
-`engine/src/audio_thread.rs`, which is 8.1's, and the zeroed sender address in
+`engine/src/audio_thread.rs`, which is 8.1's, and the sender's stand-in in
 `transport/src/record/`, which is 8.4's. 8.4 in turn passes each datagram's source to
 `packet_from` at its call sites in `tools/replay`, and `replay` says when a capture has more
 than one sender, since the slot plays one at a time and the libopus reference decodes them all
@@ -1359,20 +1359,29 @@ released sender meets, as 7.2 does.
   it, live and in a replay.
 - **`manifest.json`** holds `format`, 1; the package's version and the platform; the output's
   rate, period, latency and name; `frame` and `us` at creation; each slot's index and kind and
-  whether it is recorded; and the backing: each stem's
-  kind, SHA-256 and length in frames, with key, speed, stem gains and `stopAtMs`. A stem is named
+  whether it is recorded; and the backing: each stem's kind and SHA-256, with key, speed, stem
+  gains and `stopAtMs`. A stem is named
   by its hash and never copied, since a song is large and may not be the host's to copy. No path
   on the host's disk and no device id is written.
 - **`events.jsonl`** holds, each with its arguments: `setSlot`, `setSlotEffects`, `setSlotGuide`
   with the whole guide, `resetSlot`, `start`, `seek`, `pause`, `resume`, `setBackingKey`,
-  `setStemGain`, and the engine's `outputChanged`, `error` and `backingEnded`. A command's line is
+  `setStemGain`, and the engine's `outputChanged`, `error` and `backingEnded`, and
+  `backingRendered` with the stems' length in frames at the armed speed as they move into the
+  graph: the length is known only once the render is done, after the manifest is written, and a
+  replay that renders the stems again checks its own against it. A command's line is
   written when its ack arrives and carries the backing position the ack gave. `destroy` writes
   `{"type":"end"}` last, so a bundle without one was cut short. `level` and `pitch` are left out:
   a replay makes them again.
 - **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
   thread that keeps no process alive.
-- **Sender addresses are zero.** A bundle's pcaps write 0.0.0.0 where `recordSlot` writes the
-  phone's address. A replay never reads it, so a bundle has no reason to hold it.
+- **A sender is a port, never an address.** A bundle's pcaps write each sender as 0.0.0.0 at a
+  port of its own, a hash of its address and port under a key the recording draws at random and
+  never writes, where `recordSlot` writes the phone's address. A slot keeps the sender it is
+  receiving from (decision 0028), so a replay must tell senders apart to refuse the ones the live
+  slot refused; it never needs to know who they were. Two senders to one slot share a port one
+  time in 65,535.
+- **`recordSlot` throws on a mixer with a bundle.** Its slots already record there, and a slot has
+  one recording, so a second would end the bundle's.
 - **A `push` or `capture` slot is listed with `recorded: false`** and replays as silence. Its PCM
   is format 2's.
 - **Nothing here touches the audio thread but that one store.** The pcaps cost the network thread
