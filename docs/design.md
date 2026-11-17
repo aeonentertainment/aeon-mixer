@@ -309,6 +309,7 @@ native/
   tools/measure-corrector/  the corrector's rows and blind-listen set, on the offline driver
   tools/measure-latency/  the mic path's latency: the engine's share offline, the output's on hardware
   tools/replay/         a slot's recording, or a session bundle, through the real chain on the offline driver
+  tools/scorecard/      session bundles replayed into numbers, compared against a baseline
   tools/measure-echo/   the echo stages' numbers beside GStreamer's, the bleed run, the live howl check
   node/                 the napi-rs binding and the events thread; the only crate that knows Node
   binding/              where `vp run build:native` writes the addon and its generated loader and types
@@ -1332,6 +1333,40 @@ level beside libopus's own decode of the same packets, placed on their RTP times
 slot's counters as `stats()` gives them.
 
 Given a session bundle's directory in place of a file, it replays the whole song (8.11).
+
+`native/tools/scorecard` opens no device or socket. It replays each session bundle it is given,
+or each in a directory of them, as `replay` does, under `--profile` and with `--backing` as there,
+and turns each song into numbers. Every number is read from what the replay's engine reported, as
+`stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see. It
+reads each slot's `stats()` after every block. Per recorded slot: `late`, `concealed` and
+`playoutDelayMs` as the song ended; `correctorDelayMs`, the mean of `correctorDelayMs` over the
+blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in cents over the
+`pitch` readings with a `targetMidi`, a `confidence` of at least 0.9 and an `hz` of at least 82,
+the corrector's own bar, so a reading between notes, with no guide or with correction off counts
+for nothing; `echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
+over the blocks where `echo` was not null; `howlCatches`, every rise in it over the song, so a
+reset that starts it from 0 again loses none; and `levelTopTenthDb` and `levelMedianDb`, the
+90th percentile and the median of every `rmsDb` the slot's `level` reported in the song, as
+`replay`'s table reads them, so a slot that sang half the song has a median that says so. The
+master has the two levels, from
+`masterLevel`. A number with nothing to read, such as pitch error with correction off, is left out.
+
+- **A scorecard file** holds `format`, 1, and each bundle by its directory's name, each number
+  with its `value` to a hundredth and a `tolerance`. The tool writes each tolerance as the
+  baseline had it, or 0, and a person sets them: which movement fails a run is the file's to
+  say, never the tool's.
+- **Against a baseline**, an earlier scorecard, it prints every number that differs and fails
+  when one moved further than its tolerance or is gone. A number the baseline lacks is new and
+  fails nothing.
+- **The fixture.** Its tests score a short duet written on the offline driver, with no real
+  voice in it, against a committed baseline, so a change that moves one of its numbers past its
+  tolerance fails `cargo test`.
+- **Not yet.** The corrected voice's pitch and how often correction lets go of a note: `pitch`
+  reads the voice before correction, and whether the corrector is pulling is the slot's own
+  state, which no control-thread reader has once the graph is on the audio thread. Each needs the
+  slot to publish one more value. Of the tone stage's rows (decision 0029), the five that compare
+  a phone with a reference mic need that recording stored beside a bundle, and `tone_late` and
+  `tone_readings` come with the stage.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
