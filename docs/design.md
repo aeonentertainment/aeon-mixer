@@ -1339,11 +1339,15 @@ or each in a directory of them, as `replay` does, under `--profile` and with `--
 and turns each song into numbers. Every number is read from what the replay's engine reported, as
 `stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see. Per
 recorded slot: `late` and `concealed`; `playoutDelayMs` as the song ended; `correctorDelayMs`,
-the mean of the corrector's hold over the blocks it held any; `pitchErrorCents`, the median
-distance of each voiced reading from the guide note correction pulled toward; `echoRemovedDb`
-and `bleedDb`, the medians of the canceller's findings; `howlCatches`; and the meter's
-`level.topTenthDb` and `level.medianDb`. The master has the two levels. A number with nothing to
-read, such as pitch error with correction off, is left out.
+the mean of the corrector's hold over the blocks it held any; `pitchErrorCents`, the median of
+`|errorSemitones|` in cents over the `pitch` readings with a `targetMidi`, a `confidence` of at
+least 0.9 and an `hz` of at least 82, the corrector's own bar, so a reading between notes, with
+no guide or with correction off counts for nothing; `echoRemovedDb` and `bleedDb`, the medians
+of the canceller's findings; `howlCatches`; and `levelTopTenthDb` and `levelMedianDb`, the 90th
+percentile and the median of every `rmsDb` the slot's `level` reported in the song, as
+`replay`'s table reads them, so a slot that sang half the song has a median that says so. The
+master has the two levels, from `masterLevel`. A number with nothing to read, such as pitch
+error with correction off, is left out.
 
 - **A scorecard file** holds `format`, 1, and each bundle by its directory's name, each number
   with its `value` to a hundredth and a `tolerance`. The tool writes each tolerance as the
