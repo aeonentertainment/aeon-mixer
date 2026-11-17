@@ -20,11 +20,12 @@ pub fn find(dir: &Path, backing: &ManifestBacking) -> Result<StemFiles, String> 
             by_hash.insert(sha256(&path)?, path);
         }
     }
-    let mut stem = |kind: StemKind| -> Result<Option<PathBuf>, String> {
+    let stem = |kind: StemKind| -> Result<Option<PathBuf>, String> {
         let Some(named) = backing.stems.iter().find(|stem| stem.kind == kind) else {
             return Ok(None);
         };
-        by_hash.remove(&named.sha256).map(Some).ok_or_else(|| {
+        // Two stems may be one file, so a hash can name both
+        by_hash.get(&named.sha256).cloned().map(Some).ok_or_else(|| {
             format!("no file in {} is the {kind:?} stem, SHA-256 {}", dir.display(), named.sha256)
         })
     };
