@@ -1410,12 +1410,19 @@ released sender meets, as 7.2 does.
   owns it and answers for each singer's consent (8.4).
 - **Replay.** `replay DIR [--profile FILE] [--backing STEMS] [--wav OUT] [--json]` builds the
   mixer the manifest describes on the offline driver, under the bundle's profile or the one
-  `--profile` names (8.12), converts each arrival to a frame through the `stats.jsonl`
-  pairs either side of it, pushes it before the block that starts after that frame, and applies
-  each event at its own. `--backing` names a directory it searches for stems by hash; without it
-  the mic path replays alone. `--wav` writes each slot and the mix, and `--json` prints the
-  replay's own `stats()` and levels. A format it does not know, or a bundle with no `end`, it
-  names; the first it refuses, the second it plays as far as it goes.
+  `--profile` names (8.12), with the manifest's `frame` as its first block. Every line's pair
+  ties the clocks, the manifest's too, so it converts each arrival to a frame through the pairs
+  either side of it, at 48 frames a millisecond past the last, and pushes it before the first
+  block that starts at or after that frame, the block a setting at that frame would reach. It
+  applies each line at its frame, in frame order, filling what a call left out from the profile
+  as `src/mixer.ts` does: a change to how a call is resolved there changes `replay` in the same
+  PR. It plays to `end`. `--backing` names a directory it searches for stems by hash; without it
+  the mic path replays alone. `--wav` writes the mix, and `--json` prints the replay's own
+  `stats()` and levels. A format it does not know, or a bundle with no `end`, it names; the
+  first it refuses, the second it plays to its last line or packet.
+- **An output move replays as none.** The offline driver has one clock, so a slot's stream does
+  not end at an `outputChanged` line as it did live, and the replay can differ from the song
+  after one.
 - The same bundle replays to the same samples every time. Against the live song it can differ by
   a block: the pairs place an arrival to within the callback's own jitter, so a packet read at a
   block's edge can land either side.
