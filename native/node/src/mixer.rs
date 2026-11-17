@@ -10,6 +10,7 @@ use engine::graph::Graph;
 use engine::slot::Slot;
 use engine::slot::corrector_delay::CorrectorDelay;
 use engine::slot::echo_report::EchoReport;
+use engine::slot::tone_report::ToneReport;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use transport::Network;
@@ -29,6 +30,8 @@ pub struct Mixer {
     corrector_delays: Vec<Arc<CorrectorDelay>>,
     /// And what each slot's echo stages last published.
     echo_reports: Vec<Arc<EchoReport>>,
+    /// And what each tone stage last published.
+    tone_reports: Vec<Arc<ToneReport>>,
     rtp_return: Option<RtpReturn>,
     clock: SessionClock,
 }
@@ -66,6 +69,7 @@ impl Mixer {
             .unzip();
         let corrector_delays = slots.iter().map(Slot::corrector_delay).collect();
         let echo_reports = slots.iter().map(Slot::echo_report).collect();
+        let tone_reports = slots.iter().map(Slot::tone_report).collect();
         let mut graph = Box::new(Graph::new(slots));
         let rtp_return =
             rtp_return.map(|input| RtpReturn::open(input, &mut graph, network)).transpose()?;
@@ -74,6 +78,7 @@ impl Mixer {
             slots: ingests,
             corrector_delays,
             echo_reports,
+            tone_reports,
             rtp_return,
             clock,
         })
@@ -138,15 +143,18 @@ impl Mixer {
         self.clock.read()
     }
 
-    /// Every slot's ingest counters, corrector delay and echo findings, as the audio thread last
-    /// published them.
+    /// Every slot's ingest counters, corrector delay, echo findings and tone stage, as the audio
+    /// thread last published them.
     #[napi]
     pub fn stats(&self) -> Vec<SlotStatsInfo> {
         self.slots
             .iter()
             .zip(&self.corrector_delays)
             .zip(&self.echo_reports)
-            .map(|((slot, delay), echo)| SlotStatsInfo::new(slot.stats(), delay.frames(), echo))
+            .zip(&self.tone_reports)
+            .map(|(((slot, delay), echo), tone)| {
+                SlotStatsInfo::new(slot.stats(), delay.frames(), echo, tone)
+            })
             .collect()
     }
 
@@ -163,6 +171,7 @@ impl Mixer {
         self.slots.clear();
         self.corrector_delays.clear();
         self.echo_reports.clear();
+        self.tone_reports.clear();
         self.rtp_return = None;
         self.graph = None;
     }

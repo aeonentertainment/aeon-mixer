@@ -112,7 +112,32 @@ export type SlotEffect =
    */
   | { kind: "cleanup"; enabled: boolean }
   /** Ducks the slot when its loop through the speakers starts to howl, with no added delay. */
-  | { kind: "howl-guard"; enabled: boolean };
+  | { kind: "howl-guard"; enabled: boolean }
+  /**
+   * Makes a phone sound like a good vocal mic and holds no sample. `bands` is the host's
+   * correction for the mic it knows, at most 8. `plosiveDb` 0 to 12, `airDb` 0 to 6 and `deEssDb`
+   * 0 to 12 are amounts; they are not in the profile, and left out each is 0 and its part is out
+   * of the path. Throws when the bands and the air together leave a frequency from 80 Hz over
+   * 0.2 ms late or lift one over 6 dB. `"match"`, the blind match for a mic with no bands, throws
+   * too: it has no target curve to aim at yet. Decision 0029 has the reasons and numbers.
+   */
+  | {
+      kind: "tone";
+      enabled: boolean;
+      bands?: ReadonlyArray<ToneBand> | "match";
+      plosiveDb?: number;
+      airDb?: number;
+      deEssDb?: number;
+    };
+
+/**
+ * One filter of a tone stage's `bands`: the Audio EQ Cookbook's peaking or shelf biquad at 48 kHz,
+ * a shelf at slope 1, so a host's fitting tool draws the same curve from the same numbers. `hz`
+ * 80 to 16 000, `gainDb` -12 to 6, `q` 0.3 to 8.
+ */
+export type ToneBand =
+  | { kind: "peak"; hz: number; gainDb: number; q: number }
+  | { kind: "low-shelf" | "high-shelf"; hz: number; gainDb: number };
 
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
@@ -151,6 +176,16 @@ export interface SlotStats {
   playoutDelayMs: number;
   /** How often the howl guard has ducked this slot. */
   howlCatches: number;
+  /**
+   * What the tone stage did; null while it is off. `match` is null until the blind match ships.
+   * `deEssDb` is the most the de-esser took off in the last second, `plosives` the pops the guard
+   * has ducked.
+   */
+  tone: {
+    match: { bands: ReadonlyArray<{ hz: number; gainDb: number }>; countedMs: number } | null;
+    deEssDb: number;
+    plosives: number;
+  } | null;
 }
 
 export type EngineEvents = {

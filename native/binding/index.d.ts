@@ -105,8 +105,8 @@ export declare class Mixer {
    */
   clock(): ClockReading
   /**
-   * Every slot's ingest counters, corrector delay and echo findings, as the audio thread last
-   * published them.
+   * Every slot's ingest counters, corrector delay, echo findings and tone stage, as the audio
+   * thread last published them.
    */
   stats(): Array<SlotStatsInfo>
   /** The return stream's counters, or null for a mixer without one. */
@@ -126,6 +126,12 @@ export interface BackingInput {
   /** The armed speed factor, rendered before start. */
   speed: number
 }
+
+/**
+ * Throws when the bands and the air together leave a frequency from 80 Hz over 0.2 ms late or
+ * lift one over 6 dB, naming the worst. Needs no engine, so an armed mixer checks at the call.
+ */
+export declare function checkTone(input: ToneInput): void
 
 export interface CleanupInput {
   enabled: boolean
@@ -283,6 +289,7 @@ export interface SlotParamsInput {
   echoCancel: SwitchInput
   cleanup: CleanupInput
   howlGuard: SwitchInput
+  tone: ToneInput
   guideOffsetMs: number
 }
 
@@ -301,6 +308,8 @@ export interface SlotStatsInfo {
   echo: EchoInfo | null
   playoutDelayMs: number
   howlCatches: number
+  /** Null while the tone stage is off. */
+  tone: ToneInfo | null
 }
 
 export interface StemGainsInput {
@@ -311,6 +320,30 @@ export interface StemGainsInput {
 /** An effect with no knob but on and off. */
 export interface SwitchInput {
   enabled: boolean
+}
+
+/** One band, spelt as the public `ToneBand` is. */
+export type ToneBandInput =
+  | { kind: 'peak'; hz: number; gainDb: number; q: number }
+  | { kind: 'low-shelf'; hz: number; gainDb: number }
+  | { kind: 'high-shelf'; hz: number; gainDb: number }
+
+/** What a slot's tone stage did, as JavaScript reads it. */
+export interface ToneInfo {
+  /** The blind match, which does not run until it has a target to aim at (decision 0029). */
+  match: null
+  /** The most the de-esser took off in the last second. */
+  deEssDb: number
+  /** Pops the guard has ducked. */
+  plosives: number
+}
+
+export interface ToneInput {
+  enabled: boolean
+  bands: Array<ToneBandInput>
+  plosiveDb: number
+  airDb: number
+  deEssDb: number
 }
 
 export interface VoiceInput {

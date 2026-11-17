@@ -17,6 +17,9 @@ mod silent_source_tests;
 pub mod source;
 #[cfg(test)]
 mod stream_return_tests;
+pub mod tone_report;
+#[cfg(test)]
+mod tone_tests;
 
 use std::f32::consts::FRAC_PI_4;
 use std::sync::Arc;
@@ -27,12 +30,15 @@ use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
 use cue::Cue;
 use echo_report::EchoReport;
-use effects::{Compressor, Corrector, EchoCanceller, Gate, HighPass, HowlGuard, Reverb, Voice};
+use effects::{
+    Compressor, Corrector, EchoCanceller, Gate, HighPass, HowlGuard, Reverb, Tone, Voice,
+};
 use guide::Guide;
 use kernels::EchoHistory;
 use meter::Meter;
 use shared::Shared;
 use source::Source;
+use tone_report::ToneReport;
 
 pub struct Slot {
     source: Box<dyn Source>,
@@ -49,6 +55,8 @@ pub struct Slot {
     reverb: Reverb,
     voice: Voice,
     meter: Meter,
+    tone: Tone,
+    tone_report: Arc<ToneReport>,
     compressor: Compressor,
     /// While the playhead holds, the cue's frame and the slot's frame on the guide clock when the
     /// hold began. A source's latency can move every block, as a push ring's depth does, and the
@@ -76,6 +84,8 @@ impl Slot {
             reverb: Reverb::new(),
             voice: Voice::new(),
             meter: Meter::new(),
+            tone: Tone::new(),
+            tone_report: Arc::default(),
             compressor: Compressor::new(),
             held: None,
             gains: None,
@@ -104,10 +114,15 @@ impl Slot {
         Arc::clone(&self.echo_report)
     }
 
+    /// What the tone stage did, for the control thread.
+    pub fn tone_report(&self) -> Arc<ToneReport> {
+        Arc::clone(&self.tone_report)
+    }
+
     /// Pulls one block, takes the room's echo of the master out of it, guards it against a howl,
-    /// cleans it, corrects it toward the guide at the cue, meters it, compresses it, voices it, adds
-    /// reverb, and adds it to `out` at the ramped gain, silent while another slot is soloed and this
-    /// one is not.
+    /// cleans it, corrects it toward the guide at the cue, meters it, shapes its tone, compresses
+    /// it, voices it, adds reverb, and adds it to `out` at the ramped gain, silent while another
+    /// slot is soloed and this one is not.
     pub fn render(
         &mut self,
         index: u8,
@@ -160,8 +175,8 @@ impl Slot {
             },
         );
         self.corrector_delay.publish(self.corrector.latency_frames());
-        // The meter reads the corrected voice ahead of the compressor, the voice and the reverb:
-        // it is the singing
+        // The meter reads the corrected voice ahead of the tone stage, the compressor, the voice
+        // and the reverb: it is the singing
         for sample in self.input {
             if let Some(reading) = self.meter.push_frame(sample * sample, sample.abs()) {
                 events.push(Event::Level {
@@ -171,6 +186,8 @@ impl Slot {
                 });
             }
         }
+        self.tone.process(&params.effects.tone, &mut self.input);
+        self.tone_report.publish(self.tone.findings());
         self.compressor.process(&params.effects.cleanup, &mut self.input);
         self.voice.process(&params.effects.voice, &mut self.input);
         self.reverb.process(&params.effects.reverb, &mut self.input);

@@ -29,6 +29,7 @@ import type {
   SlotStats,
   StemKind,
 } from "./types.ts";
+import { toneInput, toneOff } from "./tone.ts";
 import { framesToMs, msToFrames } from "./units.ts";
 import { finiteIn, integerIn, pcm, RANGES } from "./validate.ts";
 
@@ -76,7 +77,7 @@ type Phase = "armed" | "starting" | "live" | "destroyed";
 
 type Effects = Pick<
   SlotParamsInput,
-  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel" | "howlGuard"
+  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel" | "howlGuard" | "tone"
 >;
 
 /** Every effect off: a slot's chain as it starts, and what `setSlotEffects` builds on. */
@@ -88,6 +89,7 @@ function effectsOff(): Effects {
     echoCancel: { enabled: false },
     cleanup: { enabled: false },
     howlGuard: { enabled: false },
+    tone: toneOff(),
   };
 }
 
@@ -239,6 +241,9 @@ export class Mixer {
           break;
         case "howl-guard":
           next.howlGuard = { enabled: effect.enabled };
+          break;
+        case "tone":
+          next.tone = toneInput(effect);
           break;
       }
     }

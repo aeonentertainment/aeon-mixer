@@ -34,6 +34,7 @@ such range by itself, which is the side effect rule 4 forbids.
 
 | Release | Change                                                                                                                                                                                             | Record                    |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 0.9.0   | `SlotStats` gains a required `tone` field and `SlotEffect` a `"tone"` kind, so a hand-built fake adds the field and a switch over every kind needs a case.                                         | #205, 0029                |
 | 0.8.0   | `Engine` is exported as a type only. `new Engine()` and `instanceof Engine` no longer work; `openEngine` is how an engine is made, as it always was.                                               | #169, design.md section 7 |
 | 0.8.0   | An `rtp` slot keeps the sender it is receiving from. A new sender waits for the old one's second of quiet unless the host calls `resetSlot`, so call `resetSlot` whenever a slot's sender changes. | #203, 0028                |
 | 0.8.0   | An `l16` slot listens on `127.0.0.1` only, so an `l16` sender on another machine no longer reaches it.                                                                                             | #194, #195                |

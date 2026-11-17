@@ -23,6 +23,8 @@ mod slot_input;
 mod slot_params;
 mod slot_stats_info;
 mod test_os;
+mod tone_info;
+mod tone_input;
 
 pub use backing::{BackingInput, BackingRender, StemGainsInput};
 pub use clock::OutputEntry;
@@ -37,3 +39,5 @@ pub use session_clock::ClockReading;
 pub use slot_input::SlotInput;
 pub use slot_params::{CorrectorInput, ReverbInput, SlotParamsInput, SwitchInput, VoiceInput};
 pub use slot_stats_info::SlotStatsInfo;
+pub use tone_info::ToneInfo;
+pub use tone_input::{ToneBandInput, ToneInput, check_tone};

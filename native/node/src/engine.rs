@@ -227,7 +227,8 @@ impl Engine {
     #[napi]
     pub fn set_slot_params(&mut self, index: u32, params: SlotParamsInput) -> Result<()> {
         let index = slot_index(index)?;
-        self.params.update(|snapshot| snapshot.slots[index] = params.into());
+        let params = params.try_into()?;
+        self.params.update(|snapshot| snapshot.slots[index] = params);
         Ok(())
     }
 
