@@ -1337,17 +1337,18 @@ Given a session bundle's directory in place of a file, it replays the whole song
 `native/tools/scorecard` opens no device or socket. It replays each session bundle it is given,
 or each in a directory of them, as `replay` does, under `--profile` and with `--backing` as there,
 and turns each song into numbers. Every number is read from what the replay's engine reported, as
-`stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see. Per
-recorded slot: `late` and `concealed`; `playoutDelayMs` as the song ended; `correctorDelayMs`,
-the mean of the corrector's hold over the blocks it held any; `pitchErrorCents`, the median of
-`|errorSemitones|` in cents over the `pitch` readings with a `targetMidi`, a `confidence` of at
-least 0.9 and an `hz` of at least 82, the corrector's own bar, so a reading between notes, with
-no guide or with correction off counts for nothing; `echoRemovedDb` and `bleedDb`, the medians
-of the canceller's findings; `howlCatches`; and `levelTopTenthDb` and `levelMedianDb`, the 90th
-percentile and the median of every `rmsDb` the slot's `level` reported in the song, as
-`replay`'s table reads them, so a slot that sang half the song has a median that says so. The
-master has the two levels, from `masterLevel`. A number with nothing to read, such as pitch
-error with correction off, is left out.
+`stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see. It
+reads each slot's `stats()` after every block. Per recorded slot: `late`, `concealed` and
+`playoutDelayMs` as the song ended; `correctorDelayMs`, the mean of `correctorDelayMs` over the
+blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in cents over the
+`pitch` readings with a `targetMidi`, a `confidence` of at least 0.9 and an `hz` of at least 82,
+the corrector's own bar, so a reading between notes, with no guide or with correction off counts
+for nothing; `echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
+over the blocks where `echo` was not null; `howlCatches`, every rise in it over the song, so a
+reset that starts it from 0 again loses none; and `levelTopTenthDb` and `levelMedianDb`, the 90th percentile and the median of every
+`rmsDb` the slot's `level` reported in the song, as `replay`'s table reads them, so a slot that
+sang half the song has a median that says so. The master has the two levels, from
+`masterLevel`. A number with nothing to read, such as pitch error with correction off, is left out.
 
 - **A scorecard file** holds `format`, 1, and each bundle by its directory's name, each number
   with its `value` to a hundredth and a `tolerance`. The tool writes each tolerance as the
