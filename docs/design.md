@@ -1433,11 +1433,11 @@ released sender meets, as 7.2 does.
   `start` to write, or, for `resetSlot`, dropped. Both can carry `start`'s `frame`, so only the
   file's order tells them apart. While `start` waits on its acks, the parameter calls and
   `setSlotGuide` end the same on either side of it, since `start` writes what was held.
-  `resetSlot` does not: after `start` it reaches a slot that has pulled nothing yet, which a phone
-  slot does not hear but a `push` slot does, dropping what it was handed while armed. The backing
-  calls are refused before `start` and write their own lines as sent, and `destroy` closes the
-  file, which would lose a line still waiting on an ack. Writing each line in its call's turn
-  orders all of them.
+  `resetSlot` does not: after `start` it reaches a slot that has pulled nothing yet, which changes
+  nothing on an `rtp`, `l16` or `capture` slot and drops what a `push` slot was handed while
+  armed. The backing calls are refused before `start` and write their own lines as sent, and
+  `destroy` closes the file, which would lose a line still waiting on an ack. Writing each line in
+  its call's turn orders all of them.
 - **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
   thread that keeps no process alive.
 - **A sender is a port, never an address.** A bundle's pcaps write each sender as 0.0.0.0 at a
