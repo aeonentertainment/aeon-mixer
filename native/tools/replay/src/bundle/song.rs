@@ -67,7 +67,8 @@ pub struct PlayedSlot {
 struct Reports {
     corrector_delay: Arc<CorrectorDelay>,
     echo: Arc<EchoReport>,
-    /// The guard's count after the last block; a reset starts it again from zero.
+    /// The guard's count after the last block. It only rises today; summing its rises keeps the
+    /// song's total whole if a reset ever clears it (docs/design.md 8.9).
     howl_catches: u32,
 }
 
