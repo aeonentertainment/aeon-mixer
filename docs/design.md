@@ -1387,7 +1387,8 @@ released sender meets, as 7.2 does.
   at the armed speed, which the binding's `installBacking` returns: the length is known only
   once the render is done, after the manifest is written, and a replay that renders the stems
   again checks its own against it. A command's line is
-  written when its ack arrives and carries the backing position the ack gave. `destroy` writes
+  stamped as the command is sent, as every call's line is stamped before its change is made,
+  and written when its ack arrives, with the backing position the ack gave. `destroy` writes
   `{"type":"end"}` last, so a bundle without one was cut short. `level` and `pitch` are left out:
   a replay makes them again.
 - **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
