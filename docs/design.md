@@ -1372,8 +1372,8 @@ released sender meets, as 7.2 does.
   carries `frame`, that count as the control thread read it, and `us`, the wall clock the pcaps
   stamp arrivals with, read in the same call: the mixer holds one `WallClock` and gives it to
   each of the bundle's recordings. Every line's pair ties the two clocks together, and the
-  stats line each second shows them drift. A setting changed at `frame` is taken up by the block that starts at or after
-  it, live and in a replay.
+  stats line each second shows them drift. A setting changed at `frame` is taken up by the
+  block that starts at or after it, live and in a replay.
 - **`manifest.json`** holds `format`, 1; the package's version and the platform; the output's
   rate, period, latency and name; `frame` and `us` at creation; each slot's index and kind and
   whether it is recorded; and the backing: each stem's kind and SHA-256, with key, speed, stem
@@ -1386,9 +1386,9 @@ released sender meets, as 7.2 does.
   `backingRendered` as it moves the rendered stems into the graph, with their length in frames
   at the armed speed, which the binding's `installBacking` returns: the length is known only
   once the render is done, after the manifest is written, and a replay that renders the stems
-  again checks its own against it. A command's line is
-  stamped as the command is sent, as every call's line is stamped before its change is made,
-  and written when its ack arrives, with the backing position the ack gave. `destroy` writes
+  again checks its own against it. A command's line is stamped as the command is sent, as
+  every call's line is stamped before its change is made, and written when its ack arrives,
+  with the backing position the ack gave. `destroy` writes
   `{"type":"end"}` last, so a bundle without one was cut short. `level` and `pitch` are left out:
   a replay makes them again.
 - **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
@@ -1430,7 +1430,7 @@ released sender meets, as 7.2 does.
 
 Done when: a bundle written during a song on the offline driver replays to the same samples
 twice, under the allocation guard, with an effect change and a seek mid-song landing on the same
-blocks; a bundle with no `end` line replays to its last line; a `format` the tool does not know
+blocks; a bundle with no `end` line replays to its last line or packet; a `format` the tool does not know
 is refused by name; and `tap_cost` with eight slots recording is quoted in the PR.
 
 ### 8.12 Settings profile: `src/profile/`
