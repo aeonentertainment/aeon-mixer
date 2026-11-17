@@ -242,7 +242,9 @@ export class Engine {
   async close() {
     if (this.#state === "closed") return;
     if (this.#live && this.#state === "running") {
-      await this.#live.mixer.destroy();
+      // A destroy cut short by a fault or a stall still leaves the engine to close, and the host
+      // has heard why through `fault` or the mixer's `error`
+      await this.#live.mixer.destroy().catch(() => {});
     }
     this.#state = "closed";
     this.#native.close();

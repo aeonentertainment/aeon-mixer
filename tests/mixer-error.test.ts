@@ -96,6 +96,15 @@ async function startLive(engine: OfflineEngine, mixer: Mixer) {
   return started;
 }
 
+/** Resolves once the engine has heard the next batch that carries an ack. */
+function nextAck() {
+  return new Promise<void>((resolve) => {
+    addon.heard = (batch) => {
+      if (batch.some((event) => event.kind === "ack")) resolve();
+    };
+  });
+}
+
 /** Runs `body` with the ack timeout under the test's hand. */
 async function withFakeTimers(body: () => Promise<void>) {
   vi.useFakeTimers();
@@ -286,11 +295,7 @@ test.each([
     const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
     await startLive(engine, mixer);
     const destroyed = mixer.destroy();
-    const acked = new Promise<void>((resolve) => {
-      addon.heard = (batch) => {
-        if (batch.some((event) => event.kind === "ack")) resolve();
-      };
-    });
+    const acked = nextAck();
     // One block takes the swap and acks it; the 5 ms fade out runs into the next block
     engine.pump(1);
     await acked;
@@ -301,6 +306,21 @@ test.each([
     await engine.close();
   },
 );
+
+test("close still closes when the engine faults while it destroys the live mixer", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  await startLive(engine, mixer);
+  const acked = nextAck();
+  const closed = engine.close();
+  engine.pump(1);
+  await acked;
+
+  addon.deliver([{ kind: "fault" }]);
+
+  await closed;
+  await expect(engine.createMixer({ slots: [] })).rejects.toThrow(/closed/);
+});
 
 test("a destroy rejects, and leaves nothing unheard, when the engine faults before its swap is acked", async () => {
   const engine = await openEngine({ output: { offline: true } });
