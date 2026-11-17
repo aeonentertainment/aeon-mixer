@@ -371,7 +371,7 @@ pub const TONE_BANDS: usize = 8;
 #[derive(Clone, Copy)]
 pub struct ToneParams { pub enabled: bool, pub bands: ToneBands, pub plosive_db: f32, pub air_db: f32, pub de_ess_db: f32 }   // an amount at 0 leaves its part out of the path; check() -> Result<(), ToneRefusal> on the control thread, before the params cross (8.6)
 #[derive(Clone, Copy)]
-pub enum ToneBands { None, Given { count: u8, bands: [ToneBand; TONE_BANDS] }, Match }
+pub enum ToneBands { None, Given { count: u8, bands: [ToneBand; TONE_BANDS] } }   // a Match variant joins with the blind match (8.6)
 #[derive(Clone, Copy)]
 pub enum ToneBand { Peak { hz: f32, gain_db: f32, q: f32 }, LowShelf { hz: f32, gain_db: f32 }, HighShelf { hz: f32, gain_db: f32 } }
 pub enum ToneRefusal { Late { hz: f32, delay_ms: f32 }, Lifted { hz: f32, lift_db: f32 } }   // the frequency the bands and the air treat worst, and by how much
@@ -1174,13 +1174,15 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   makeup, so it never brings a slot more than 6 dB closer to feedback. Off, each fades to unity
   over a block and then costs nothing.
 - The tone stage is `slot::effects::tone`, Rust biquads of its own with no kernel, run after the
-  meter: `Tone::process(params, voiced, block)`, where `voiced` says the corrector's last reading
-  was a voice it is sure of. In order it is the plosive guard, the bands or the match, the air
-  shelf and the de-esser, so the match never averages a pop and the de-esser judges the sibilance
-  that leaves the stage. Decision [0029](decisions/0029-the-tone-stage.md) has each part's
-  reasons and its starting numbers. In 8.1's `params.rs` and `slot/mod.rs` and in 8.8's `src/`
-  it adds its own lines and changes nothing else: the params, its place after the meter, its
-  report, and the effect's validation and stats.
+  meter: `Tone::process(params, block)`. In order it is the plosive guard, the bands, the air
+  shelf and the de-esser, so the de-esser judges the sibilance that leaves the stage. The match,
+  when it runs, takes the bands' place, after the guard so it never averages a pop. Decision
+  [0029](decisions/0029-the-tone-stage.md) has each part's reasons and its starting numbers. In
+  8.1's `params.rs` and `slot/mod.rs`, and in 8.8's `src/` and `node/`, it adds its own lines and
+  changes nothing else: the params, its place after the meter, its report, the effect's
+  validation and stats, and the binding's tone settings, `checkTone` and tone stats. The one
+  existing line it changes is the binding's `SlotParamsInput` conversion, which becomes fallible,
+  since a band count over eight has to fail there.
 - Bands are a capture profile: what a host knows of one mic, as up to eight filters that undo its
   colour and move it to the curve of a good vocal mic. The engine knows no phone model. The host
   owns the table and whatever keys it. Each band is the Audio EQ Cookbook's peaking or shelf
@@ -1210,13 +1212,20 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   - It starts over, its count at zero and its filters ramping to flat, only on `resetSlot`, which
     a host calls when a slot's sender changes. A pause, a gap or a new SSRC from the same phone
     keeps what it learned.
-- The plosive guard is a first-order low shelf whose cut follows a burst under the voice, to at
-  most `plosiveDb`. At rest it is out of the path. While it ducks it leaves the voice just over
-  its corner at most 0.2 ms late, for as long as the pop lasts, and a held low note does not set
-  it off. The de-esser is a high shelf whose cut follows how far the voice over 5 kHz stands
-  above the rest of it, to at most `deEssDb`, so it needs no threshold per phone; while it cuts,
-  nothing is over 0.05 ms late. Neither reads ahead, so the first millisecond of a pop or an s
-  passes. Air is a high shelf at 10 kHz that lifts by `airDb`, hiss included.
+  - Until it has its target (decision 0029), it does not run: `ToneBands` has no `Match`
+    variant, `Tone::process` takes no `voiced`, the corrector's word that its last reading was a
+    voice it is sure of, and `setSlotEffects` refuses `bands: "match"` by name. All three join
+    when the match does.
+- The plosive guard is a first-order low shelf that ducks by `plosiveDb` while the band under
+  60 Hz stands 21 dB over the voice above 300 Hz, and lets go over 50 ms. It ducks only a pop
+  that stands far under the voice, and never a sung note: a low note's first period, before its
+  harmonics over 300 Hz arrive, is little but low end, so a guard that caught more would duck
+  its onset. At rest it is out of the path. While it ducks it leaves the voice just over its
+  corner at most 0.2 ms late. The de-esser is a high shelf whose cut follows how far the voice
+  over 5 kHz stands above the rest of it, to at most `deEssDb`, so it needs no threshold per
+  phone; while it cuts, nothing is over 0.05 ms late. Neither reads ahead, so the first
+  millisecond of an s passes, and the first 7 ms or so of a pop, which the guard's band under
+  60 Hz takes to rise. Air is a high shelf at 10 kHz that lifts by `airDb`, hiss included.
 - Off, the tone stage crosses to the untouched voice over a block and then does no work: the slot
   is bit for bit what it is with no stage. On with no bands and every amount at 0 it is the same.
   A change of bands, of an amount or of on and off ramps and never steps.
@@ -1242,8 +1251,10 @@ cap, the match moved, the plosive guard ducking and the de-esser cutting; tones 
 16 kHz through bands and air at the cap come out at most 0.2 ms late, and 0.4 with the guard held
 at its deepest; each band is within 0.1 dB of the cookbook's curve; `check` refuses a cascade
 over either cap by the frequency it breaks at; every `Pitch` and `Level` event is the same with
-the stage on as off; at `plosiveDb` 12 a pop loses at least 6 dB under 100 Hz and a held 82 Hz
-note moves by under 1 dB; at `deEssDb` 6 an s 10 dB hot loses at least 4 dB over 5 kHz and a
+the stage on as off; at `plosiveDb` 12 the guard makes no pop louder and ducks the pops that
+stand furthest under the voice (twelve pops of noise under 80 Hz lose 0.0 to 4.8 dB under
+100 Hz, a median of 0.5), and a held E2 or D2, bright or with nothing over 600 Hz, moves by under
+1 dB in any 10 ms, its onset included, and counts as no pop; at `deEssDb` 6 an s 10 dB hot loses at least 4 dB over 5 kHz and a
 vowel moves by under 0.5 dB; the match, given a voice through a known tilt, comes back toward its
 target inside its rate and range, holds through silence, noise and a backing track alone, moves
 nothing in its first 5 s and starts over on `resetSlot`; all of it runs under the allocation

@@ -12,7 +12,7 @@ before the compressor, and it is five parts in this order:
 
 | Part          | What                                                                    | Asked for by        | Late, at worst               |
 | ------------- | ----------------------------------------------------------------------- | ------------------- | ---------------------------- |
-| Plosive guard | a first-order low shelf under 250 Hz whose cut follows a pop            | `plosiveDb` 0 to 12 | 0.17 ms, only while it ducks |
+| Plosive guard | a first-order low shelf under 250 Hz for a pop far under the voice      | `plosiveDb` 0 to 12 | 0.17 ms, only while it ducks |
 | Bands         | up to 8 filters a host hands in for a mic it knows                      | `bands: [...]`      | 0.2 ms, refused over that    |
 | Match         | 3 broad filters the stage moves itself, for a mic the host has none for | `bands: "match"`    | 0.19 ms                      |
 | Air           | a high shelf at 10 kHz                                                  | `airDb` 0 to 6      | 0.01 ms                      |
@@ -134,7 +134,9 @@ host.
 the bench's reference mic, as each band's level against the mean. A target per host would make
 "a good vocal mic" mean something else in every host, and the scorecard judges against one mic.
 The numbers come from the reference side of the bench's pairs (#197) and are written here when
-they exist. Until then the match has nothing to aim at and does not ship.
+they exist. Until then the match has nothing to aim at and does not ship: `ToneBands` has no
+`Match` variant, the stage takes no reading of the voice, and `setSlotEffects` refuses
+`bands: "match"` by name.
 
 **It cannot tell a phone from a singer.** A dark voice and a dull phone average the same. That
 is why it is three broad filters with 6 dB of range and not a full equaliser, and why a profile
@@ -169,10 +171,20 @@ phase only while it cuts.
 
 **The plosive guard** is a first-order low shelf with its pole at 250 Hz. At 12 dB it takes 10 dB
 off 50 Hz and 8 off 80 Hz, and leaves 233 Hz 0.17 ms late while it does. The second-order shelf
-at 150 Hz that would be the usual choice takes 2 to 3 dB more off and costs 0.45 ms. Its detector is
-the code's to choose, on two tests: a pop goes, and a bass holding a low E does not set it off.
-With no lookahead the first millisecond of a pop passes, which the master's soft clipper stands
-behind.
+at 150 Hz that would be the usual choice takes 2 to 3 dB more off and costs 0.45 ms.
+
+It ducks by the whole `plosiveDb` while the band under 60 Hz, at 24 dB an octave, stands 21 dB
+over the voice above 300 Hz. So it ducks only a pop that stands far under the voice, and never a
+sung note. A guard that caught more would duck a low note's onset: until its harmonics over
+300 Hz arrive as their first pulse, a low note's first period is little but low end. Sung E2s and
+D2s, bright and dark, with 5 and 20 ms onsets, peak 14.5 dB over the voice; twelve synthetic pops
+peak 19 to 32 dB over it. The two nearly meet, and a low note that ducks is worse than a pop that
+gets through, so the threshold sits 6.5 dB over the notes. Measured on the engine at
+`plosiveDb` 12, twelve pops of noise under 80 Hz lose 0.0 to 4.8 dB under 100 Hz, a median of
+0.5, and held E2 and D2 notes, bright and with nothing over 600 Hz, move by under 1 dB in every
+10 ms, their onsets included, and count as no pop. With no lookahead, and a detector band under
+60 Hz that takes about 7 ms to rise, a pop's first 7 ms or so pass, which the master's soft
+clipper stands behind.
 
 **The de-esser** is a high shelf from 5 kHz. It cuts by how far the voice over 5 kHz stands above
 the rest of it, so it needs no threshold per phone and treats a quiet singer as it does a loud
