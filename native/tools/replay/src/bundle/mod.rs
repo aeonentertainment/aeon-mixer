@@ -14,6 +14,8 @@ pub mod stems;
 #[cfg(test)]
 mod live_song;
 #[cfg(test)]
+mod scorecard_fixture;
+#[cfg(test)]
 mod tests;
 
 use std::path::Path;

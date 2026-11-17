@@ -18,6 +18,9 @@ use engine::ingest::{
 };
 use engine::params::StemGains;
 use engine::slot::Slot;
+use engine::slot::corrector_delay::CorrectorDelay;
+use engine::slot::echo_report::{EchoFindings, EchoReport};
+use engine::slot::effects::Reading;
 use engine::slot::source::Source;
 
 use super::Bundle;
@@ -42,12 +45,31 @@ pub struct Played {
 
 pub struct PlayedSlot {
     pub kind: String,
+    /// Whether the bundle recorded the slot's packets; one it did not replays as silence.
+    pub recorded: bool,
     /// The slot's counters as `stats()` gives them; zero for a slot that replays as silence.
     pub stats: SlotStats,
     /// The slot's meter readings, as `level` carries them.
     pub meter_db: Vec<f32>,
     /// Packets the slot's ring had no room for.
     pub ring_full: usize,
+    /// The corrector's readings, every 10 ms, as `pitch` carries them.
+    pub readings: Vec<Reading>,
+    /// How far the corrector held the voice after each block, as `stats()` reads it.
+    pub corrector_delay_frames: Vec<u32>,
+    /// The echo canceller's findings after each block that had them, as `stats()` reads them.
+    pub echo: Vec<EchoFindings>,
+    /// Times the howl guard ducked.
+    pub howl_catches: u32,
+}
+
+/// What the control thread reads of a slot once its graph is on the audio thread.
+struct Reports {
+    corrector_delay: Arc<CorrectorDelay>,
+    echo: Arc<EchoReport>,
+    /// The guard's count after the last block. It only rises today; summing its rises keeps the
+    /// song's total whole if a reset ever clears it (docs/design.md 8.9).
+    howl_catches: u32,
 }
 
 /// One slot's ingest, the control thread's end of it.
@@ -73,6 +95,14 @@ pub fn play(
         ingests.push(ingest);
         slots.push(Slot::new(source));
     }
+    let mut reports: Vec<Reports> = slots
+        .iter()
+        .map(|slot| Reports {
+            corrector_delay: slot.corrector_delay(),
+            echo: slot.echo_report(),
+            howl_catches: 0,
+        })
+        .collect();
     let mut graph = Box::new(Graph::new(slots));
     let mut notes = Vec::new();
     let mut rendered = None;
@@ -124,9 +154,14 @@ pub fn play(
         .iter()
         .map(|slot| PlayedSlot {
             kind: slot.kind.clone(),
+            recorded: slot.recorded,
             stats: SlotStats::default(),
             meter_db: Vec::new(),
             ring_full: 0,
+            readings: Vec::new(),
+            corrector_delay_frames: Vec::with_capacity(blocks),
+            echo: Vec::new(),
+            howl_catches: 0,
         })
         .collect();
     let mut mix = Vec::with_capacity(blocks * 2 * BLOCK);
@@ -157,8 +192,33 @@ pub fn play(
                     }
                 }
                 EngineEvent::MasterLevel { rms_db, .. } => master_db.push(rms_db),
+                EngineEvent::Pitch {
+                    slot,
+                    position_ms,
+                    hz,
+                    confidence,
+                    target_midi,
+                    error_semitones,
+                } => {
+                    if let Some(slot) = played.get_mut(usize::from(slot)) {
+                        slot.readings.push(Reading {
+                            position_ms,
+                            hz,
+                            confidence,
+                            target_midi,
+                            error_semitones,
+                        });
+                    }
+                }
                 _ => {}
             }
+        }
+        for (slot, report) in played.iter_mut().zip(&mut reports) {
+            slot.corrector_delay_frames.push(report.corrector_delay.frames());
+            slot.echo.extend(report.echo.findings());
+            let catches = report.echo.howl_catches();
+            slot.howl_catches += catches.saturating_sub(report.howl_catches);
+            report.howl_catches = catches;
         }
         while desk.controls.retired.pop().is_some() {}
     }

@@ -10,6 +10,7 @@ members = [
   "tools/measure-echo",
   "tools/measure-latency",
   "tools/replay",
+  "tools/scorecard",
 ]
 
 [workspace.package]

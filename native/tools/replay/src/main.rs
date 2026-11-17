@@ -1,18 +1,4 @@
-//! replay: a slot's recording through the real chain on the offline driver, beside libopus's
-//! own decode of the same packets (docs/design.md 8.9, decision 0017), or a session bundle's
-//! whole song (8.11). It opens no device and no socket. The same input replays to the same
-//! samples every time.
-
-mod bundle;
-mod capture;
-mod levels;
-mod reference;
-mod slot_replay;
-mod stream;
-mod wav;
-
-#[cfg(test)]
-mod round_trip;
+//! `replay`: prints what a slot's recording or a session bundle's song played as (lib.rs).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,9 +6,10 @@ use std::process::ExitCode;
 use engine::block::RATE;
 use engine::ingest::Codec;
 
-use crate::levels::Levels;
-use crate::reference::Kind;
-use crate::stream::Stream;
+use replay::levels::Levels;
+use replay::reference::Kind;
+use replay::stream::Stream;
+use replay::{bundle, capture, reference, slot_replay, wav};
 
 const USAGE: &str = "\
 usage: replay RECORDING.pcap [--port N] [--codec opus|l16] [--playout-delay-ms MS] [--wav DIR]
@@ -50,6 +37,7 @@ struct Options {
     playout_delay_ms: f64,
     wav: Option<PathBuf>,
     bundle: bundle::report::Options,
+    json: bool,
     /// The single-recording flags given, which a bundle refuses.
     recording_flags: Vec<String>,
 }
@@ -63,6 +51,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         playout_delay_ms: 15.0,
         wav: None,
         bundle: bundle::report::Options::default(),
+        json: false,
         recording_flags: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -86,7 +75,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--wav" => options.wav = Some(PathBuf::from(value()?)),
             "--profile" => options.bundle.profile = Some(PathBuf::from(value()?)),
             "--backing" => options.bundle.backing = Some(PathBuf::from(value()?)),
-            "--json" => options.bundle.json = true,
+            "--json" => options.json = true,
             flag if flag.starts_with("--") => return Err(format!("no flag {flag}")),
             path => recording = Some(PathBuf::from(path)),
         }
@@ -100,9 +89,14 @@ fn run(options: &Options) -> Result<(), String> {
         if let Some(flag) = options.recording_flags.first() {
             return Err(format!("{flag} is for a single recording; a bundle says its own"));
         }
-        return bundle::report::run(&options.recording, &options.bundle, options.wav.as_deref());
+        return bundle::report::run(
+            &options.recording,
+            &options.bundle,
+            options.json,
+            options.wav.as_deref(),
+        );
     }
-    if options.bundle != bundle::report::Options::default() {
+    if options.json || options.bundle != bundle::report::Options::default() {
         return Err("--profile, --backing and --json are for a bundle's directory".into());
     }
     let bytes = std::fs::read(&options.recording)
@@ -184,8 +178,3 @@ fn main() -> ExitCode {
         }
     }
 }
-
-// Tests wrap every pump in `assert_no_alloc`; this allocator is what makes it panic.
-#[cfg(test)]
-#[global_allocator]
-static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
