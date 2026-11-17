@@ -1417,15 +1417,25 @@ released sender meets, as 7.2 does.
   on the host's disk and no device id is written.
 - **`events.jsonl`** holds, each with its arguments: `setSlot`, `setSlotEffects`, `setSlotGuide`
   with the whole guide, `resetSlot`, `start`, `seek`, `pause`, `resume`, `setBackingKey`,
-  `setStemGain`, and the engine's `outputChanged`, `error` and `backingEnded`. The mixer adds
-  `backingRendered` as it moves the rendered stems into the graph, with their length in frames
-  at the armed speed, which the binding's `installBacking` returns: the length is known only
-  once the render is done, after the manifest is written, and a replay that renders the stems
-  again checks its own against it. A command's line is stamped as the command is sent, as
-  every call's line is stamped before its change is made, and written when its ack arrives,
-  with the backing position the ack gave. `destroy` writes
+  `setStemGain`, and the engine's `outputChanged`, `error`, `backingEnded` and `ack`. The mixer
+  adds `backingRendered` as it moves the rendered stems into the graph, with their length in
+  frames at the armed speed, which the binding's `installBacking` returns: the length is known
+  only once the render is done, after the manifest is written, and a replay that renders the
+  stems again checks its own against it. A call's line is stamped before its change is made and
+  written in the same turn of the control thread, once the change is made or its command sent,
+  so the file holds the calls in the order they were made and no line's `frame` is less than the
+  one before it. A command's ack writes a line of its own as it arrives: `ack`, with `call`
+  naming the call that sent it and `positionMs` the backing position it gave. `destroy` writes
   `{"type":"end"}` last, so a bundle without one was cut short. `level` and `pitch` are left out:
   a replay makes them again.
+- **Order against `start`.** `start` makes its graph live as it sends the swap, before its acks
+  arrive. A call made just after it reaches the live graph; one made just before it is held for
+  `start` to write, or for `resetSlot` dropped. Both can carry `start`'s `frame`, so only the
+  file's order tells them apart. While `start` waits on its acks, the parameter calls and
+  `setSlotGuide` end the same on either side of it, since `start` writes what was held;
+  `resetSlot` does not; the backing calls are refused before it and write their own lines as
+  sent; and `destroy` closes the file, which would lose a line still waiting on an ack. Writing
+  each line in its call's turn orders all of them.
 - **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
   thread that keeps no process alive.
 - **A sender is a port, never an address.** A bundle's pcaps write each sender as 0.0.0.0 at a
@@ -1454,9 +1464,9 @@ released sender meets, as 7.2 does.
   millisecond from the nearest pair outside them, and pushes it before the first block that starts
   at or after that frame, the block a setting at that frame would reach. The pcaps start before the
   manifest's pair is read, so an arrival can come before it and goes before the first block. It
-  applies each line at its frame, in frame order, filling what a call left out from the profile as
-  `src/mixer.ts` does: a change to how a call is resolved there changes `replay` in the same PR. It
-  plays to `end`. `--backing` names a directory it searches for stems by hash; without it the mic
+  applies each line at its frame, in the file's order, filling what a call left out from the
+  profile as `src/mixer.ts` does: a change to how a call is resolved there changes `replay` in the
+  same PR. It plays to `end`. `--backing` names a directory it searches for stems by hash; without it the mic
   path replays alone. `--wav` writes the mix, and `--json` prints the replay's own `stats()` and
   levels. A format it does not know, or a bundle with no `end`, it names; the first it refuses, the
   second it plays to its last line or packet.
