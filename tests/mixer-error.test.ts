@@ -7,15 +7,22 @@ import { type Mixer, type MixerConfig, type OfflineEngine, openEngine } from "..
 import type { NativeEvent } from "../src/native.ts";
 
 // The offline clock cannot fault, so the fault test hands the engine the batch the events thread
-// would: the callback it gives the addon is the seam, and the public API stays as it is.
-const addon = vi.hoisted(() => ({ deliver: (_batch: NativeEvent[]): void => {} }));
+// would: the callback it gives the addon is the seam, and the public API stays as it is. `heard`
+// listens to each real batch after the engine has.
+const addon = vi.hoisted(() => ({
+  deliver: (_batch: NativeEvent[]): void => {},
+  heard: (_batch: NativeEvent[]): void => {},
+}));
 
 vi.mock(import("../src/native.ts"), async (original) => {
   const native = await original();
   class TappedEngine extends native.NativeEngine {
     static override open(...[options, deliver]: Parameters<typeof native.NativeEngine.open>) {
       addon.deliver = deliver;
-      return native.NativeEngine.open(options, deliver);
+      return native.NativeEngine.open(options, (batch) => {
+        deliver(batch);
+        addon.heard(batch);
+      });
     }
   }
   return { ...native, NativeEngine: TappedEngine };
@@ -266,6 +273,44 @@ test("an engine that faults while createMixer hashes a bundle's stems rejects it
   addon.deliver([{ kind: "fault" }]);
   await expect(creating).rejects.toThrow(/faulted/);
   expect(existsSync(path)).toBe(false);
+  await engine.close();
+});
+
+test.each([
+  ["faults", async () => addon.deliver([{ kind: "fault" }]), /faulted/],
+  ["closes", (engine: OfflineEngine) => engine.close(), /closed/],
+])(
+  "a destroy whose swap is acked rejects when the engine %s before the old graph is back",
+  async (_, stop, stopped) => {
+    const engine = await openEngine({ output: { offline: true } });
+    const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+    await startLive(engine, mixer);
+    const destroyed = mixer.destroy();
+    const acked = new Promise<void>((resolve) => {
+      addon.heard = (batch) => {
+        if (batch.some((event) => event.kind === "ack")) resolve();
+      };
+    });
+    // One block takes the swap and acks it; the 5 ms fade out runs into the next block
+    engine.pump(1);
+    await acked;
+
+    await stop(engine);
+
+    await expect(destroyed).rejects.toThrow(stopped);
+    await engine.close();
+  },
+);
+
+test("a destroy rejects, and leaves nothing unheard, when the engine faults before its swap is acked", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
+  await startLive(engine, mixer);
+  const destroyed = mixer.destroy();
+
+  addon.deliver([{ kind: "fault" }]);
+
+  await expect(destroyed).rejects.toThrow(/faulted/);
   await engine.close();
 });
 
