@@ -80,7 +80,8 @@ export class Bundle {
   /**
    * Reads the clock and returns what writes one event line stamped with that reading. A call
    * takes its stamp before it changes anything, so the block that takes the change up starts at
-   * or after the line's `frame`, and writes the line once the change is made or its ack is in.
+   * or after the line's `frame`, and writes the line in the same turn, once the change is made
+   * or its command sent, so the lines are in the order their calls were made.
    */
   stamp() {
     const at = this.#clock();

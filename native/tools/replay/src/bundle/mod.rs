@@ -64,7 +64,8 @@ impl Bundle {
             .into_iter()
             .map(|line| ((line.frame - origin).round() as i64, line.body))
             .collect();
-        // A command's line is written when its ack arrives, after lines stamped later
+        // The writer puts lines in frame order. One written before #222 put a command's line at
+        // its ack, after lines stamped later, and the stable sort puts it back at its stamp
         events.sort_by_key(|&(at, _)| at);
 
         let mut arrivals = Vec::new();

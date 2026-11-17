@@ -32,6 +32,7 @@ pub enum Event {
     SetBackingKey { semitones: i8 },
     SetStemGain { kind: StemKind, gain: f32 },
     OutputChanged {},
+    Ack {},
     BackingRendered { frames: u64 },
     BackingEnded {},
     Error { message: String },
