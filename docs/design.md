@@ -1430,12 +1430,14 @@ released sender meets, as 7.2 does.
   a replay makes them again.
 - **Order against `start`.** `start` makes its graph live as it sends the swap, before its acks
   arrive. A call made just after it reaches the live graph; one made just before it is held for
-  `start` to write, or for `resetSlot` dropped. Both can carry `start`'s `frame`, so only the
+  `start` to write, or, for `resetSlot`, dropped. Both can carry `start`'s `frame`, so only the
   file's order tells them apart. While `start` waits on its acks, the parameter calls and
-  `setSlotGuide` end the same on either side of it, since `start` writes what was held;
-  `resetSlot` does not; the backing calls are refused before it and write their own lines as
-  sent; and `destroy` closes the file, which would lose a line still waiting on an ack. Writing
-  each line in its call's turn orders all of them.
+  `setSlotGuide` end the same on either side of it, since `start` writes what was held.
+  `resetSlot` does not: after `start` it reaches a slot that has pulled nothing yet, which a phone
+  slot does not hear but a `push` slot does, dropping what it was handed while armed. The backing
+  calls are refused before `start` and write their own lines as sent, and `destroy` closes the
+  file, which would lose a line still waiting on an ack. Writing each line in its call's turn
+  orders all of them.
 - **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
   thread that keeps no process alive.
 - **A sender is a port, never an address.** A bundle's pcaps write each sender as 0.0.0.0 at a
@@ -1466,10 +1468,10 @@ released sender meets, as 7.2 does.
   manifest's pair is read, so an arrival can come before it and goes before the first block. It
   applies each line at its frame, in the file's order, filling what a call left out from the
   profile as `src/mixer.ts` does: a change to how a call is resolved there changes `replay` in the
-  same PR. It plays to `end`. `--backing` names a directory it searches for stems by hash; without it the mic
-  path replays alone. `--wav` writes the mix, and `--json` prints the replay's own `stats()` and
-  levels. A format it does not know, or a bundle with no `end`, it names; the first it refuses, the
-  second it plays to its last line or packet.
+  same PR. It plays to `end`. `--backing` names a directory it searches for stems by hash; without
+  it the mic path replays alone. `--wav` writes the mix, and `--json` prints the replay's own
+  `stats()` and levels. A format it does not know, or a bundle with no `end`, it names; the first
+  it refuses, the second it plays to its last line or packet.
 - **An output move replays as none.** The offline driver has one clock, so a slot's stream does
   not end at an `outputChanged` line as it did live, and the replay can differ from the song
   after one.
