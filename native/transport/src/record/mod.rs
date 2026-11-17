@@ -8,7 +8,9 @@ pub mod pcap;
 pub mod record_switch;
 pub mod recording;
 pub mod tap;
+pub mod wall_clock;
 
 pub use record_switch::RecordSwitch;
 pub use recording::{Recording, Written};
 pub use tap::Tap;
+pub use wall_clock::WallClock;

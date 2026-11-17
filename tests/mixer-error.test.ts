@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test, vi } from "vite-plus/test";
@@ -252,6 +252,20 @@ test("an engine fault reaches every mixer it holds once, and a destroyed one not
   await live.destroy();
   await armed.destroy();
   expect(liveErrors).toHaveLength(1);
+  await engine.close();
+});
+
+test("an engine that faults while createMixer hashes a bundle's stems rejects it and writes no bundle", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const path = join(dir, "faulted-while-hashing");
+  const creating = engine.createMixer({
+    slots: [{ kind: "rtp" }],
+    backing: { stems: [{ kind: "instrumental", path: silentStem() }], key: 0, speed: 1 },
+    bundle: { dir: path },
+  });
+  addon.deliver([{ kind: "fault" }]);
+  await expect(creating).rejects.toThrow(/faulted/);
+  expect(existsSync(path)).toBe(false);
   await engine.close();
 });
 

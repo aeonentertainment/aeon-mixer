@@ -64,6 +64,13 @@ await engine.close();
   `engine.profile` reads back the one in force. An effect parameter or a stem gain a call leaves
   out takes the profile's; one it names is the caller's choice. `parseProfile` reads one from
   JSON and refuses a missing field, an unknown field or a value out of range by name.
+- **A session bundle** is one song in a directory: `createMixer({ bundle: { dir } })` writes it
+  into a new directory from then until `destroy`. It holds `manifest.json`, the `profile.json`
+  in force, a pcap of what reached each `rtp` and `l16` slot, `events.jsonl` with every call that
+  changed what was heard, `stats.jsonl` with `stats()` once a second, and an empty `host/` for
+  the host's own files. Every line carries the engine's frame count and the wall clock. A stem is
+  named by its hash, and a sender by a port of its own at 0.0.0.0, never its address. A bundle holds every singer's voice: nothing here
+  sends it anywhere, and the host owns it and answers for each singer's consent.
 - **`rtpReturn`** sends the mix to mediasoup's PlainTransport as 10 ms Opus with in-band FEC.
   `host` is an IP address, never a name.
 - **Reactions** play through `engine.reactions.play` between songs and during them.

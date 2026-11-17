@@ -57,6 +57,14 @@ export interface RenderHost {
   watchRender(id: number, onProgress: (fraction: number) => void): Promise<void>;
 }
 
+/** What a backing tells its mixer. */
+interface BackingReport {
+  progress(fraction: number): void;
+  failed(error: Error): void;
+  /** The stems are in the graph, `frames` long at the armed speed. */
+  installed(frames: number): void;
+}
+
 /**
  * One mixer's backing path while it is armed: the render job on the worker thread and the
  * settings held for start. `install` moves the rendered stems into the mixer's graph.
@@ -76,6 +84,7 @@ export class Backing {
   #stemGains: StemGainsInput;
   readonly #render: NativeBackingRender;
   readonly #graph: NativeMixer;
+  readonly #report: BackingReport;
 
   /**
    * Starts the render of checked `settings` on the worker thread. The stems move into `graph` as
@@ -85,9 +94,10 @@ export class Backing {
     host: RenderHost,
     settings: BackingSettings,
     graph: NativeMixer,
-    report: { progress(fraction: number): void; failed(error: Error): void },
+    report: BackingReport,
   ) {
     this.#graph = graph;
+    this.#report = report;
     const { input, stopAtFrames, stemGains } = settings;
     this.speed = input.speed;
     this.stopAtFrames = stopAtFrames;
@@ -131,8 +141,9 @@ export class Backing {
   install() {
     if (this.#failure) throw this.#failure;
     if (this.#installed) return;
-    this.#graph.installBacking(this.#render);
+    const frames = this.#graph.installBacking(this.#render);
     this.#installed = true;
+    this.#report.installed(frames);
   }
 
   setStemGain(kind: StemKind, gain: number) {

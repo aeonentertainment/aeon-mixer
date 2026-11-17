@@ -81,8 +81,11 @@ export declare class Engine {
 }
 
 export declare class Mixer {
-  /** Moves a finished render's stems into the graph as its backing path, before `swap`. */
-  installBacking(render: BackingRender): void
+  /**
+   * Moves a finished render's stems into the graph as its backing path, before `swap`, and
+   * returns their length in frames, at the armed speed.
+   */
+  installBacking(render: BackingRender): number
   /** The UDP port a slot listens on, or null for a push or capture slot. */
   port(index: number): number | null
   /**
@@ -92,9 +95,15 @@ export declare class Mixer {
   push(index: number, stereo: Float32Array): number
   /**
    * Records what reaches an `rtp` or `l16` slot's port to a new pcap file at `path`, or stops
-   * recording it for null.
+   * recording it for null. `for_bundle` makes it the mixer's session bundle's: stamped on the
+   * bundle's clock, with each sender written as 0.0.0.0 at a port of its own (docs/design.md 8.11).
    */
-  recordSlot(index: number, path?: string | undefined | null): void
+  recordSlot(index: number, path: string | undefined | null, forBundle: boolean): void
+  /**
+   * The frames the audio thread has rendered and the wall clock a recording stamps arrivals
+   * with, read together: a session bundle's clock.
+   */
+  clock(): ClockReading
   /**
    * Every slot's ingest counters, corrector delay and echo findings, as the audio thread last
    * published them.
@@ -130,6 +139,17 @@ export declare const enum ClockKind {
   Timer = 'timer',
   /** An OS output. */
   Device = 'device',
+}
+
+/**
+ * Both cross as f64, since a u64 is not a JavaScript number: exact to 2^53, which is six
+ * thousand years of frames and three centuries of microseconds.
+ */
+export interface ClockReading {
+  /** Frames the audio thread has rendered since the engine opened. */
+  frame: number
+  /** Microseconds since the Unix epoch. */
+  us: number
 }
 
 export interface CorrectorInput {
