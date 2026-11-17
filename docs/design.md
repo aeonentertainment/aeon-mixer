@@ -1333,9 +1333,9 @@ bundle is one song whole: a directory `replay` can play back with nothing else, 
 songs can be compared by. Decision [0026](decisions/0026-the-session-bundle.md) has the reasons.
 
 It is the Binding and API workstream's, with 8.8 and 8.9 (section 10). In files it does not own it
-adds one line each and changes nothing else: the frame count's store in
-`engine/src/audio_thread.rs`, which is 8.1's, and the sender's stand-in in
-`transport/src/record/`, which is 8.4's. 8.4 in turn passes each datagram's source to
+adds two things and changes nothing else: in 8.1's `engine/src/audio_thread.rs`, the frame
+count, an atomic the block adds to; in 8.4's `transport/src/record/tap.rs`, the sender's
+stand-in, a key the recording draws and the hash of each sender under it. 8.4 in turn passes each datagram's source to
 `packet_from` at its call sites in `tools/replay`, and `replay` says when a capture has more
 than one sender, since the slot plays one at a time and the libopus reference decodes them all
 (decision 0028). In 8.8's `src/mixer.ts`, 8.4 keeps `resetSlot`'s comment saying what the
@@ -1365,10 +1365,11 @@ released sender meets, as 7.2 does.
   on the host's disk and no device id is written.
 - **`events.jsonl`** holds, each with its arguments: `setSlot`, `setSlotEffects`, `setSlotGuide`
   with the whole guide, `resetSlot`, `start`, `seek`, `pause`, `resume`, `setBackingKey`,
-  `setStemGain`, and the engine's `outputChanged`, `error` and `backingEnded`, and
-  `backingRendered` with the stems' length in frames at the armed speed as they move into the
-  graph: the length is known only once the render is done, after the manifest is written, and a
-  replay that renders the stems again checks its own against it. A command's line is
+  `setStemGain`, and the engine's `outputChanged`, `error` and `backingEnded`. The mixer adds
+  `backingRendered` as it moves the rendered stems into the graph, with their length in frames
+  at the armed speed, which the binding's `installBacking` returns: the length is known only
+  once the render is done, after the manifest is written, and a replay that renders the stems
+  again checks its own against it. A command's line is
   written when its ack arrives and carries the backing position the ack gave. `destroy` writes
   `{"type":"end"}` last, so a bundle without one was cut short. `level` and `pitch` are left out:
   a replay makes them again.
