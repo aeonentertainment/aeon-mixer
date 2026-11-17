@@ -45,6 +45,8 @@ pub struct Played {
 
 pub struct PlayedSlot {
     pub kind: String,
+    /// Whether the bundle recorded the slot's packets; one it did not replays as silence.
+    pub recorded: bool,
     /// The slot's counters as `stats()` gives them; zero for a slot that replays as silence.
     pub stats: SlotStats,
     /// The slot's meter readings, as `level` carries them.
@@ -151,6 +153,7 @@ pub fn play(
         .iter()
         .map(|slot| PlayedSlot {
             kind: slot.kind.clone(),
+            recorded: slot.recorded,
             stats: SlotStats::default(),
             meter_db: Vec::new(),
             ring_full: 0,

@@ -24,7 +24,7 @@ pub fn of(played: &Played) -> Numbers {
         numbers.insert(name, (value * 100.0).round() / 100.0);
     };
     for (index, slot) in played.slots.iter().enumerate() {
-        if slot.kind != "rtp" && slot.kind != "l16" {
+        if !slot.recorded {
             continue;
         }
         let name = |number: &str| format!("slot{index}.{number}");

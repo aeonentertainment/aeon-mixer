@@ -17,7 +17,7 @@ fn fixtures() -> PathBuf {
 fn scored(profile: Option<PathBuf>, baseline: Option<&Scorecard>) -> Scorecard {
     let options = Options {
         bundles: vec![fixtures().join("bundles")],
-        replay: Replay { profile, backing: Some(fixtures().join("stems")), json: false },
+        replay: Replay { profile, backing: Some(fixtures().join("stems")) },
         baseline: None,
         write: None,
     };
