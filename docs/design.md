@@ -1371,9 +1371,9 @@ released sender meets, as 7.2 does.
   stores once a block and nothing waits on. Every line of `events.jsonl` and `stats.jsonl`
   carries `frame`, that count as the control thread read it, and `us`, the wall clock the pcaps
   stamp arrivals with, read in the same call: the mixer holds one `WallClock` and gives it to
-  each of the bundle's recordings. A line a second ties the two clocks together and
-  shows them drift. A setting changed at `frame` is taken up by the block that starts at or after
-  it, live and in a replay.
+  each of the bundle's recordings. Every line's pair ties the two clocks together, and the
+  stats line each second shows them drift. A setting changed at `frame` is taken up by the
+  block that starts at or after it, live and in a replay.
 - **`manifest.json`** holds `format`, 1; the package's version and the platform; the output's
   rate, period, latency and name; `frame` and `us` at creation; each slot's index and kind and
   whether it is recorded; and the backing: each stem's kind and SHA-256, with key, speed, stem
@@ -1386,8 +1386,9 @@ released sender meets, as 7.2 does.
   `backingRendered` as it moves the rendered stems into the graph, with their length in frames
   at the armed speed, which the binding's `installBacking` returns: the length is known only
   once the render is done, after the manifest is written, and a replay that renders the stems
-  again checks its own against it. A command's line is
-  written when its ack arrives and carries the backing position the ack gave. `destroy` writes
+  again checks its own against it. A command's line is stamped as the command is sent, as
+  every call's line is stamped before its change is made, and written when its ack arrives,
+  with the backing position the ack gave. `destroy` writes
   `{"type":"end"}` last, so a bundle without one was cut short. `level` and `pitch` are left out:
   a replay makes them again.
 - **`stats.jsonl`** holds `stats()` and the backing's position, from a timer on the control
@@ -1408,22 +1409,33 @@ released sender meets, as 7.2 does.
 - **Privacy.** A bundle holds every singer's voice in the song. It is made only when the host
   asks for one, nothing in this package sends it anywhere (never-compromise 3), and the host
   owns it and answers for each singer's consent (8.4).
-- **Replay.** `replay DIR [--profile FILE] [--backing STEMS] [--wav OUT] [--json]` builds the
-  mixer the manifest describes on the offline driver, under the bundle's profile or the one
-  `--profile` names (8.12), converts each arrival to a frame through the `stats.jsonl`
-  pairs either side of it, pushes it before the block that starts after that frame, and applies
-  each event at its own. `--backing` names a directory it searches for stems by hash; without it
-  the mic path replays alone. `--wav` writes each slot and the mix, and `--json` prints the
-  replay's own `stats()` and levels. A format it does not know, or a bundle with no `end`, it
-  names; the first it refuses, the second it plays as far as it goes.
+- **Replay.** `replay DIR [--profile FILE] [--backing STEMS] [--wav OUT] [--json]` builds the mixer
+  the manifest describes on the offline driver, under the bundle's profile or the one `--profile`
+  names (8.12), with the manifest's `frame` as its first block. Its graph is swapped in at the
+  `start` line, with the swap's fade, as it was live: until then a call only builds what `start`
+  writes, a `resetSlot` does nothing, a packet waits in its slot's ring, and the mix is silence
+  where live it was whatever played before. Every line's pair ties the clocks, the manifest's too,
+  so it converts each arrival to a frame through the pairs either side of it, or at 48 frames a
+  millisecond from the nearest pair outside them, and pushes it before the first block that starts
+  at or after that frame, the block a setting at that frame would reach. The pcaps start before the
+  manifest's pair is read, so an arrival can come before it and goes before the first block. It
+  applies each line at its frame, in frame order, filling what a call left out from the profile as
+  `src/mixer.ts` does: a change to how a call is resolved there changes `replay` in the same PR. It
+  plays to `end`. `--backing` names a directory it searches for stems by hash; without it the mic
+  path replays alone. `--wav` writes the mix, and `--json` prints the replay's own `stats()` and
+  levels. A format it does not know, or a bundle with no `end`, it names; the first it refuses, the
+  second it plays to its last line or packet.
+- **An output move replays as none.** The offline driver has one clock, so a slot's stream does
+  not end at an `outputChanged` line as it did live, and the replay can differ from the song
+  after one.
 - The same bundle replays to the same samples every time. Against the live song it can differ by
   a block: the pairs place an arrival to within the callback's own jitter, so a packet read at a
   block's edge can land either side.
 
 Done when: a bundle written during a song on the offline driver replays to the same samples
 twice, under the allocation guard, with an effect change and a seek mid-song landing on the same
-blocks; a bundle with no `end` line replays to its last line; a `format` the tool does not know
-is refused by name; and `tap_cost` with eight slots recording is quoted in the PR.
+blocks; a bundle with no `end` line replays to its last line or packet; a `format` the tool does
+not know is refused by name; and `tap_cost` with eight slots recording is quoted in the PR.
 
 ### 8.12 Settings profile: `src/profile/`
 
