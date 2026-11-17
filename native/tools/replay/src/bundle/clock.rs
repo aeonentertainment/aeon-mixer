@@ -4,7 +4,9 @@
 //! the line between them, which follows the output's drift against the wall clock. Outside them
 //! it runs at the nominal rate from the nearest pair.
 
-const FRAMES_PER_US: f64 = 0.048;
+use engine::block::RATE;
+
+const FRAMES_PER_US: f64 = RATE as f64 / 1_000_000.0;
 
 pub struct Clock {
     /// `(us, frame)`, sorted by `us`.

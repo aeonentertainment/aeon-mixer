@@ -106,7 +106,7 @@ pub fn play(
         last
     } else {
         notes.push("the bundle has no end line: it was cut short".to_owned());
-        last.max(bundle.arrivals.last().map_or(0, |arrival| arrival.at))
+        last.max(bundle.arrivals.last().map_or(0, |(_, arrival)| arrival.at))
     };
     let blocks = usize::try_from(until).unwrap_or(0).div_ceil(BLOCK);
     let mut desk = Desk {
@@ -139,8 +139,8 @@ pub fn play(
         while let Some((_, event)) = events.next_if(|&&(at, _)| at <= start) {
             desk.apply(event)?;
         }
-        while let Some(arrival) = arrivals.next_if(|arrival| arrival.at <= start) {
-            let ingest = &mut ingests[arrival.slot];
+        while let Some((slot, arrival)) = arrivals.next_if(|(_, arrival)| arrival.at <= start) {
+            let ingest = &mut ingests[*slot];
             if let Some((producer, _)) = &mut ingest.packets
                 && !producer.push(&arrival.packet)
             {

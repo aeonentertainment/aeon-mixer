@@ -18,21 +18,14 @@ mod tests;
 
 use std::path::Path;
 
-use engine::ingest::Packet;
 use transport::receive::packet_from;
 
 use crate::capture;
+use crate::stream::Arrival;
 use clock::Clock;
 use line::{Event, Line, Stats, read_lines};
 use manifest::Manifest;
 use profile::Profile;
-
-/// A packet and the replay frame it reached its slot's socket at.
-pub struct Arrival {
-    pub slot: usize,
-    pub at: i64,
-    pub packet: Packet,
-}
 
 pub struct Bundle {
     pub manifest: Manifest,
@@ -40,8 +33,8 @@ pub struct Bundle {
     pub profile: Profile,
     /// Each event and the replay frame it is taken up at, in frame order.
     pub events: Vec<(i64, Event)>,
-    /// Every recorded slot's packets, in frame order.
-    pub arrivals: Vec<Arrival>,
+    /// Every recorded slot's packets with their slot, on the replay's frames, in frame order.
+    pub arrivals: Vec<(usize, Arrival)>,
     /// Whether the bundle ends in `end`. One without it was cut short.
     pub ended: bool,
 }
@@ -83,10 +76,10 @@ impl Bundle {
                     continue;
                 };
                 let at = clock.frame_at(datagram.at_micros as f64) - origin.round() as i64;
-                arrivals.push(Arrival { slot: slot.index, at, packet });
+                arrivals.push((slot.index, Arrival { at, packet }));
             }
         }
-        arrivals.sort_by_key(|arrival| arrival.at);
+        arrivals.sort_by_key(|(_, arrival)| arrival.at);
         Ok(Self { manifest, profile, events, arrivals, ended })
     }
 }
