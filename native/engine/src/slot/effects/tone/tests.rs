@@ -144,9 +144,9 @@ fn pop(peak: f32, seed: u32) -> Vec<f32> {
 }
 
 // What the guard does at `plosiveDb` 12 to twelve pops of noise under 80 Hz: it never makes one
-// louder, counts each it ducks once at any depth, and takes 4 dB or more off only the one that stands
-// furthest under the voice. The contract asks for 6 off every pop. A guard that caught that much
-// would also duck a low note's onset, and a ducked note is the worse fault, so it does less.
+// louder, counts each it ducks once at any depth, and takes 4 dB or more off only the one that
+// stands furthest under the voice, as 8.6 asks. A guard that caught more would also duck a low
+// note's onset, and a ducked note is the worse fault.
 #[test]
 fn the_guard_ducks_only_the_pops_that_stand_furthest_under_the_voice() {
     let params = ToneParams { enabled: true, plosive_db: 12.0, ..ToneParams::default() };
