@@ -1345,9 +1345,10 @@ blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in ce
 the corrector's own bar, so a reading between notes, with no guide or with correction off counts
 for nothing; `echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
 over the blocks where `echo` was not null; `howlCatches`, every rise in it over the song, so a
-reset that starts it from 0 again loses none; and `levelTopTenthDb` and `levelMedianDb`, the 90th percentile and the median of every
-`rmsDb` the slot's `level` reported in the song, as `replay`'s table reads them, so a slot that
-sang half the song has a median that says so. The master has the two levels, from
+reset that starts it from 0 again loses none; and `levelTopTenthDb` and `levelMedianDb`, the
+90th percentile and the median of every `rmsDb` the slot's `level` reported in the song, as
+`replay`'s table reads them, so a slot that sang half the song has a median that says so. The
+master has the two levels, from
 `masterLevel`. A number with nothing to read, such as pitch error with correction off, is left out.
 
 - **A scorecard file** holds `format`, 1, and each bundle by its directory's name, each number
