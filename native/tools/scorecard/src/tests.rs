@@ -1,4 +1,4 @@
-//! #196's done-when, on the committed fixture: a duet written on the offline driver, its noise
+//! #196's done-when, on the committed fixture: a duet written on the offline driver, its silent
 //! backing in `fixtures/stems`, scored against `fixtures/baseline.json`.
 
 use std::path::{Path, PathBuf};

@@ -1,5 +1,5 @@
-{"frame":384,"positionMs":0,"type":"start","us":1794923132871062}
-{"frame":384,"guide":{"keyMask":4095,"notes":[{"endMs":700,"midi":54,"startMs":0},{"endMs":1700,"midi":54,"startMs":1000},{"endMs":2700,"midi":54,"startMs":2000},{"endMs":3700,"midi":54,"startMs":3000},{"endMs":4700,"midi":54,"startMs":4000},{"endMs":5700,"midi":54,"startMs":5000},{"endMs":6700,"midi":54,"startMs":6000},{"endMs":7700,"midi":54,"startMs":7000}]},"guideOffsetMs":null,"index":0,"type":"setSlotGuide","us":1794923132871062}
-{"effects":[{"enabled":true,"kind":"echo-cancel"},{"enabled":true,"kind":"howl-guard"},{"enabled":true,"kind":"cleanup"},{"enabled":true,"kind":"pitch-correction"},{"enabled":true,"kind":"reverb"}],"frame":384,"index":0,"type":"setSlotEffects","us":1794923132871062}
-{"frame":384,"index":1,"settings":{"pan":0.3},"type":"setSlot","us":1794923132871062}
-{"frame":408448,"type":"end","us":1794923141372395}
+{"frame":384,"positionMs":0,"type":"start","us":1794926526336044}
+{"frame":384,"guide":{"keyMask":4095,"notes":[{"endMs":700,"midi":54,"startMs":0},{"endMs":1700,"midi":54,"startMs":1000},{"endMs":2700,"midi":54,"startMs":2000},{"endMs":3700,"midi":54,"startMs":3000},{"endMs":4700,"midi":54,"startMs":4000},{"endMs":5700,"midi":54,"startMs":5000},{"endMs":6700,"midi":54,"startMs":6000},{"endMs":7700,"midi":54,"startMs":7000}]},"guideOffsetMs":null,"index":0,"type":"setSlotGuide","us":1794926526336044}
+{"effects":[{"enabled":true,"kind":"pitch-correction"},{"enabled":true,"kind":"reverb"}],"frame":384,"index":0,"type":"setSlotEffects","us":1794926526336044}
+{"frame":384,"index":1,"settings":{"pan":0.3},"type":"setSlot","us":1794926526336044}
+{"frame":408448,"type":"end","us":1794926534837377}

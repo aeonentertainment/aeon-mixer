@@ -6,7 +6,7 @@
     "stems": [
       {
         "kind": "instrumental",
-        "sha256": "76b8ba03950ff9ca6a20289403da107296a9482f0f8cc470495959796fb7e7f1"
+        "sha256": "4c0b00c32322f026d41c5379721f2eb80417bb271f87cd9386c2c79731b4929d"
       }
     ],
     "stopAtMs": null
@@ -20,5 +20,5 @@
     { "index": 0, "kind": "rtp", "recorded": true },
     { "index": 1, "kind": "rtp", "recorded": true }
   ],
-  "us": 1794923132871062
+  "us": 1794926526336044
 }

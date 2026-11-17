@@ -63,16 +63,25 @@ nothing.
 ## The fixture
 
 `fixtures/bundles/duet` is an 8.5 s duet written on the offline driver, with no real singer in
-it: slot 0 holds a synthetic voice 46 cents sharp of its guide notes, with correction, reverb,
-cleanup, the echo canceller and the howl guard on and the backing coming back into its phone;
-slot 1 sings on a link that loses one packet in thirty. `fixtures/stems` holds its backing, noise
-that repeats every quarter second. The tests score it against `fixtures/baseline.json`, so a
-change that moves one of its numbers past its tolerance fails `cargo test`.
+it. Slot 0 holds a synthetic voice 46 cents sharp of its guide notes, with correction and reverb
+on. Slot 1 holds another note on a link that loses one packet in thirty. `fixtures/stems` holds
+its backing, silence that runs the guide clock. The tests score it against
+`fixtures/baseline.json`, so a change that moves one of its numbers past its tolerance fails
+`cargo test`.
 
-The baseline's tolerances are a dB for a level or an echo number, 5 cents of pitch, half a
-millisecond of corrector delay and two concealed frames: about what a 15 ms longer playout delay
-moves them by, where the windows and readings fall. Late packets, howl catches and the playout
-delay have none.
+Each voice holds its note through 700 ms of every second, so the levels, the pitch readings and
+the corrector's hold read the same wherever the windows fall. Across playout delays from 10 to
+60 ms, no level moves more than 0.4 dB, pitch error moves under half a cent, the corrector delay
+moves a quarter of a millisecond and concealment moves two frames. The baseline's tolerances
+are a dB for a level, 5 cents of pitch, half a millisecond of corrector delay and two concealed
+frames. Late packets, howl catches and the playout delay have none.
+
+The echo canceller and the howl guard are off in it. With them on and the backing in slot 0's
+phone, the canceller's bleed read anywhere from -3 to -9 dB as the delay moved, and the guard
+ducked the held synthetic note at some delays and not others. So neither stage gave the same
+number twice under a change that should not move it. Their numbers wait for a fixture where
+they hold still.
 
 To change the fixture, run `cargo test -p replay -- --ignored writes_the_scorecard_fixture`, then
-score it into the baseline with `--write`, keeping its tolerances.
+score it into the baseline with `--baseline fixtures/baseline.json --write fixtures/baseline.json`,
+which keeps the tolerances.
