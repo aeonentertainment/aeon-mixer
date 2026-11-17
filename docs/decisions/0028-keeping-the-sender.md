@@ -82,8 +82,9 @@ type in the receiver, before a packet exists to compare.
   replay of it refuses a second sender as the slot did. It holds no `resetSlot`, so a handover in
   it replays as the second's wait. The libopus reference `replay` prints beside the slot decodes
   every sender, and `replay` says so when a capture has more than one. A session bundle's pcaps
-  write 0.0.0.0 for a sender's IP (8.11), so a bundle replays the slot as live only while the
-  port still tells its senders apart: #204.
+  write each sender as 0.0.0.0 at a port of its own, a keyed hash of its address and port (8.11, 0026),
+  so a replay of a bundle refuses who the live slot refused too, unless two senders to one slot
+  share a port, one time in 65,535.
 - **A flood still costs.** Refused packets fill the slot's ring before the audio thread drops
   them, so a flood can crowd out the singer's packets. That is a denial of service, not a
   takeover, and outside this decision.

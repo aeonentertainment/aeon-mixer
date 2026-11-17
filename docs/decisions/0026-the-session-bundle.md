@@ -63,14 +63,20 @@ the live song in ways that matter.
 A field on `MixerConfig`, not a method. A mixer can sit armed with phones already sending, and a
 recording that begins at a later call misses those packets and the settings made before it.
 `recordSlot` stays for the case it was built for: one stream, turned on while chasing one problem.
+A slot has one recording, so `recordSlot` throws on a mixer that writes a bundle.
 
 ## Privacy
 
 A bundle holds every singer's voice in a song. Three things keep it to what a replay needs:
 
-- **Sender addresses are written as 0.0.0.0.** `replay` parses the datagram and never reads where
-  it came from. `recordSlot` keeps the address, since a single recording is often made to debug a
-  network.
+- **A sender is written as a port at 0.0.0.0.** A slot keeps the sender it is receiving from and
+  turns the one `resetSlot` released away for a second (decision 0028), so a replay has to tell
+  senders apart: with every sender at one address, the next singer after a reset would look like
+  the released one and be refused for the rest of the song. It never has to know who they were.
+  So each sender's address and port are hashed under a key the recording draws at random and
+  never writes, and the hash is the sender's port. The tap hashes on the network thread with no
+  allocation. Two senders to one slot share a port one time in 65,535. `recordSlot` keeps the
+  address, since a single recording is often made to debug a network.
 - **No path and no device id.** The manifest names the output and hashes the stems.
 - **The package sends nothing** (never-compromise 3). A bundle is made only when the host asks,
   and the host owns the directory and answers for each singer's consent, as 0017 now says of a
