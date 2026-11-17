@@ -165,9 +165,10 @@ delays a voice's fundamental near its corner: 1.8 ms at 110 Hz, 0.4 at 220. Deci
 tone stage makes a phone sound like a good vocal mic: bands a host hands in for a mic it knows or
 a blind match for one it does not, a plosive guard, an air shelf and a de-esser. It comes after
 the corrector and the meter, so every pitch reading and level word is the same with it on as off,
-and before the compressor, so a boomy phone, and a pop that stands far under the voice, are gone
-before the compressor would duck a line for them. Its filters are minimum-phase and read no sample ahead, so a click leaves on the
-sample it entered. A filter that holds no sample still delays what it lifts, so the stage caps
+and before the compressor, so a boomy phone is gone, and a pop that stands far under the voice
+taken down, before the compressor would duck a line for them. Its filters are minimum-phase and
+read no sample ahead, so a click leaves on the sample it entered. A filter that holds no sample
+still delays what it lifts, so the stage caps
 that: the bands and the air may leave no frequency from 80 Hz up more than 0.2 ms late, and the
 guard adds at most 0.2 ms while it ducks a pop. Decision
 [0029](decisions/0029-the-tone-stage.md) has the reasons and the numbers. The
@@ -1248,15 +1249,17 @@ the gate takes at least 15 dB off a room between lines without moving a soft not
 out of a house mic by the tolerances in decision 0020, the singer in the master and singing, and
 the guard catches a loop running away; the tone stage off, or on with no bands and every amount
 at 0, is bit-identical to no stage; a click leaves on the sample it entered with bands at the
-cap, the match moved, the plosive guard ducking and the de-esser cutting; tones from 80 Hz to
-16 kHz through bands and air at the cap come out at most 0.2 ms late, and 0.4 with the guard held
+cap, the match moved once it joins, the plosive guard ducking and the de-esser cutting; tones
+from 80 Hz to 16 kHz through bands and air at the cap come out at most 0.2 ms late, and 0.4 with
+the guard held
 at its deepest; each band is within 0.1 dB of the cookbook's curve; `check` refuses a cascade
 over either cap by the frequency it breaks at; every `Pitch` and `Level` event is the same with
 the stage on as off; at `plosiveDb` 12 the guard makes no pop louder and ducks the pops that
 stand furthest under the voice (twelve pops of noise under 80 Hz lose 0.0 to 4.8 dB under
 100 Hz, a median of 0.5), and a held E2 or D2, bright or with nothing over 600 Hz, moves by under
-1 dB in any 10 ms, its onset included, and counts as no pop; at `deEssDb` 6 an s 10 dB hot loses at least 4 dB over 5 kHz and a
-vowel moves by under 0.5 dB; the match, given a voice through a known tilt, comes back toward its
+1 dB in any 10 ms, its onset included, and counts as no pop; at `deEssDb` 6 an s 10 dB hot loses
+at least 4 dB over 5 kHz and a vowel moves by under 0.5 dB; once the match joins, given a voice
+through a known tilt it comes back toward its
 target inside its rate and range, holds through silence, noise and a backing track alone, moves
 nothing in its first 5 s and starts over on `resetSlot`; all of it runs under the allocation
 guard; and on the bench's paired recordings the rows decision 0029 names show each test phone
