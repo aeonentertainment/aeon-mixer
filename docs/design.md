@@ -582,10 +582,19 @@ export type SlotConfig =
   | { kind: Exclude<IngestKind, "capture"> }
   | { kind: "capture"; device?: string; channel?: number };
 
+/**
+ * A stem is the encoded file at `path`, or the whole encoded file in `bytes`, decoded the same way
+ * (8.5). `createMixer` reads `bytes` until it settles, so the host leaves them unchanged until then.
+ * Either keeps every capability: seek, key and speed work on the decoded stem, never on the file.
+ */
+export type BackingStem =
+  | { kind: StemKind; path: string; bytes?: never }
+  | { kind: StemKind; bytes: Uint8Array; path?: never };
+
 export interface MixerConfig {
   slots: ReadonlyArray<SlotConfig>;
   backing?: {
-    stems: ReadonlyArray<{ kind: StemKind; path: string }>;
+    stems: ReadonlyArray<BackingStem>;
     key: number; // semitones, rendered before start
     speed: number; // factor, rendered before start
     stemGains?: Partial<Record<StemKind, number>>; // a stem left out takes the profile's
@@ -1116,6 +1125,16 @@ Stems in memory, one playhead, gains, fades, the live key, and the render job.
   aligned, trimming the stretcher's lead and flushing its tail. `createMixer` resolves when the
   graph is built; the backing goes in with `Graph::set_backing` as soon as the render finishes,
   so a render that fails raises `error` then, and `start` waits for a render still running.
+- A stem given as `bytes` is the same file held in memory, in any format Symphonia probes from its
+  content. The binding copies the bytes once, on the control thread as the render job starts, and
+  the worker reads its copy as it would a file and frees it the moment that stem is decoded. So
+  while the render runs the engine holds the encoded stem beside the decoded one, and once it is
+  done a song costs its decoded stems, as with a path; the host's own buffer is the host's. The
+  engine copies rather than borrows because the worker reads the stem off the control thread, and
+  a buffer the host can still write is not safe to read there. No file is opened, read or written
+  for a stem given as bytes. A stem that will not decode fails the render naming its path, or
+  for bytes its kind: `the instrumental stem's bytes: <reason>`. An empty buffer is refused at
+  `createMixer`.
 - The playhead advances a block per render while playing, holds on pause, jumps on seek with
   its fades, and stops at `stopAt` with its fade. Both raise `BackingEnded` once. A seek or
   pause acks when it takes effect, once its fade out is done, so the ack carries the frame it
@@ -1414,7 +1433,11 @@ released sender meets, as 7.2 does.
   whether it is recorded; and the backing: each stem's kind and SHA-256, with key, speed, stem
   gains and `stopAtMs`. A stem is named
   by its hash and never copied, since a song is large and may not be the host's to copy. No path
-  on the host's disk and no device id is written.
+  on the host's disk and no device id is written. A stem given as `bytes` is hashed from them, in
+  slices that yield the control thread between them as a path is read as a stream, so it has the
+  hash its file would. `replay --backing` finds it by that hash as any file of the same bytes, and
+  a bytes stem changes nothing in `replay`: a host that holds a song only in memory has no file to
+  give a replay, which then plays the mic path alone.
 - **`events.jsonl`** holds, each with its arguments: `setSlot`, `setSlotEffects`, `setSlotGuide`
   with the whole guide, `resetSlot`, `start`, `seek`, `pause`, `resume`, `setBackingKey`,
   `setStemGain`, and the engine's `outputChanged`, `error`, `backingEnded` and `ack`. The mixer
@@ -1596,6 +1619,10 @@ Each is deliberate and here so no one reverts it by accident.
   shows the linear filter leaves too much.
 - The offline stretcher: signalsmith at a quality setting first, an A/B against Rubber Band on
   three tracks before paying for a licence.
+- A stem the host feeds as a stream, so a song can start before all of it has arrived. It could
+  not pre-render a key or speed or seek ahead of what has arrived, so the backing would report
+  what it lacks, and the host would offer only the rest. A whole buffer is enough until a catalog
+  needs a song to start sooner.
 - Stem storage on a LAN box: planar f32 is about 23 MB per stem minute; int16 storage or
   streaming decode if a box cannot hold two stems.
 - Whether a capture profile may warm a phone's low end past the tone stage's cap: a 6 dB low shelf
