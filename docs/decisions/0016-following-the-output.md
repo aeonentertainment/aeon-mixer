@@ -3,7 +3,7 @@
 **Status:** accepted, 2026-11-10, ahead of the code for #53. An output that will not start
 leaves the song where it was, 2026-11-13, for aeon-karaoke#510. A start that hangs is refused
 after 3 s, 2026-11-13, for #161. The open starts its output off the event loop, 2026-11-13, for
-#164.
+#164. A move's gap counts from the old stream's last callback, 2026-11-18, for #248.
 
 ## The problem
 
@@ -85,6 +85,15 @@ second later the engine faulted and the song ended, with the output it left stil
 working. With the monitor healthy, moves on the same Mac worked, with gaps of 41 ms to the MacBook
 Pro speakers and 194 ms back to the monitor. A move whose output starts is unchanged, so those
 gaps stand.
+
+> **Note, 2026-11-18, #248: the gap is counted from an earlier instant now.** These gaps were
+> measured when a move's gap ran from the follower's wake. It now runs from the earlier of the wake
+> and the old stream's last callback (design.md 8.3). Both moves were default changes on a stream
+> that was calling back every period, so its last callback came at most one period before the
+> wake, or after it. Each gap would read at most one callback period longer, 2.7 ms at the
+> 128-frame period the engine asks for. That changes neither the case nor the rule it set: both
+> moves still started, and a 41 or 194 ms gap is still well inside the second a command waits. The two numbers have not been measured again on the hardware under the new
+> count.
 
 ### The case that set the bound
 
@@ -173,6 +182,13 @@ thread back too, so the follower starts the output it left with it.
 
 These are the parts of a gap, not a measurement; each move reports the gap it left, and #53's
 manual run per OS records them.
+
+> **Note, 2026-11-18, #248: what a reported gap holds.** A reported gap used to start at the wake,
+> after the second row. It now starts at the old stream's last callback, so for a loss or a stall
+> it holds the second row too: up to the 200 ms bound, and after doublings the 6.4 s a silent
+> stream waits. For a default change the stream calls back until it is stopped, so the first row
+> is not silence and the gap is unchanged within a period. The parts and their bounds are
+> unchanged; only which of them the reported number covers has moved.
 
 | Part                                  | Expected                                                                    | Bound                                               |
 | ------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------- |
