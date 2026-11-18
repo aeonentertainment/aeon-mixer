@@ -287,9 +287,11 @@ impl Movable for AudioThread {
         AudioThread::render(self, out);
     }
 
-    fn moved(&mut self) {
+    // Only the live graph's backing is the song: an outgoing one is fading out of the room
+    fn moved(&mut self) -> bool {
         self.restart = true;
         self.faded_in = 0;
+        self.live.is_reading()
     }
 
     fn callback_frames(&self) -> Arc<AtomicU32> {

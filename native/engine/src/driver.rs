@@ -30,7 +30,9 @@ pub trait Movable: Send + 'static {
     /// One block, as `Render` does.
     fn render(&mut self, out: Stereo<'_>);
     /// Called between streams, never on the audio thread: one clock stopped and another starts.
-    fn moved(&mut self);
+    /// Returns whether the stop held something that was moving on, a backing playhead, so the gap
+    /// until the next stream holds it too.
+    fn moved(&mut self) -> bool;
     /// Where the follower writes each stream's granted period, `StreamInfo.period_frames`, as its
     /// `start` returns: the most it pulls at a normal wake. Taken before the movable is lent, since
     /// the stream holds it from then on. A movable that has no use for it keeps the default.

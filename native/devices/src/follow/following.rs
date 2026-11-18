@@ -65,10 +65,12 @@ enum State<M> {
         running: Running,
         dock: Dock<M>,
     },
-    /// Stopped since the wake at `since`, with nowhere yet to play.
+    /// Stopped since the wake at `since`, with nowhere yet to play; `holds` when the stop held
+    /// a playhead, so the gap counts against it.
     Waiting {
         movable: M,
         since: Instant,
+        holds: bool,
     },
     /// Faulted: a torn render, or nothing that would start within `GIVE_UP`.
     Gone,
@@ -98,6 +100,7 @@ impl<M: Movable, S: System> Following<M, S> {
             output,
             moves: 0,
             gap: Duration::ZERO,
+            held: Duration::ZERO,
             refused: None,
         });
         Ok(Self {
@@ -182,11 +185,12 @@ impl<M: Movable, S: System> Following<M, S> {
             // A stream may count its own stop as a loss; the move answers it either way
             self.stats.take_lost();
             let Some(mut movable) = dock.take() else { return self.give_up() };
-            movable.moved();
-            self.state = State::Waiting { movable, since: woke_at };
+            let holds = movable.moved();
+            self.state = State::Waiting { movable, since: woke_at, holds };
         }
 
-        let State::Waiting { mut movable, since } = mem::replace(&mut self.state, State::Gone)
+        let State::Waiting { mut movable, since, holds } =
+            mem::replace(&mut self.state, State::Gone)
         else {
             return;
         };
@@ -204,11 +208,13 @@ impl<M: Movable, S: System> Following<M, S> {
         for output in candidates {
             match start(&self.system, &self.request, &self.stats, output, movable) {
                 Ok((running, dock)) => {
+                    let gap = since.elapsed();
                     self.current.set(Playing {
                         info: running.info,
                         output: output.clone(),
                         moves: playing.moves + 1,
-                        gap: since.elapsed(),
+                        gap,
+                        held: if holds { gap } else { Duration::ZERO },
                         refused: refusal,
                     });
                     self.state = State::Playing { running, dock };
@@ -225,7 +231,7 @@ impl<M: Movable, S: System> Following<M, S> {
                 Err((_, None)) => return self.give_up(),
             }
         }
-        self.state = State::Waiting { movable, since };
+        self.state = State::Waiting { movable, since, holds };
     }
 
     // Whether the playing stream has asked for no audio for its whole patience. Its device may

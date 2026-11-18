@@ -342,7 +342,7 @@ export class Engine {
           break;
         case "outputChanged":
           this.#output = outputInfo(event.output);
-          this.#events.emit("outputChanged", this.#output, event.gapMs);
+          this.#events.emit("outputChanged", this.#output, event.gapMs, event.heldMs);
           break;
         case "renderFinished": {
           const render = this.#renders.get(event.job);

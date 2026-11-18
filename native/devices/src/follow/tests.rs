@@ -3,7 +3,7 @@
 //! does to them on a channel, and the test waits on that, never on time.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -234,6 +234,8 @@ impl Driver for FakeDriver {
 struct Counter {
     frame: f32,
     moved: bool,
+    /// What `moved` says of a backing playhead: whether the stop caught one moving on.
+    holds: Arc<AtomicBool>,
     panics: bool,
     dropped: Sender<Seen>,
     callback: Arc<AtomicU32>,
@@ -251,8 +253,9 @@ impl Movable for Counter {
         }
     }
 
-    fn moved(&mut self) {
+    fn moved(&mut self) -> bool {
         self.moved = true;
+        self.holds.load(Ordering::Acquire)
     }
 
     fn callback_frames(&self) -> Arc<AtomicU32> {
@@ -276,6 +279,8 @@ struct Rig {
     /// What the render was told of each stream's period and output latency.
     callback: Arc<AtomicU32>,
     latency: Arc<AtomicU32>,
+    /// Whether the render's next stop holds a playhead.
+    holds: Arc<AtomicBool>,
     stats: Arc<Stats>,
     follower: Option<Follower>,
 }
@@ -303,9 +308,11 @@ impl Rig {
         let fake = Fake { room: Arc::new(Mutex::new(room)), seen: sender.clone() };
         fake.offer(outputs);
         let (callback, latency) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0)));
+        let holds = Arc::new(AtomicBool::new(true));
         let counter = Counter {
             frame: 1.0,
             moved: false,
+            holds: Arc::clone(&holds),
             panics,
             dropped: sender,
             callback: Arc::clone(&callback),
@@ -315,7 +322,7 @@ impl Rig {
         let request = Request { device: pinned.map(Into::into), ..Request::default() };
         match Follower::stalling_after(stall, request, counter, fake.clone(), Arc::clone(&stats)) {
             Ok(follower) => {
-                Ok(Self { fake, seen, stats, callback, latency, follower: Some(follower) })
+                Ok(Self { fake, seen, stats, callback, latency, holds, follower: Some(follower) })
             }
             Err(error) => Err((error, fake, seen)),
         }
@@ -351,6 +358,12 @@ impl Rig {
         (playing.output.id, playing.moves, playing.info.output_latency_frames)
     }
 
+    /// The last move's gap and how long it held the playhead.
+    fn gap(&self) -> (Duration, Duration) {
+        let playing = self.follower.as_ref().expect("following").current().get();
+        (playing.gap, playing.held)
+    }
+
     fn opened(&self) -> Option<String> {
         self.fake.room().device.as_ref().map(|(id, ..)| id.clone())
     }
@@ -380,6 +393,28 @@ fn a_new_default_takes_the_song_with_nothing_lost_but_the_gap() {
     let next = before[before.len() - 1] + 1.0;
     assert_eq!(after[0], -next, "the next frame, on the new output, in the block the move fades");
     assert_eq!(after[BLOCK], next + BLOCK as f32, "and the song plays on after it");
+}
+
+/// A host moves its lyric clock by the hold, so a move holds the playhead for its whole gap when
+/// the render says the stop caught it moving on, and for none of it when not, as when paused.
+#[test]
+fn a_move_holds_the_playhead_for_its_gap_only_when_the_render_says_it_was_moving() {
+    let rig = Rig::new(&[("hdmi", true), ("built-in", false)], None);
+    rig.expect(&[started("hdmi")]);
+    rig.fake.offer(&[("hdmi", false), ("built-in", true)]);
+    rig.expect(&[stopped("hdmi"), started("built-in")]);
+    rig.settle();
+    let (gap, held) = rig.gap();
+    assert!(gap > Duration::ZERO);
+    assert_eq!(held, gap, "playing, the gap holds the playhead");
+
+    rig.holds.store(false, Ordering::Release);
+    rig.fake.offer(&[("hdmi", true), ("built-in", false)]);
+    rig.expect(&[stopped("built-in"), started("hdmi")]);
+    rig.settle();
+    let (gap, held) = rig.gap();
+    assert!(gap > Duration::ZERO);
+    assert_eq!(held, Duration::ZERO, "paused, nothing is held");
 }
 
 /// A capture slot sizes its ring by how much the output pulls at a wake, and the guide clock

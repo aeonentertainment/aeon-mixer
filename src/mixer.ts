@@ -484,8 +484,8 @@ export class Mixer {
       },
       stats: () => ({ positionMs: this.#positionMs, ...this.stats() }),
     });
-    this.#offOutput = this.#host.onOutputChanged((output, gapMs) => {
-      bundle.event({ type: "outputChanged", output: bundleOutput(output), gapMs });
+    this.#offOutput = this.#host.onOutputChanged((output, gapMs, heldMs) => {
+      bundle.event({ type: "outputChanged", output: bundleOutput(output), gapMs, heldMs });
     });
     this.#events.on("position", (positionMs) => {
       this.#positionMs = positionMs;

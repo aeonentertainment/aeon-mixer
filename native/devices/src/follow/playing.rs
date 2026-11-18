@@ -14,6 +14,9 @@ pub struct Playing {
     pub moves: u32,
     /// The last move's gap, from the wake that started it to the new stream running.
     pub gap: Duration,
+    /// How long the last move held the backing's playhead: the gap when the stop caught it
+    /// moving on, as `Movable::moved` says, and zero when it was paused, ended or absent.
+    pub held: Duration,
     /// Where the rule says to play when that output would not start: the engine stays on `output`
     /// until the rule picks another. None while it plays where the rule says.
     pub refused: Option<Refused>,
