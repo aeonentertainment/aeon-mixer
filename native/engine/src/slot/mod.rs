@@ -170,7 +170,10 @@ impl Slot {
                     hz: reading.hz,
                     confidence: reading.confidence,
                     target_midi: reading.target_midi,
+                    target_start_ms: reading.target_start_ms,
                     error_semitones: reading.error_semitones,
+                    shift_semitones: reading.shift_semitones,
+                    pulling: reading.pulling,
                 });
             },
         );

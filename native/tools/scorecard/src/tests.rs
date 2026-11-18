@@ -3,12 +3,13 @@
 
 use std::path::{Path, PathBuf};
 
+use engine::slot::effects::Reading;
 use replay::bundle::report::Options as Replay;
 use serde_json::Value;
 
 use crate::card::{Entry, Scorecard};
 use crate::movement::{Change, Movement};
-use crate::{Options, score};
+use crate::{Options, numbers, score};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -51,22 +52,42 @@ fn the_fixture_scores_within_the_committed_baseline() {
     assert_eq!(failing(&movements), Vec::<&str>::new(), "{movements:#?}");
 }
 
-#[test]
-fn a_longer_playout_delay_moves_that_number_and_no_other_beyond_tolerance() {
+/// The fixture's own profile with `change` made to it, written where `scored` can read it.
+fn profile(name: &str, change: impl FnOnce(&mut Value)) -> PathBuf {
     let bundle = fixtures().join("bundles/duet");
     let mut profile: Value =
         serde_json::from_str(&std::fs::read_to_string(bundle.join("profile.json")).unwrap())
             .unwrap();
-    profile["ingest"]["playoutDelayMs"] = 30.into();
-    let path = scratch("delay-30.json");
+    change(&mut profile);
+    let path = scratch(name);
     std::fs::write(&path, profile.to_string()).unwrap();
+    path
+}
 
+#[test]
+fn a_longer_playout_delay_moves_that_number_and_no_other_beyond_tolerance() {
+    let path = profile("delay-30.json", |p| p["ingest"]["playoutDelayMs"] = 30.into());
     let baseline = Scorecard::read(&fixtures().join("baseline.json")).unwrap();
     let movements = Movement::between(&scored(Some(path), None), &baseline);
     assert_eq!(failing(&movements), ["slot0.playoutDelayMs", "slot1.playoutDelayMs"]);
     for movement in movements.iter().filter(|m| m.fails()) {
         assert!(matches!(movement.change, Change::Moved { now: 30.0, .. }), "{movement:?}");
     }
+}
+
+// The fixture's voice sits 48 cents from its guide, and half the strength leaves more of that
+// in the corrected voice; the singer, the delays and the levels stay where they were
+#[test]
+fn correction_at_another_strength_moves_the_corrected_pitch_and_no_other_number() {
+    let path = profile("strength-0.3.json", |p| {
+        p["slot"]["effects"]["pitch-correction"]["strength"] = 0.3.into();
+    });
+    let baseline = Scorecard::read(&fixtures().join("baseline.json")).unwrap();
+    let movements = Movement::between(&scored(Some(path), None), &baseline);
+    assert_eq!(failing(&movements), ["slot0.correctedErrorCents"], "{movements:#?}");
+    let corrected = movements.iter().find(|m| m.fails()).unwrap();
+    let Change::Moved { baseline, now, .. } = corrected.change else { panic!("{corrected:?}") };
+    assert!(now > baseline + 10.0, "{baseline} to {now} cents");
 }
 
 #[test]
@@ -100,4 +121,41 @@ fn a_scorecard_is_refused_by_its_format_and_by_a_field_it_does_not_know() {
     assert!(refused(r#"{"format":2,"bundles":{}}"#).contains("scorecard format 2"));
     let misspelt = r#"{"format":1,"bundles":{"song":{"late":{"value":0,"tolerence":1}}}}"#;
     assert!(refused(misspelt).contains("unknown field `tolerence`"));
+}
+
+// A gap in the pull inside one guide note is a let-go; the voice stopping as a note ends, or a
+// pull that starts late, is not, even when the next note touches it on the same pitch
+#[test]
+fn a_let_go_is_a_gap_in_the_pull_while_one_note_sounds() {
+    // A note by its pitch and where it starts
+    let reading = |note: Option<(i16, f64)>, pulling: bool| Reading {
+        position_ms: 0.0,
+        hz: 185.0,
+        confidence: 1.0,
+        target_midi: note.map(|(midi, _)| midi),
+        target_start_ms: note.map(|(_, start)| start),
+        error_semitones: 0.0,
+        shift_semitones: 0.0,
+        pulling,
+    };
+    let (first, rest) = (Some((54, 0.0)), None);
+    // The next two notes touch, on one pitch, with a breath between them
+    let (second, third) = (Some((56, 500.0)), Some((56, 800.0)));
+    let song = [
+        reading(first, false),
+        reading(first, true),
+        reading(first, false),
+        reading(first, false),
+        reading(first, true),
+        reading(first, false),
+        reading(rest, true),
+        reading(second, true),
+        reading(second, false),
+        reading(second, true),
+        reading(second, false),
+        reading(third, false),
+        reading(third, true),
+    ];
+    assert_eq!(numbers::let_goes(&song), Some(2));
+    assert_eq!(numbers::let_goes(&[reading(rest, true)]), None);
 }

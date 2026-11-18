@@ -19,9 +19,15 @@ pub fn target_at(guide: &Guide, frame: i64, semitones: i8) -> Target {
     match sounding {
         Some(note) => {
             let midi = i16::from(note.midi) + i16::from(semitones);
-            Target { mask: pitch_class_of(midi.into()), midi: Some(midi) }
+            Target {
+                mask: pitch_class_of(midi.into()),
+                midi: Some(midi),
+                start_frame: Some(note.start_frame),
+            }
         }
-        None => Target { mask: transpose(guide.key_mask, semitones), midi: None },
+        None => {
+            Target { mask: transpose(guide.key_mask, semitones), midi: None, start_frame: None }
+        }
     }
 }
 
@@ -66,19 +72,24 @@ mod tests {
     }
 
     fn key() -> Target {
-        Target { mask: A_MINOR, midi: None }
+        Target { mask: A_MINOR, midi: None, start_frame: None }
     }
 
-    fn melody(midi: i16) -> Target {
-        Target { mask: pitch_class_of(midi.into()), midi: Some(midi) }
+    /// The note at `midi` that starts on `start_frame`.
+    fn melody(midi: i16, start_frame: u64) -> Target {
+        Target {
+            mask: pitch_class_of(midi.into()),
+            midi: Some(midi),
+            start_frame: Some(start_frame),
+        }
     }
 
     #[test]
     fn follows_the_note_and_falls_back_to_the_key() {
         let guide = guide(&[(72, 2500, 3000), (69, 1000, 1500), (71, 1500, 2000)]);
         assert_eq!(target_at(&guide, 999, 0), key(), "before the first note");
-        assert_eq!(target_at(&guide, 1000, 0), melody(69), "a note's start");
-        assert_eq!(target_at(&guide, 1500, 0), melody(71), "a shared edge");
+        assert_eq!(target_at(&guide, 1000, 0), melody(69, 1000), "a note's start");
+        assert_eq!(target_at(&guide, 1500, 0), melody(71, 1500), "a shared edge");
         assert_eq!(target_at(&guide, 2200, 0), key(), "a gap between notes");
         assert_eq!(target_at(&guide, 3000, 0), key(), "the frame a note ends");
         assert_eq!(target_at(&guide, -50, 0), key(), "before the song");
@@ -104,8 +115,8 @@ mod tests {
     #[test]
     fn a_key_shift_moves_the_melody_and_the_key() {
         let guide = guide(&[(69, 1000, 1500)]);
-        assert_eq!(target_at(&guide, 1200, 2), melody(71));
-        assert_eq!(target_at(&guide, 1200, -1), melody(68));
+        assert_eq!(target_at(&guide, 1200, 2), melody(71, 1000));
+        assert_eq!(target_at(&guide, 1200, -1), melody(68, 1000));
         // A minor up two is B minor: B C# D E F# G A
         assert_eq!(target_at(&guide, 0, 2).mask, 0b1010_1101_0110);
         assert_eq!(target_at(&guide, 0, -12).mask, A_MINOR);

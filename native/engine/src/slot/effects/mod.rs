@@ -14,6 +14,7 @@ mod level;
 mod melody;
 mod reading;
 mod reverb;
+mod shift_trail;
 mod target;
 pub mod tone;
 mod voice;

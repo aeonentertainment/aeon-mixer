@@ -63,7 +63,12 @@ pub enum Event {
         hz: f32,
         confidence: f32,
         target_midi: Option<i16>,
+        target_start_ms: Option<f64>,
         error_semitones: f32,
+        /// What the voice at the reading's centre came out shifted by. The binding does not carry
+        /// it, `pulling` or `target_start_ms`; the scorecard reads them (docs/design.md 8.9).
+        shift_semitones: f32,
+        pulling: bool,
     },
     Position {
         frames: u64,
