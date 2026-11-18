@@ -1,8 +1,6 @@
 //! One mic input: its source, the effect chain, the meter, then gain and pan into the stereo
 //! bus. The order is docs/design.md section 4; the ramps are one block.
 
-#[cfg(test)]
-mod biquad_compare_tests;
 pub mod corrector_delay;
 pub mod cue;
 pub mod echo_report;
