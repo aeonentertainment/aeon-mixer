@@ -89,9 +89,10 @@ canceller's numbers instead: a 16 s song on one house mic that hears the backing
 from `fixtures/stems`, through a room 30 ms away and 10 dB down. The room plays alone for 10 s
 and a synthetic singer sings over it for the last 6. It is an `l16` slot because a phone's Opus
 at 32 kb/s fills noise in where the backing's waveform was. Through a phone, the canceller took
-out at most 5 dB and its bleed read anywhere from -3 to -12 dB as the delay moved. Through PCM
-it takes out 36 dB by the tenth second, and across playout delays from 10 to 60 ms its bleed
-moves 0.08 dB, its removal 0.5 dB and the slot's levels 1.2 dB. The baseline gives a dB to the
+out at most 5 dB, and its bleed read from -8.7 to -12.3 dB as the delay moved. Through PCM it
+takes out 36 dB by the tenth second, and across playout delays from 10 to 60 ms its bleed moves
+0.08 dB, its removal 0.5 dB, the slot's median level 1.2 dB and its top tenth 0.5 dB. The
+baseline gives a dB to the
 removal and each level but one, and half a dB to the bleed. The slot's median level is what the
 canceller left of the room alone, near -46 dBFS, which moves further than a sung level, so it
 has 1.5 dB.
