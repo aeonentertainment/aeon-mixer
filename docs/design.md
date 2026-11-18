@@ -395,7 +395,7 @@ pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
     MasterLevel { rms_db: f32, peak_db: f32 },
-    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, error_semitones: f32, shift_semitones: f32, pulling: bool },
+    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, target_start_ms: Option<f64>, error_semitones: f32, shift_semitones: f32, pulling: bool },
     Position { frames: u64 },
     BackingEnded,
     Underrun,
@@ -1173,7 +1173,9 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   `error_semitones - shift_semitones` from its class. The follower keeps the shift of its last
   32 runs by the input sample each began on, and looks up the reading's centre plus the
   shifter's delay, where that sample left. It costs a store a run and a scan of 32 a reading, in
-  a fixed array. The binding carries neither yet; the scorecard reads both (8.9).
+  a fixed array. With `target_midi` comes `target_start_ms`, where that note starts on the
+  guide's clock, since a pitch alone cannot tell two notes in a row on one pitch apart. The
+  binding carries none of the three yet; the scorecard reads them (8.9).
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
   growing, following it through a corrector's move and a moment unseen. Decision
@@ -1364,7 +1366,8 @@ Given a session bundle's directory in place of a file, it replays the whole song
 or each in a directory of them, as `replay` does, under `--profile` and with `--backing` as there,
 and turns each song into numbers. Every number is read from what the replay's engine reported, as
 `stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see, except
-the two that read a reading's shift and pull, which the binding does not carry yet (8.6). It
+the two that read a reading's shift, pull and note start, which the binding does not carry yet
+(8.6). It
 reads each slot's `stats()` after every block. Per recorded slot: `late`, `concealed` and
 `playoutDelayMs` as the song ended; `correctorDelayMs`, the mean of `correctorDelayMs` over the
 blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in cents over the
@@ -1372,7 +1375,8 @@ blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in ce
 the corrector's own bar, so a reading between notes, with no guide or with correction off counts
 for nothing; `correctedErrorCents`, the same median of `|errorSemitones - shift_semitones|`, where
 the corrected voice sat; `letGoes`, each gap in `pulling` with a pulled reading either side, within
-a run of readings on one guide note, so a voice that stops as its note ends lets go of nothing;
+a run of readings on one guide note, told apart by `target_start_ms`, so a voice that stops as its
+note ends lets go of nothing, even when the next note is on the same pitch;
 `echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
 over the blocks where `echo` was not null; `howlCatches`, every rise in it over the song, so a
 reset that starts it from 0 again loses none; and `levelTopTenthDb` and `levelMedianDb`, the
