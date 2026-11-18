@@ -12,16 +12,19 @@ mod watch;
 use engine::driver::DriverError;
 use objc2_core_audio::{
     AudioObjectID, kAudioDevicePropertyDeviceUID, kAudioDevicePropertyStreams,
-    kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice,
-    kAudioHardwarePropertyDevices, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyScopeInput, kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
+    kAudioDevicePropertyTransportType, kAudioHardwarePropertyDefaultInputDevice,
+    kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
+    kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput,
+    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
 };
 
 pub use capture::CoreAudioCapture;
 pub use driver::CoreAudioDriver;
 pub use watch::Watch;
 
+use crate::core_audio_transport::core_audio_transport;
 use crate::output::Output;
+use crate::transport::Transport;
 use property::{get, get_list, string};
 
 const SYSTEM: AudioObjectID = kAudioObjectSystemObject as AudioObjectID;
@@ -38,6 +41,7 @@ pub fn outputs() -> Result<Vec<Output>, DriverError> {
                 id: string(device, kAudioDevicePropertyDeviceUID).ok()?,
                 name: string(device, kAudioObjectPropertyName).ok()?,
                 is_default: Some(device) == default,
+                transport: transport(device),
             })
         })
         .collect())
@@ -53,9 +57,16 @@ pub fn inputs() -> Result<Vec<crate::Input>, DriverError> {
                 id: string(device, kAudioDevicePropertyDeviceUID)?,
                 name: string(device, kAudioObjectPropertyName)?,
                 is_default: Some(device) == default,
+                transport: transport(device),
             })
         })
         .collect()
+}
+
+fn transport(device: AudioObjectID) -> Transport {
+    // SAFETY: the transport type is a UInt32.
+    unsafe { get(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) }
+        .map_or(Transport::Unknown, core_audio_transport)
 }
 
 fn input_devices() -> Result<Vec<AudioObjectID>, DriverError> {

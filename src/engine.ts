@@ -11,6 +11,7 @@ import {
 } from "./native.ts";
 import type {
   Capability,
+  DeviceInfo,
   EngineEvents,
   MixerConfig,
   MixerEvents,
@@ -195,7 +196,7 @@ export class Engine {
    * lists. None on the timer and offline clocks, which play on no output; the module's call lists
    * the OS's whatever engine is open.
    */
-  async outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>> {
+  async outputDevices(): Promise<ReadonlyArray<DeviceInfo>> {
     this.#assertRunning();
     return this.#native.outputs();
   }
@@ -204,7 +205,7 @@ export class Engine {
    * The inputs a `capture` slot may name, the default marked: the module's `inputDevices()`. None
    * on an offline engine, which opens no input.
    */
-  async inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>> {
+  async inputDevices(): Promise<ReadonlyArray<DeviceInfo>> {
     this.#assertRunning();
     return this.#native.inputs();
   }

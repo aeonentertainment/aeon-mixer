@@ -96,7 +96,8 @@ await engine.close();
 - **An output that will not start** makes `openEngine` reject with `OutputUnavailableError`,
   whose `code` is `"output-unavailable"` and whose `device` names it. `outputDevices()` and
   `inputDevices()` list the OS's devices with no engine open, so a host can open another; they
-  open no stream and change no setting. An engine's own `outputDevices()` lists the same on a
+  open no stream and change no setting. Each entry's `transport` says how the device reaches the
+  machine, so a host can pass over a `virtual` one that plays to nobody. An engine's own `outputDevices()` lists the same on a
   device engine and none on the timer and offline clocks, which play on no output.
 - **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
   renders only when its caller runs `engine.pump(blocks)`. The tests run on it.

@@ -12,6 +12,32 @@ export type Capability =
   | "pause"
   | "level";
 export type IngestKind = "rtp" | "l16" | "push" | "capture";
+
+/**
+ * How a device reaches the machine, as its OS or driver reports it; decision 0025 maps each OS.
+ * `virtual` has no hardware behind it (BlackHole, ZoomAudioDevice, a virtual cable): it starts
+ * and plays to nobody. `network` plays somewhere else, seconds late. `other` is hardware on a bus
+ * not named here; `unknown` is a device the OS or driver did not say. A new OS transport maps into
+ * one of these, so the union does not grow.
+ */
+export type Transport =
+  | "builtIn"
+  | "usb"
+  | "bluetooth"
+  | "display"
+  | "network"
+  | "aggregate"
+  | "virtual"
+  | "other"
+  | "unknown";
+
+/** One device as `outputDevices()` and `inputDevices()` list it. */
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  transport: Transport;
+}
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {

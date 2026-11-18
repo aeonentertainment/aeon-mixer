@@ -21,7 +21,7 @@ const USAGE: &str = "\
 usage: measure-capture [--list] [--input ID] [--channel N] [--output ID] [--period FRAMES]
                        [--seconds N]
 
-  --list        print the inputs and outputs and their ids, then exit
+  --list        print the inputs and outputs, ids and transports, then exit
   --input ID    an input id from --list; the default input otherwise
   --channel N   the input's channel, from 0 (default 0)
   --output ID   an output id from --list; the default output otherwise
@@ -306,8 +306,7 @@ fn list() -> ExitCode {
             Ok(devices) => {
                 println!("{heading}");
                 for device in devices {
-                    let default = if device.is_default { " (default)" } else { "" };
-                    println!("  {}  {}{default}", device.id, device.name);
+                    println!("  {device}");
                 }
             }
             Err(error) => {

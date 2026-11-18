@@ -12,7 +12,7 @@ usage:
       --features hardware. Without --open-device it refuses and opens nothing.
 
   measure-latency list
-      Lists inputs and outputs and their ids. Opens no stream.
+      Lists inputs and outputs, their ids and transports. Opens no stream.
 
 rig:
   --rig mic --air-cm CM   a mic CM cm from the speaker. What a room hears: the figure includes
