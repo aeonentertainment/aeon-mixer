@@ -115,11 +115,11 @@ What the engine reports so the rest of the device can follow:
   as the old stream stopped, 0 when it was paused, not started, ended or absent. The gap starts
   where the old stream stopped calling back, so after a stall it counts the stall (section 8.3).
   A host that keeps a lyric clock from `startedAt` moves it by `heldMs` and the change in
-  latency, or re-anchors it on the next `position` event. A pause or resume still in flight at the move counts on the side of it
-  where the audio thread took it, so the host keeps no paused state of its own to tell whether a
-  gap counts. The guide clock moves by the new latency itself: from the first block after the new
-  stream's `start` returns, every pitch reading and every note edge the corrector follows is on the
-  new output's clock.
+  latency, or re-anchors it on the next `position` event. A pause or resume still in flight at
+  the move counts on the side of it where the audio thread took it, so the host keeps no paused
+  state of its own to tell whether a gap counts. The guide clock moves by the new latency itself:
+  from the first block after the new stream's `start` returns, every pitch reading and every note
+  edge the corrector follows is on the new output's clock.
 - Every ack carries the backing position at the block the command landed. `seek`, `resume` and
   `start` return it. A `position` event also fires once a second.
 - When a live key shifter is engaged, its latency is subtracted from the reported position, so
