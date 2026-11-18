@@ -73,8 +73,8 @@ struct Reports {
 }
 
 /// One slot's ingest, the control thread's end of it.
-struct Ingest {
-    packets: Option<(PacketProducer, Arc<SharedStats>)>,
+pub(super) struct Ingest {
+    pub(super) packets: Option<(PacketProducer, Arc<SharedStats>)>,
     ring_full: usize,
 }
 
@@ -238,8 +238,8 @@ pub fn play(
 }
 
 /// A slot's source as `node/src/ingest.rs` opens it, with no socket: the replay is its network
-/// thread.
-fn open(kind: &str, delay: PlayoutDelay) -> Result<(Ingest, Box<dyn Source>), String> {
+/// thread, and so is a live song writing a bundle.
+pub(super) fn open(kind: &str, delay: PlayoutDelay) -> Result<(Ingest, Box<dyn Source>), String> {
     let codec = match kind {
         "rtp" => Codec::opus().map_err(|e| e.to_string())?,
         "l16" => Codec::L16,

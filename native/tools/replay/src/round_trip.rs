@@ -100,11 +100,11 @@ pub(crate) fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<
     sent
 }
 
-/// What a house mic's sender puts on loopback: 5 ms of 16-bit big-endian stereo PCM a packet,
-/// the mono signal on both channels, each arriving a millisecond after its last sample.
-/// Deterministic.
+/// What a house mic's sender puts on loopback: `rtpL16pay` at GStreamer's default 1400-byte MTU,
+/// 350 frames of 16-bit big-endian stereo PCM a packet, as `measure-latency` models it, with the
+/// mono signal on both channels. Each arrives a millisecond after its last sample. Deterministic.
 pub(crate) fn house_mic(signal: &[f32]) -> Vec<Sent> {
-    const PACKET: usize = 240;
+    const PACKET: usize = 350;
     signal
         .as_chunks::<PACKET>()
         .0
@@ -125,7 +125,7 @@ pub(crate) fn house_mic(signal: &[f32]) -> Vec<Sent> {
                 datagram.extend_from_slice(&bytes);
                 datagram.extend_from_slice(&bytes);
             }
-            Sent { at: (k * PACKET) as i64 + 48, datagram }
+            Sent { at: ((k + 1) * PACKET) as i64 + 48, datagram }
         })
         .collect()
 }

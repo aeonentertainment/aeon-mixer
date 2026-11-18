@@ -20,15 +20,15 @@ use engine::block::{BLOCK, RATE};
 use engine::command::Command;
 use engine::driver::OfflineDriver;
 use engine::graph::Graph;
-use engine::ingest::packet::RING_CAPACITY;
-use engine::ingest::{Codec, JitterBuffer, PacketProducer, PacketSource, packet_ring};
+use engine::ingest::PacketProducer;
 use engine::params::{Params, StemGains};
 use engine::slot::Slot;
 use serde_json::{Value, json};
 use transport::receive::packet_from;
 use transport::record::{Recording, Tap, WallClock};
 
-use super::silence::Silence;
+use super::profile::PlayoutDelay;
+use super::song::open;
 use super::stems::sha256;
 use crate::round_trip::Sent;
 
@@ -91,22 +91,17 @@ impl LiveSong {
         let mut tapped = Vec::new();
         let mut slots = Vec::new();
         for (index, kind) in kinds.iter().enumerate() {
-            if is_recorded(kind) {
-                let (producer, consumer) = packet_ring(RING_CAPACITY);
-                let codec = if *kind == "l16" { Codec::L16 } else { Codec::opus().unwrap() };
-                let jitter = JitterBuffer::new(15 * RATE / 1000, codec);
-                slots.push(Slot::new(Box::new(PacketSource::new(consumer, jitter))));
-                rings.push(Some(producer));
+            let (ingest, source) = open(kind, PlayoutDelay::Pinned(15.0)).unwrap();
+            slots.push(Slot::new(source));
+            let producer = ingest.packets.map(|(producer, _)| producer);
+            tapped.push(producer.is_some().then_some(recordings.len()));
+            if producer.is_some() {
                 let path = dir.join("slots").join(format!("{index}.pcap"));
                 let (recording, mut tap) = Recording::create(&path, 40_000, clock).unwrap();
                 tap.hide_senders();
-                tapped.push(Some(recordings.len()));
                 recordings.push((recording, tap));
-            } else {
-                slots.push(Slot::new(Box::new(Silence)));
-                rings.push(None);
-                tapped.push(None);
             }
+            rings.push(producer);
         }
         let mut graph = Box::new(Graph::new(slots));
         let backing = instrumental.map(|path| {
@@ -148,9 +143,10 @@ impl LiveSong {
         let slots: Vec<Value> = kinds
             .iter()
             .enumerate()
-            .map(
-                |(index, kind)| json!({ "index": index, "kind": kind, "recorded": is_recorded(kind) }),
-            )
+            .zip(&song.tapped)
+            .map(|((index, kind), tapped)| {
+                json!({ "index": index, "kind": kind, "recorded": tapped.is_some() })
+            })
             .collect();
         let manifest = json!({
             "format": 1,
@@ -241,6 +237,21 @@ impl LiveSong {
         }
     }
 
+    /// Ends the song and writes its bundle to `to` as a committed fixture: every file but the
+    /// host's, with each recorded slot's pcap.
+    pub fn save(self, to: &Path) {
+        let (dir, _) = self.end();
+        let _ = std::fs::remove_dir_all(to);
+        std::fs::create_dir_all(to.join("slots")).unwrap();
+        for name in ["manifest.json", "profile.json", "events.jsonl", "stats.jsonl"] {
+            std::fs::copy(dir.join(name), to.join(name)).unwrap();
+        }
+        for pcap in std::fs::read_dir(dir.join("slots")).unwrap() {
+            let pcap = pcap.unwrap().path();
+            std::fs::copy(&pcap, to.join("slots").join(pcap.file_name().unwrap())).unwrap();
+        }
+    }
+
     /// `destroy`: the `end` line, and the recordings finished.
     pub fn end(mut self) -> (PathBuf, Vec<f32>) {
         self.line(json!({ "type": "end" }));
@@ -250,11 +261,6 @@ impl LiveSong {
         }
         (self.dir, self.out)
     }
-}
-
-/// Whether a slot of `kind` arrives as packets, which the bundle records.
-fn is_recorded(kind: &str) -> bool {
-    matches!(kind, "rtp" | "l16")
 }
 
 /// Where engine frame `frame` falls on the song's own time.

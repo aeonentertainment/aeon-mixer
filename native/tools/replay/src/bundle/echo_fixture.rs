@@ -57,12 +57,5 @@ fn writes_the_echo_fixture() {
     let sender = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 40), 50_000));
     song.send(0, sender, 0, &house_mic(&mic(&backing)));
     song.play_to(SONG as u64);
-    let (dir, _) = song.end();
-
-    let bundle = fixtures.join("bundles/echo");
-    let _ = std::fs::remove_dir_all(&bundle);
-    std::fs::create_dir_all(bundle.join("slots")).unwrap();
-    for name in ["manifest.json", "profile.json", "events.jsonl", "stats.jsonl", "slots/0.pcap"] {
-        std::fs::copy(dir.join(name), bundle.join(name)).unwrap();
-    }
+    song.save(&fixtures.join("bundles/echo"));
 }
