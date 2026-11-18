@@ -1403,12 +1403,16 @@ master has the two levels, from
 - **Against a baseline**, an earlier scorecard, it prints every number that differs and fails
   when one moved further than its tolerance or is gone. A number the baseline lacks is new and
   fails nothing.
-- **The fixture.** Its tests score a short duet written on the offline driver, with no real
-  voice in it, against a committed baseline, so a change that moves one of its numbers past its
-  tolerance fails `cargo test`.
-- **Not yet.** Of the tone stage's rows (decision 0029), the five that compare a phone with a
-  reference mic need that recording stored beside a bundle, and `tone_late` and `tone_readings`
-  come with the stage.
+- **The fixtures.** Its tests score bundles written on the offline driver, with no real voice in
+  them, against a committed baseline, so a change that moves one of their numbers past its
+  tolerance fails `cargo test`: a short duet for the mic path and the corrector, and a house mic
+  in a room for the echo canceller. The canceller's is a house mic's because a phone's Opus
+  fills noise in where the backing's waveform was, which leaves the canceller little to take
+  out and its numbers moving with the delay.
+- **Not yet.** A fixture that holds `howlCatches` still: over a singer the guard catches the
+  synthetic voice at some delays and not others (#245). Of the tone stage's rows (decision
+  0029), the five that compare a phone with a reference mic need that recording stored beside a
+  bundle, and `tone_late` and `tone_readings` come with the stage.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 

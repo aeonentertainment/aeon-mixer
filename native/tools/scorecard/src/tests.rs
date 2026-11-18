@@ -29,8 +29,9 @@ fn scratch(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("aeon-scorecard-{}-{name}", std::process::id()))
 }
 
-fn failing(movements: &[Movement]) -> Vec<&str> {
-    movements.iter().filter(|m| m.fails()).map(|m| m.number.as_str()).collect()
+/// Each number that moved past its tolerance, by bundle and name.
+fn failing(movements: &[Movement]) -> Vec<String> {
+    movements.iter().filter(|m| m.fails()).map(|m| format!("{} {}", m.bundle, m.number)).collect()
 }
 
 #[test]
@@ -49,7 +50,7 @@ fn a_bundle_scored_against_its_own_scorecard_reports_no_movement() {
 fn the_fixture_scores_within_the_committed_baseline() {
     let baseline = Scorecard::read(&fixtures().join("baseline.json")).unwrap();
     let movements = Movement::between(&scored(None, Some(&baseline)), &baseline);
-    assert_eq!(failing(&movements), Vec::<&str>::new(), "{movements:#?}");
+    assert_eq!(failing(&movements), Vec::<String>::new(), "{movements:#?}");
 }
 
 /// The fixture's own profile with `change` made to it, written where `scored` can read it.
@@ -69,7 +70,10 @@ fn a_longer_playout_delay_moves_that_number_and_no_other_beyond_tolerance() {
     let path = profile("delay-30.json", |p| p["ingest"]["playoutDelayMs"] = 30.into());
     let baseline = Scorecard::read(&fixtures().join("baseline.json")).unwrap();
     let movements = Movement::between(&scored(Some(path), None), &baseline);
-    assert_eq!(failing(&movements), ["slot0.playoutDelayMs", "slot1.playoutDelayMs"]);
+    assert_eq!(
+        failing(&movements),
+        ["duet slot0.playoutDelayMs", "duet slot1.playoutDelayMs", "echo slot0.playoutDelayMs"]
+    );
     for movement in movements.iter().filter(|m| m.fails()) {
         assert!(matches!(movement.change, Change::Moved { now: 30.0, .. }), "{movement:?}");
     }
@@ -84,7 +88,7 @@ fn correction_at_another_strength_moves_the_corrected_pitch_and_no_other_number(
     });
     let baseline = Scorecard::read(&fixtures().join("baseline.json")).unwrap();
     let movements = Movement::between(&scored(Some(path), None), &baseline);
-    assert_eq!(failing(&movements), ["slot0.correctedErrorCents"], "{movements:#?}");
+    assert_eq!(failing(&movements), ["duet slot0.correctedErrorCents"], "{movements:#?}");
     let corrected = movements.iter().find(|m| m.fails()).unwrap();
     let Change::Moved { baseline, now, .. } = corrected.change else { panic!("{corrected:?}") };
     assert!(now > baseline + 10.0, "{baseline} to {now} cents");
