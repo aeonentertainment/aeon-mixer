@@ -1,3 +1,4 @@
+import { types } from "node:util";
 import type {
   BackingInput,
   NativeBackingRender,
@@ -199,7 +200,8 @@ function stemInput({ kind, path, bytes }: BackingStem): StemInput {
     return path;
   }
   if (path !== undefined) throw new TypeError(`${stem} has a path and bytes; give one`);
-  if (!(bytes instanceof Uint8Array)) throw new TypeError(`${stem}'s bytes must be a Uint8Array`);
+  // Any realm's: a test runner's `vm` context hands in Buffers whose Uint8Array is not this one
+  if (!types.isUint8Array(bytes)) throw new TypeError(`${stem}'s bytes must be a Uint8Array`);
   if (bytes.length === 0) throw new RangeError(`${stem}'s bytes are empty`);
   return bytes;
 }

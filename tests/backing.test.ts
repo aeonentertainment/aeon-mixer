@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { types } from "node:util";
+import { runInNewContext } from "node:vm";
 import { afterAll, expect, test } from "vite-plus/test";
 import {
   defaultProfile,
@@ -413,6 +415,10 @@ test("a render that fails rejects start with the engine's message", async () => 
   await engine.close();
 });
 
+function bytesOnly(bytes: Uint8Array): BackingConfig {
+  return { stems: [{ kind: "instrumental", bytes }], key: 0, speed: 1, stemGains: unity };
+}
+
 /** What an offline engine plays for two seconds of `config`'s backing from its start. */
 async function playedBy(config: BackingConfig) {
   const engine = await openEngine({ output: { offline: true } });
@@ -469,6 +475,14 @@ test("a bad buffer is refused naming its stem: empty at createMixer, undecodable
   await expect(mixer.start()).rejects.toThrow(/^the guideVocals stem's bytes: /);
   await mixer.destroy();
   await engine.close();
+});
+
+test("bytes in another realm's Uint8Array play as this realm's do", async () => {
+  const bytes = wav(sine(440, 1));
+  // A test runner's `vm` context: its Uint8Array is not this realm's
+  const foreign: unknown = runInNewContext("Uint8Array.from(bytes)", { bytes });
+  if (!types.isUint8Array(foreign) || foreign instanceof Uint8Array) throw new Error("not foreign");
+  expect(await playedBy(bytesOnly(foreign))).toEqual(await playedBy(bytesOnly(bytes)));
 });
 
 test("closing the engine while a render runs rejects the start waiting on it", async () => {
