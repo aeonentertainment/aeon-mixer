@@ -171,6 +171,8 @@ impl Slot {
                     confidence: reading.confidence,
                     target_midi: reading.target_midi,
                     error_semitones: reading.error_semitones,
+                    shift_semitones: reading.shift_semitones,
+                    pulling: reading.pulling,
                 });
             },
         );

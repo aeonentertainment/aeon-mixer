@@ -3,6 +3,7 @@ use kernels::{EVERY_PITCH_CLASS, PitchCorrector};
 use crate::block::{BLOCK, RATE};
 use crate::params::CorrectorParams;
 use crate::slot::cue::Cue;
+use crate::slot::effects::shift_trail::ShiftTrail;
 use crate::slot::effects::{Reading, Target, melody};
 use crate::slot::guide::Guide;
 
@@ -17,6 +18,9 @@ pub struct Corrector {
     kernel: PitchCorrector,
     /// The kernel reads and writes separate buffers; the slot's block is copied through this.
     scratch: [f32; BLOCK],
+    /// Input samples it has taken, counted from its first.
+    heard: u64,
+    shifts: ShiftTrail,
 }
 
 impl Corrector {
@@ -26,7 +30,12 @@ impl Corrector {
     pub const MAX_LATENCY_FRAMES: u32 = 720;
 
     pub fn new() -> Self {
-        Self { kernel: PitchCorrector::new(RATE), scratch: [0.0; BLOCK] }
+        Self {
+            kernel: PitchCorrector::new(RATE),
+            scratch: [0.0; BLOCK],
+            heard: 0,
+            shifts: ShiftTrail::new(),
+        }
     }
 
     /// Forgets the singer it was hearing, for a new stream on the slot.
@@ -81,12 +90,17 @@ impl Corrector {
             let run = &mut block[done..done + frames];
             self.scratch[..frames].copy_from_slice(run);
             self.kernel.process(&self.scratch[..frames], run);
+            self.shifts.push(self.heard, self.kernel.shift_semitones());
+            self.heard += frames as u64;
             done += frames;
 
             if frames == until_reading {
                 let pitch = self.kernel.detected();
                 let centre = at + step * frames as i64 - self.kernel.reading_lag_samples() as i64;
                 let position_ms = centre as f64 * 1000.0 / f64::from(RATE);
+                // The voice at the centre leaves the shifter its delay later
+                let lag = self.kernel.reading_lag_samples() as u64;
+                let left = (self.heard + self.kernel.latency_samples() as u64).saturating_sub(lag);
                 // The kernel read with the target this run set, so the two belong together
                 on_reading(Reading {
                     position_ms,
@@ -94,6 +108,8 @@ impl Corrector {
                     confidence: pitch.confidence,
                     target_midi: target.midi.filter(|_| correcting),
                     error_semitones: if correcting { self.kernel.error_semitones() } else { 0.0 },
+                    shift_semitones: self.shifts.at(left),
+                    pulling: self.kernel.correcting(),
                 });
             }
         }
@@ -111,6 +127,8 @@ mod tests {
     use std::f64::consts::PI;
 
     use assert_no_alloc::assert_no_alloc;
+
+    use kernels::YinDetector;
 
     use super::*;
     use crate::slot::guide::Note;
@@ -222,6 +240,65 @@ mod tests {
             "the delay reached {highest} frames against {}",
             Corrector::MAX_LATENCY_FRAMES
         );
+    }
+
+    // A reading's error less its shift is where the corrected voice sat. A voice gliding a
+    // semitone every 250 ms is pulled toward A at full strength and no retune, so the shift
+    // always trails the voice; each reading's account of that is checked against the output,
+    // read by a detector of its own around where the reading's centre left the shifter.
+    #[test]
+    fn a_readings_error_less_its_shift_is_the_corrected_voice() {
+        let frames = RATE as usize;
+        let voice: Vec<f32> = {
+            let mut phase = 0.0f64;
+            (0..frames)
+                .map(|i| {
+                    let midi = 67.5 + 4.0 * i as f64 / f64::from(RATE);
+                    phase =
+                        (phase + 440.0 * 2f64.powf((midi - 69.0) / 12.0) / f64::from(RATE)) % 1.0;
+                    let buzz: f64 =
+                        (1..=12).map(|h| (2.0 * PI * h as f64 * phase).sin() / h as f64).sum();
+                    (0.25 * buzz) as f32
+                })
+                .collect()
+        };
+        let guide = Guide {
+            notes: vec![Note { midi: 69, start_frame: 0, end_frame: frames as u64 }],
+            key_mask: 0,
+        };
+        let mut corrector = Corrector::new();
+        let mut output = voice.clone();
+        let mut readings = Vec::with_capacity(100);
+        let mut left = Vec::with_capacity(100);
+        assert_no_alloc(|| {
+            for (index, block) in output.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                let frame = (index * BLOCK) as i64;
+                corrector.process(&ON, Some(&guide), playing(frame), block, |r| readings.push(r));
+                while left.len() < readings.len() {
+                    left.push(corrector.latency_frames());
+                }
+            }
+        });
+
+        let mut detector = YinDetector::new(RATE, 2048);
+        let mut checked = 0;
+        for (reading, latency) in readings.iter().zip(left) {
+            if reading.position_ms < 150.0 || !reading.pulling {
+                continue;
+            }
+            let at = (reading.position_ms * 48.0) as usize + latency;
+            let Some(window) = output.get(at - 1024..at + 1024) else { continue };
+            // A less the output, as `error_semitones` is A less the input
+            let measured = -12.0 * (f64::from(detector.analyze(window).hz) / 440.0).log2();
+            let said = f64::from(reading.error_semitones - reading.shift_semitones);
+            assert!(
+                (said - measured).abs() < 0.04,
+                "at {} ms the reading said {said:+.3} semitones and the output sat {measured:+.3}",
+                reading.position_ms
+            );
+            checked += 1;
+        }
+        assert!(checked > 60, "checked {checked} readings");
     }
 
     // Off is the singer's own voice, with no delay, and the readings still come

@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use engine::block::RATE;
+use engine::slot::effects::Reading;
 use replay::bundle::song::{Played, PlayedSlot};
 use replay::levels::Levels;
 
@@ -41,8 +42,15 @@ pub fn of(played: &Played) -> Numbers {
         if !held.is_empty() {
             put(name("correctorDelayMs"), held.iter().sum::<f64>() / held.len() as f64);
         }
-        if let Some(cents) = median(pitch_errors_cents(slot)) {
+        if let Some(cents) = median(errors_cents(slot, |r| r.error_semitones)) {
             put(name("pitchErrorCents"), cents);
+        }
+        let corrected = |r: &Reading| r.error_semitones - r.shift_semitones;
+        if let Some(cents) = median(errors_cents(slot, corrected)) {
+            put(name("correctedErrorCents"), cents);
+        }
+        if let Some(gaps) = let_goes(&slot.readings) {
+            put(name("letGoes"), f64::from(gaps));
         }
         if let Some(removed) = median(slot.echo.iter().map(|f| f64::from(f.removed_db)).collect()) {
             put(name("echoRemovedDb"), removed);
@@ -61,15 +69,30 @@ pub fn of(played: &Played) -> Numbers {
     numbers
 }
 
-/// How far each voiced reading sat from the guide note the corrector pulled toward, in cents:
-/// the voice as it reached the corrector, before correction.
-fn pitch_errors_cents(slot: &PlayedSlot) -> Vec<f64> {
+/// How far each voiced reading the corrector pulled toward a guide note sat from it, in cents,
+/// by `error`: the voice as it reached the corrector, or as it came out.
+fn errors_cents(slot: &PlayedSlot, error: impl Fn(&Reading) -> f32) -> Vec<f64> {
     slot.readings
         .iter()
         .filter(|r| r.target_midi.is_some())
         .filter(|r| r.confidence >= VOICED_CONFIDENCE && r.hz >= LOWEST_CORRECTED_HZ)
-        .map(|r| f64::from(r.error_semitones.abs()) * 100.0)
+        .map(|r| f64::from(error(r).abs()) * 100.0)
         .collect()
+}
+
+/// Times correction let go of a note and took it again while the guide still held it: each gap
+/// in the pull with a pulled reading either side, within one run of readings on one guide note.
+/// `None` when no reading had a guide note to pull toward.
+pub(crate) fn let_goes(readings: &[Reading]) -> Option<u32> {
+    let mut gaps = None;
+    for note in readings.chunk_by(|a, b| a.target_midi == b.target_midi) {
+        if note[0].target_midi.is_none() {
+            continue;
+        }
+        let pulls = note.chunk_by(|a, b| a.pulling == b.pulling).filter(|run| run[0].pulling);
+        *gaps.get_or_insert(0) += (pulls.count() as u32).saturating_sub(1);
+    }
+    gaps
 }
 
 /// The level 10 percent of 100 ms readings are above, and the median. The loudest reading is one

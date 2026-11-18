@@ -199,6 +199,8 @@ pub fn play(
                     confidence,
                     target_midi,
                     error_semitones,
+                    shift_semitones,
+                    pulling,
                 } => {
                     if let Some(slot) = played.get_mut(usize::from(slot)) {
                         slot.readings.push(Reading {
@@ -207,6 +209,8 @@ pub fn play(
                             confidence,
                             target_midi,
                             error_semitones,
+                            shift_semitones,
+                            pulling,
                         });
                     }
                 }

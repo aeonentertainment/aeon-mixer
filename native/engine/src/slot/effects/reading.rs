@@ -11,4 +11,10 @@ pub struct Reading {
     /// The class it pulls toward less the reading, in the singer's own octave, so positive is
     /// flat; 0 with correction off or while unvoiced.
     pub error_semitones: f32,
+    /// The transposition the voice at the reading's centre came out with, so the corrected
+    /// voice sat `error_semitones - shift_semitones` from its class; 0 with correction off.
+    pub shift_semitones: f32,
+    /// Whether the corrector was pulling the voice as it read: a voice it hears, a class to pull
+    /// it to, and a strength over 0.
+    pub pulling: bool,
 }

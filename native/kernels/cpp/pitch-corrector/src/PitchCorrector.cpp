@@ -191,4 +191,9 @@ int PitchCorrector::latencySamples() const {
   return s.wetGain > 0 ? int(std::lround(s.shifter.delaySamples())) : 0;
 }
 
+float PitchCorrector::shiftSemitones() const {
+  const State &s = *state_;
+  return s.wetGain > 0 ? s.shift : 0;
+}
+
 }  // namespace aeon::dsp
