@@ -22,6 +22,7 @@ use crate::ingest::packet::RING_CAPACITY;
 use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring, push_voice};
 use crate::params::{CorrectorParams, Params};
 use crate::slot::Slot;
+use crate::slot::effects::Reading;
 use crate::slot::guide::{Guide, Note};
 use crate::slot::source::Source;
 use crate::slot::source::fixtures::Sine;
@@ -33,12 +34,9 @@ const HOP_MS: f64 = 10.0;
 const CORRECTING: CorrectorParams =
     CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
 
-/// One reading as a tuning panel sees it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Read {
-    position_ms: f64,
-    target: Option<i16>,
-    confidence: f32,
+/// The guide note a reading names, as a tuning panel shows it.
+fn midi(reading: &Reading) -> Option<i16> {
+    reading.note.map(|note| note.midi)
 }
 
 /// How far a reading's centre trails the newest frame it read.
@@ -60,40 +58,36 @@ fn guide(notes: &[(u64, u64)]) -> Box<Guide> {
     Box::new(Guide { notes: notes.collect(), key_mask: 0 })
 }
 
-fn pitch(event: Event) -> Option<Read> {
+fn pitch(event: Event) -> Option<Reading> {
     match event {
-        Event::Pitch { reading, .. } => Some(Read {
-            position_ms: reading.position_ms,
-            target: reading.note.map(|note| note.midi),
-            confidence: reading.confidence,
-        }),
+        Event::Pitch { reading, .. } => Some(reading),
         _ => None,
     }
 }
 
 /// Every reading's target is the guide's note at its position, B flat moved by `semitones`, so
 /// none is stale: the one the corrector set for its last run, a frame before the reading ends.
-fn assert_on_the_guide(reads: &[Read], notes: &[(u64, u64)], semitones: i16) {
+fn assert_on_the_guide(reads: &[Reading], notes: &[(u64, u64)], semitones: i16) {
     for read in reads {
         let frame = (read.position_ms * f64::from(RATE) / 1000.0).round() as i64 + lag() - 1;
         let sounding =
             notes.iter().any(|&(start, end)| (start as i64..end as i64).contains(&frame));
         let expected = sounding.then(|| i16::from(B_FLAT_3) + semitones);
-        assert_eq!(read.target, expected, "{read:?}");
+        assert_eq!(midi(read), expected, "{read:?}");
     }
 }
 
 /// Each target that differs from the reading's before it: what a host counting changes sees.
-fn changes(reads: &[Read]) -> Vec<(f64, Option<i16>)> {
+fn changes(reads: &[Reading]) -> Vec<(f64, Option<i16>)> {
     reads
         .windows(2)
-        .filter(|w| w[0].target != w[1].target)
-        .map(|w| (w[1].position_ms, w[1].target))
+        .filter(|w| midi(&w[0]) != midi(&w[1]))
+        .map(|w| (w[1].position_ms, midi(&w[1])))
         .collect()
 }
 
 /// The readings after which the guide clock did not move on by one hop.
-fn jumps(reads: &[Read]) -> Vec<usize> {
+fn jumps(reads: &[Reading]) -> Vec<usize> {
     (1..reads.len())
         .filter(|&i| (reads[i].position_ms - reads[i - 1].position_ms - HOP_MS).abs() > 1e-9)
         .collect()
@@ -106,7 +100,7 @@ struct Song {
     params: Params,
     events: EventProducer,
     drain: EventConsumer,
-    reads: Vec<Read>,
+    reads: Vec<Reading>,
 }
 
 impl Song {
@@ -193,8 +187,8 @@ fn a_pause_short_of_an_edge_crosses_it_once_after_the_resume() {
 
     assert_on_the_guide(&song.reads, &[NOTE], 0);
     let held = &song.reads[paused - 50..paused];
-    let on_the_held_frame = |read: &Read| read.position_ms == position_ms(HELD as i64);
-    assert!(held.iter().all(|read| on_the_held_frame(read) && read.target.is_none()), "{held:?}");
+    let on_the_held_frame = |read: &Reading| read.position_ms == position_ms(HELD as i64);
+    assert!(held.iter().all(|read| on_the_held_frame(read) && read.note.is_none()), "{held:?}");
     assert!(song.reads.windows(2).all(|w| w[1].position_ms >= w[0].position_ms), "never back");
     let into = changes(&song.reads);
     assert_eq!(into.len(), 2, "into the note and out at its end: {into:?}");
@@ -237,7 +231,7 @@ fn a_paused_push_slot_holds_its_frame_though_its_ring_drains() {
 
     let held = &song.reads[song.reads.len() - 50..];
     let first = held[0];
-    let same = |read: &Read| read.position_ms == first.position_ms && read.target == first.target;
+    let same = |read: &Reading| read.position_ms == first.position_ms && midi(read) == midi(&first);
     assert!(held.iter().all(same), "{held:?}");
 }
 
@@ -283,7 +277,7 @@ fn a_stalled_stream_comes_back_on_the_note_it_stalled_into() {
     let back = song.reads.iter().find(|r| r.position_ms > end && r.confidence > 0.9);
     let back = back.expect("the voice came back");
     assert!(back.position_ms <= end + 2.0 * HOP_MS, "read again at {}", back.position_ms);
-    assert_eq!(back.target, Some(i16::from(B_FLAT_3)));
+    assert_eq!(midi(back), Some(i16::from(B_FLAT_3)));
     // Every reading whose window lies in the stall hears nothing, but the last: the jitter buffer
     // knows its delay to within the block a packet waits, so the voice may reach it early
     let inside = position_ms(STALL.start as i64 + 2 * lag())..end;
