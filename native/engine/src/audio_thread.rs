@@ -464,8 +464,8 @@ mod tests {
                 let (mut left, mut right) = ([0.0; BLOCK], [0.0; BLOCK]);
                 assert_no_alloc(|| audio.render(Stereo { left: &mut left, right: &mut right }));
                 readings.extend(std::iter::from_fn(|| controls.events.pop()).filter_map(|e| {
-                    if let Event::Pitch { position_ms, target_midi, .. } = e {
-                        Some((position_ms, target_midi))
+                    if let Event::Pitch { reading, .. } = e {
+                        Some((reading.position_ms, reading.note.map(|note| note.midi)))
                     } else {
                         None
                     }

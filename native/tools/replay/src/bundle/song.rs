@@ -192,28 +192,9 @@ pub fn play(
                     }
                 }
                 EngineEvent::MasterLevel { rms_db, .. } => master_db.push(rms_db),
-                EngineEvent::Pitch {
-                    slot,
-                    position_ms,
-                    hz,
-                    confidence,
-                    target_midi,
-                    target_start_ms,
-                    error_semitones,
-                    shift_semitones,
-                    pulling,
-                } => {
+                EngineEvent::Pitch { slot, reading } => {
                     if let Some(slot) = played.get_mut(usize::from(slot)) {
-                        slot.readings.push(Reading {
-                            position_ms,
-                            hz,
-                            confidence,
-                            target_midi,
-                            target_start_ms,
-                            error_semitones,
-                            shift_semitones,
-                            pulling,
-                        });
+                        slot.readings.push(reading);
                     }
                 }
                 _ => {}

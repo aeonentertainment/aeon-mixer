@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use engine::slot::effects::Reading;
+use engine::slot::effects::{Reading, TargetNote};
 use replay::bundle::report::Options as Replay;
 use serde_json::Value;
 
@@ -131,20 +131,19 @@ fn a_scorecard_is_refused_by_its_format_and_by_a_field_it_does_not_know() {
 // pull that starts late, is not, even when the next note touches it on the same pitch
 #[test]
 fn a_let_go_is_a_gap_in_the_pull_while_one_note_sounds() {
-    // A note by its pitch and where it starts
-    let reading = |note: Option<(i16, f64)>, pulling: bool| Reading {
+    // A note by its pitch and the frame it starts on
+    let reading = |note: Option<(i16, u64)>, pulling: bool| Reading {
         position_ms: 0.0,
         hz: 185.0,
         confidence: 1.0,
-        target_midi: note.map(|(midi, _)| midi),
-        target_start_ms: note.map(|(_, start)| start),
+        note: note.map(|(midi, start_frame)| TargetNote { midi, start_frame }),
         error_semitones: 0.0,
         shift_semitones: 0.0,
         pulling,
     };
-    let (first, rest) = (Some((54, 0.0)), None);
+    let (first, rest) = (Some((54, 0)), None);
     // The next two notes touch, on one pitch, with a breath between them
-    let (second, third) = (Some((56, 500.0)), Some((56, 800.0)));
+    let (second, third) = (Some((56, 24_000)), Some((56, 38_400)));
     let song = [
         reading(first, false),
         reading(first, true),
