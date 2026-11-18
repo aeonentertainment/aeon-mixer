@@ -574,8 +574,8 @@ export interface Engine {
   on(event: "fault", listener: (error: Error) => void): () => void;
   /** Whenever `output` changes: after every move, the fallback from a refused output included,
    * with `gapMs` how long the room heard nothing and `heldMs` how long that held the backing's
-   * playhead, `gapMs` when it was playing and 0 when not (section 3); both 0 when a refusal
-   * clears alone. */
+   * playhead, `gapMs` when it was playing or fading to a pause and 0 when not (section 3); both 0
+   * when a refusal clears alone. */
   on(
     event: "outputChanged",
     listener: (output: OutputInfo, gapMs: number, heldMs: number) => void,
