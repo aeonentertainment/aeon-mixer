@@ -11,6 +11,7 @@ mod playhead;
 mod prerender;
 mod ramp;
 mod render_job;
+mod stem_source;
 mod stems;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -23,7 +24,8 @@ pub use planar::Planar;
 pub use playhead::{Playhead, SEEK_FADE_FRAMES};
 use prerender::prerender;
 use ramp::Ramp;
-pub use render_job::{RenderJob, StemFiles};
+pub use render_job::{RenderJob, StemSources};
+pub use stem_source::StemSource;
 pub use stems::Stems;
 pub use transport::Transport;
 

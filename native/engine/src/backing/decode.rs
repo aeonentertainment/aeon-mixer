@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::path::Path;
+use std::io::Cursor;
 
 use rubato::audioadapter_buffers::direct::SequentialSliceOfVecs;
 use rubato::{Fft, FixedSync, Resampler};
@@ -7,26 +7,35 @@ use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 
-use crate::backing::{BackingError, Planar};
+use crate::backing::{BackingError, Planar, StemSource};
 use crate::block::RATE;
 
 /// Frames per resampler call; the whole file goes through, so this only sizes its FFTs.
 const RESAMPLE_CHUNK: usize = 1024;
 
-/// Decodes the audio file at `path` with Symphonia, a pure Rust decoder, to stereo at 48 kHz. Mono
-/// plays on both sides, channels past the second are dropped, and any other rate is resampled.
-/// Runs on the worker thread.
-pub fn decode(path: &Path) -> Result<Planar, BackingError> {
-    let fail = |reason: String| BackingError::Decode { path: path.to_owned(), reason };
-    let file = File::open(path).map_err(|e| fail(e.to_string()))?;
-    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+/// Decodes one stem with Symphonia, a pure Rust decoder, to stereo at 48 kHz. Mono plays on both
+/// sides, channels past the second are dropped, and any other rate is resampled. A failure names
+/// the file's path, or for bytes the stem's `kind` as the host calls it. Bytes are probed by their
+/// content and freed as the decode ends. Runs on the worker thread.
+pub fn decode(source: StemSource, kind: &str) -> Result<Planar, BackingError> {
     let mut hint = Hint::new();
-    if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(extension);
-    }
+    let (stem, media): (String, Result<Box<dyn MediaSource>, String>) = match source {
+        StemSource::File(path) => {
+            if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+                hint.with_extension(extension);
+            }
+            let file = File::open(&path).map(|file| Box::new(file) as Box<dyn MediaSource>);
+            (path.display().to_string(), file.map_err(|e| e.to_string()))
+        }
+        StemSource::Bytes(bytes) => {
+            (format!("the {kind} stem's bytes"), Ok(Box::new(Cursor::new(bytes))))
+        }
+    };
+    let fail = |reason: String| BackingError::Decode { stem: stem.clone(), reason };
+    let stream = MediaSourceStream::new(media.map_err(fail)?, Default::default());
     let mut format = symphonia::default::get_probe()
         .probe(&hint, stream, FormatOptions::default(), MetadataOptions::default())
         .map_err(|e| fail(e.to_string()))?;
