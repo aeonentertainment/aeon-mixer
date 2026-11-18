@@ -1,5 +1,6 @@
 //! What the backing tests share: a voice-shaped tone, a way to read its pitch, and its level.
 
+use std::f32::consts::TAU;
 use std::f64::consts::PI;
 
 use kernels::YinDetector;
@@ -43,4 +44,33 @@ pub fn cents_between(hz: f64, reference: f64) -> f64 {
 pub fn rms_at(signal: &[f32], at: usize) -> f32 {
     let window = &signal[at..(at + SECOND / 200).min(signal.len())];
     (window.iter().map(|s| s * s).sum::<f32>() / window.len() as f32).sqrt()
+}
+
+pub fn sine(hz: f32, rate: u32, frames: usize) -> Vec<f32> {
+    (0..frames).map(|i| 0.5 * (TAU * hz * i as f32 / rate as f32).sin()).collect()
+}
+
+/// A 16-bit PCM WAV of `channels`, which must be one length.
+pub fn wav(rate: u32, channels: &[Vec<f32>]) -> Vec<u8> {
+    let (count, frames) = (channels.len() as u16, channels[0].len() as u32);
+    let data = frames * u32::from(count) * 2;
+    let mut bytes = Vec::new();
+    bytes.extend(b"RIFF");
+    bytes.extend((36 + data).to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16u32.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(count.to_le_bytes());
+    bytes.extend(rate.to_le_bytes());
+    bytes.extend((rate * u32::from(count) * 2).to_le_bytes());
+    bytes.extend((count * 2).to_le_bytes());
+    bytes.extend(16u16.to_le_bytes());
+    bytes.extend(b"data");
+    bytes.extend(data.to_le_bytes());
+    for frame in 0..frames as usize {
+        for channel in channels {
+            bytes.extend(((channel[frame] * f32::from(i16::MAX)) as i16).to_le_bytes());
+        }
+    }
+    bytes
 }

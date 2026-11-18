@@ -417,10 +417,8 @@ test("a render that fails rejects start with the engine's message", async () => 
 async function playedBy(config: BackingConfig) {
   const engine = await openEngine({ output: { offline: true } });
   const mixer = await engine.createMixer({ slots: [], backing: config });
-  const started = mixer.start();
   await rendered(mixer);
-  engine.pump(FADE_BLOCKS);
-  await started;
+  await startLive(engine, mixer);
   const heard = engine.pump(2 * SECOND_BLOCKS);
   await destroyLive(engine, mixer);
   await engine.close();

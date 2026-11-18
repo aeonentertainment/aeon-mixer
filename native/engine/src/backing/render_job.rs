@@ -75,49 +75,13 @@ impl RenderJob {
 
 #[cfg(test)]
 mod tests {
-    use std::f32::consts::TAU;
-    use std::path::{Path, PathBuf};
-
-    use assert_no_alloc::assert_no_alloc;
+    use std::path::Path;
 
     use super::*;
-    use crate::backing::test_support::{SECOND, cents_between, median_pitch};
-    use crate::backing::{Backing, Transport};
-    use crate::block::{BLOCK, Stereo};
-    use crate::command::event_ring;
-    use crate::params::StemGains;
+    use crate::backing::test_support::{SECOND, cents_between, median_pitch, sine, wav};
 
     fn write_wav(path: &Path, rate: u32, channels: &[Vec<f32>]) {
         std::fs::write(path, wav(rate, channels)).unwrap();
-    }
-
-    /// A 16-bit PCM WAV of `channels`, which must be one length.
-    fn wav(rate: u32, channels: &[Vec<f32>]) -> Vec<u8> {
-        let (count, frames) = (channels.len() as u16, channels[0].len() as u32);
-        let data = frames * u32::from(count) * 2;
-        let mut bytes = Vec::new();
-        bytes.extend(b"RIFF");
-        bytes.extend((36 + data).to_le_bytes());
-        bytes.extend(b"WAVEfmt ");
-        bytes.extend(16u32.to_le_bytes());
-        bytes.extend(1u16.to_le_bytes());
-        bytes.extend(count.to_le_bytes());
-        bytes.extend(rate.to_le_bytes());
-        bytes.extend((rate * u32::from(count) * 2).to_le_bytes());
-        bytes.extend((count * 2).to_le_bytes());
-        bytes.extend(16u16.to_le_bytes());
-        bytes.extend(b"data");
-        bytes.extend(data.to_le_bytes());
-        for frame in 0..frames as usize {
-            for channel in channels {
-                bytes.extend(((channel[frame] * f32::from(i16::MAX)) as i16).to_le_bytes());
-            }
-        }
-        bytes
-    }
-
-    fn sine(hz: f32, rate: u32, frames: usize) -> Vec<f32> {
-        (0..frames).map(|i| 0.5 * (TAU * hz * i as f32 / rate as f32).sin()).collect()
     }
 
     #[test]
@@ -145,55 +109,6 @@ mod tests {
         let guide = stems.guide.unwrap();
         assert!(guide.left.iter().any(|s| s.abs() > 0.4));
         assert!(guide.right.iter().all(|s| *s == 0.0), "the sides stay apart");
-    }
-
-    /// Two seconds of what `backing` plays from its start, every block under the allocation guard.
-    fn played(mut backing: Backing) -> Vec<f32> {
-        let (mut events, _drain) = event_ring();
-        let gains = StemGains { instrumental: 1.0, guide: 1.0 };
-        backing.steer(1, Transport::Start, &mut events);
-        let (mut left, mut right) = ([0.0; BLOCK], [0.0; BLOCK]);
-        let mut played = Vec::new();
-        for _ in 0..2 * SECOND / BLOCK {
-            left.fill(0.0);
-            right.fill(0.0);
-            assert_no_alloc(|| {
-                backing.render(
-                    &gains,
-                    &mut Stereo { left: &mut left, right: &mut right },
-                    &mut events,
-                );
-            });
-            played.extend(left.iter().chain(&right));
-        }
-        played
-    }
-
-    #[test]
-    fn a_stem_from_bytes_plays_the_samples_its_file_does() {
-        // 44.1 kHz, so the bytes take the resampler too, and at an armed key, so the stretcher
-        let instrumental = wav(44_100, &[sine(441.0, 44_100, 44_100)]);
-        let guide = wav(48_000, &[sine(300.0, 48_000, SECOND), sine(450.0, 48_000, SECOND)]);
-        let dir = std::env::temp_dir().join(format!("aeon-bytes-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let files: [PathBuf; 2] = [dir.join("instrumental.wav"), dir.join("guide.wav")];
-        std::fs::write(&files[0], &instrumental).unwrap();
-        std::fs::write(&files[1], &guide).unwrap();
-        let [instrumental_file, guide_file] = files;
-        let render = |sources| Backing::new(RenderJob::start(sources, 2, 1.0).finish().unwrap(), 2);
-        let by_path = render(StemSources {
-            instrumental: instrumental_file.into(),
-            guide: Some(guide_file.into()),
-        });
-        std::fs::remove_dir_all(&dir).unwrap();
-        let by_bytes = render(StemSources {
-            instrumental: StemSource::Bytes(instrumental),
-            guide: Some(StemSource::Bytes(guide)),
-        });
-
-        let (by_path, by_bytes) = (played(by_path), played(by_bytes));
-        assert!(by_path.iter().any(|sample| sample.abs() > 0.1), "the stems play");
-        assert_eq!(by_path, by_bytes);
     }
 
     #[test]

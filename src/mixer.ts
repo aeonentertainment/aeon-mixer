@@ -19,7 +19,6 @@ import type {
 } from "./native.ts";
 import type { SettingsProfile } from "./profile/settings-profile.ts";
 import type {
-  BackingStem,
   EngineEvents,
   IngestKind,
   MelodyGuide,
@@ -114,7 +113,8 @@ export class Mixer {
   readonly #offFault: () => void;
   readonly #letGo: () => void;
   readonly #bundle: Bundle | null;
-  readonly #stems: ReadonlyArray<BackingStem>;
+  /** The file stems, for `#withoutPaths`; a bytes stem is never held past its copy. */
+  readonly #files: ReadonlyArray<{ kind: StemKind; path: string }>;
   #offOutput = () => {};
   /** The backing position the engine last reported, for the bundle's stats lines. */
   #positionMs: number | null = null;
@@ -142,7 +142,9 @@ export class Mixer {
   ) {
     this.#host = host;
     this.#events = events;
-    this.#stems = backing?.stems ?? [];
+    this.#files = (backing?.stems ?? []).flatMap(({ kind, path }) =>
+      path === undefined ? [] : [{ kind, path }],
+    );
     // Checked before the native mixer binds its ports and opens its inputs, which a throw after it
     // would leave held with no mixer to destroy
     const { slot, backing: backingDefaults } = host.profile;
@@ -502,10 +504,7 @@ export class Mixer {
    * bundle holds no path, so by kind.
    */
   #withoutPaths(message: string) {
-    return this.#stems.reduce(
-      (text, { kind, path }) => (path === undefined ? text : text.replaceAll(path, kind)),
-      message,
-    );
+    return this.#files.reduce((text, { kind, path }) => text.replaceAll(path, kind), message);
   }
 
   #command(send: () => number) {
