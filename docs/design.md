@@ -109,12 +109,16 @@ What the engine reports so the rest of the device can follow:
 - `start()` resolves with `startedAt`, the wall-clock moment the listener hears backing frame
   zero; `backingOffsetMs`, the engine's own output latency, from a backing frame rendered to
   that frame leaving the speaker; and `speedFactor`.
-- A move to another output (section 5) holds the playhead for the gap and changes the output
-  latency. `outputChanged` carries the new `latencyMs` and the gap, so a host that keeps a lyric
-  clock from `startedAt` moves it by both, or re-anchors it on the next `position` event. The guide
-  clock moves by the new latency itself: from the first block after the new stream's `start`
-  returns, every pitch reading and every note edge the corrector follows is on the new output's
-  clock.
+- A move to another output (section 5) changes the output latency, and holds a playing backing
+  for the gap. `outputChanged` carries the new `latencyMs`, the gap, and `heldMs`, how long the
+  move held the playhead: the gap when the backing was playing or fading to a pause as the old
+  stream stopped, 0 when it was paused, not started, ended or absent. A host that keeps a lyric
+  clock from `startedAt` moves it by `heldMs` and the change in latency, or re-anchors it on the
+  next `position` event. A pause or resume still in flight at the move counts on the side of it
+  where the audio thread took it, so the host keeps no paused state of its own to tell whether a
+  gap counts. The guide clock moves by the new latency itself: from the first block after the new
+  stream's `start` returns, every pitch reading and every note edge the corrector follows is on the
+  new output's clock.
 - Every ack carries the backing position at the block the command landed. `seek`, `resume` and
   `start` return it. A `position` event also fires once a second.
 - When a live key shifter is engaged, its latency is subtracted from the reported position, so
@@ -348,8 +352,9 @@ pub struct Running { pub info: StreamInfo, /* stop() on drop */ }
 pub struct TimerDriver;
 /// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
 /// test's render. `moved` is called between streams, never on the audio thread: the next block
-/// starts every slot's stream again and fades in over 5 ms.
-pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); fn callback_frames(&self) -> Arc<AtomicU32>; fn output_latency_frames(&self) -> Arc<AtomicU32>; }   // where the follower writes each stream's StreamInfo.period_frames and StreamInfo.output_latency_frames as its start returns
+/// starts every slot's stream again and fades in over 5 ms. It returns whether the live graph's
+/// backing was playing or fading to a pause as the stream stopped, so the gap held its playhead.
+pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self) -> bool; fn callback_frames(&self) -> Arc<AtomicU32>; fn output_latency_frames(&self) -> Arc<AtomicU32>; }   // where the follower writes each stream's StreamInfo.period_frames and StreamInfo.output_latency_frames as its start returns
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
 pub struct OfflineDriver;
@@ -568,8 +573,13 @@ export interface Engine {
   reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
   on(event: "fault", listener: (error: Error) => void): () => void;
   /** Whenever `output` changes: after every move, the fallback from a refused output included,
-   * with `gapMs` how long the room heard nothing; with `gapMs` 0 when a refusal clears alone. */
-  on(event: "outputChanged", listener: (output: OutputInfo, gapMs: number) => void): () => void;
+   * with `gapMs` how long the room heard nothing and `heldMs` how long that held the backing's
+   * playhead, `gapMs` when it was playing or fading to a pause and 0 when not (section 3); both 0
+   * when a refusal clears alone. */
+  on(
+    event: "outputChanged",
+    listener: (output: OutputInfo, gapMs: number, heldMs: number) => void,
+  ): () => void;
   /** The mix after the clipper, reactions included, between songs too. */
   on(event: "masterLevel", listener: (rmsDb: number, peakDb: number) => void): () => void;
   /** Offline engines only: render blocks and return them as interleaved stereo. */
@@ -836,7 +846,7 @@ own, so no OS listener and no Node call ever starts or stops a device.
 pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, StartError>; current(); drop stops it
 pub enum StartError { Unavailable { output: Option<Output>, error: DriverError }, Backend(DriverError) }
 pub struct Current;        // the follower's Playing, shared: get() on any thread but the audio thread
-pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration, pub refused: Option<Refused> }
+pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration, pub held: Duration, pub refused: Option<Refused> }   // held: the gap when `moved` said it held a playhead, else zero
 pub struct Refused { pub output: Output, pub error: String }   // the output the rule picks that would not start
 pub trait System: Send + 'static {   // the OS behind the follower; a test passes a fake one
     fn outputs(&self) -> Result<Vec<Output>, DriverError>;
@@ -857,7 +867,8 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   reopens it. A reopen that stays silent doubles the wait for the next, up to 6.4 s, until a
   callback comes. A stall never faults the engine.
 - A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
-  stream with it on the same `Stats`. As every stream's `start` returns, the first one's too, the
+  stream with it on the same `Stats`. What `moved` returns sets the move's `held`: the gap when
+  it held a playhead, zero when not. As every stream's `start` returns, the first one's too, the
   follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell and its
   `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
   to the new stream running.
@@ -883,8 +894,8 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
   `OutputUnavailableError`.
 - The binding reads `Current` for `engine.output`, `refused` included. Its events thread sends
-  `outputChanged` whenever `moves` goes up, and with a gap of 0 when `refused` clears with no
-  move. A refusal is only ever set by the fallback's move.
+  `outputChanged` whenever `moves` goes up, with the move's gap and `held`, and with both 0 when
+  `refused` clears with no move. A refusal is only ever set by the fallback's move.
 - The watches: CoreAudio listens on the system object for the default output and the device list,
   with `kAudioHardwarePropertyRunLoop` set to null so the HAL calls it on its own thread. WASAPI
   registers an `IMMNotificationClient` from a COM thread of its own. ALSA has nothing to listen
