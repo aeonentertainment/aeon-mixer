@@ -3,7 +3,8 @@
 //! the half second's latest packet came, so a stall counts once however short the frames are. Once
 //! ten seconds of that says the stream never needed the slack it has, the delay falls, once, to
 //! what those ten seconds used. If packets then keep arriving late it rises, at most back to where
-//! it opened. It moves only while the slot is quiet, when nobody can hear it.
+//! it opened. No move leaves it over the opening delay, so a stream whose first packet came late
+//! falls at least that far. It moves only while the slot is quiet, when nobody can hear it.
 
 use crate::block::{BLOCK, RATE};
 
