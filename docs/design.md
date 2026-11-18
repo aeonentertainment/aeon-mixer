@@ -400,7 +400,7 @@ pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
     MasterLevel { rms_db: f32, peak_db: f32 },
-    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, target_start_ms: Option<f64>, error_semitones: f32, shift_semitones: f32, pulling: bool },
+    Pitch { slot: u8, reading: Reading },   // the corrector's reading as it made it
     Position { frames: u64 },
     BackingEnded,
     Underrun,
@@ -418,6 +418,8 @@ impl Graph {
 // engine/src/slot/
 pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16 }   // built on the control thread, followed on the audio thread
 pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
+pub struct Reading { pub position_ms: f64, pub hz: f32, pub confidence: f32, pub note: Option<TargetNote>, pub error_semitones: f32, pub shift_semitones: f32, pub pulling: bool }   // effects/: one every 10 ms, 8.6
+pub struct TargetNote { pub midi: i16, pub start_frame: u64 }   // effects/: the guide note pulled toward, after the key shift; a reading's and a `Target`'s
 pub struct CorrectorDelay;  // published once a block; Slot::corrector_delay() hands the control thread its Arc
 pub struct EchoReport;      // findings() -> Option<EchoFindings>, howl_catches(); published once a block; Slot::echo_report() hands the control thread its Arc
 pub struct ToneReport;      // findings() -> Option<ToneFindings>: the match's band gains and counted singing, the de-esser's cut, the guard's catches; published once a block; Slot::tone_report() hands the control thread its Arc
@@ -1184,9 +1186,12 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   `error_semitones - shift_semitones` from its class. The follower keeps the shift of its last
   32 runs by the input sample each began on, and looks up the reading's centre plus the
   shifter's delay, where that sample left. It costs a store a run and a scan of 32 a reading, in
-  a fixed array. With `target_midi` comes `target_start_ms`, where that note starts on the
-  guide's clock, since a pitch alone cannot tell two notes in a row on one pitch apart. The
-  binding carries none of the three yet; the scorecard reads them (8.9).
+  a fixed array. The note it pulls toward is one `note: Option<TargetNote>`, its `midi` and its
+  `start_frame` on the guide's clock together, since a pitch alone cannot tell two notes in a row
+  on one pitch apart, and a pitch with no start cannot be written. The slot pushes the reading
+  whole as `Event::Pitch { slot, reading }`, so a new field is written once. The binding maps
+  `reading.*` to the `pitch` event, `targetMidi` from `note`'s `midi`, and carries none of the
+  shift, the pull or the start yet; the scorecard reads them (8.9).
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
   growing, following it through a corrector's move and a moment unseen. Decision
@@ -1386,7 +1391,7 @@ blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in ce
 the corrector's own bar, so a reading between notes, with no guide or with correction off counts
 for nothing; `correctedErrorCents`, the same median of `|errorSemitones - shift_semitones|`, where
 the corrected voice sat; `letGoes`, each gap in `pulling` with a pulled reading either side, within
-a run of readings on one guide note, told apart by `target_start_ms`, so a voice that stops as its
+a run of readings on one guide note, told apart by its `start_frame`, so a voice that stops as its
 note ends lets go of nothing, even when the next note is on the same pitch;
 `echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
 over the blocks where `echo` was not null; `howlCatches`, every rise in it over the song, so a
