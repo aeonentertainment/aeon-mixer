@@ -103,6 +103,11 @@ impl Backing {
         self.playhead.is_advancing()
     }
 
+    /// Whether this block reads the stems, so a block not rendered delays the song.
+    pub fn is_reading(&self) -> bool {
+        self.playhead.is_reading()
+    }
+
     /// The backing frame the room hears now, which every ack carries.
     pub fn position_frames(&self) -> u64 {
         self.playhead.position()

@@ -51,6 +51,8 @@ struct Song {
     /// The wall time at each frame heard.
     walls: Vec<usize>,
     host: Host,
+    /// Every ack's id, in the order they arrived.
+    acked: Vec<u32>,
 }
 
 impl Song {
@@ -71,6 +73,7 @@ impl Song {
             wall: 0,
             walls: Vec::new(),
             host: Host::default(),
+            acked: Vec::new(),
         };
         song.play(BLOCK);
         song
@@ -91,6 +94,7 @@ impl Song {
             self.wall += BLOCK;
             while let Some(event) = self.controls.events.pop() {
                 let Event::Ack { id, .. } = event else { continue };
+                self.acked.push(id);
                 let host = &mut self.host;
                 match id {
                     START => host.started = Some(self.wall),
@@ -207,4 +211,19 @@ fn a_seek_fade_holds_the_backing_and_an_ended_or_swapped_out_song_does_not() {
     song.send(Command::Swap { id: 10, graph: Box::new(Graph::silent()) });
     song.play(BLOCK);
     assert!(!song.move_output(), "swapped out mid-fade, the song is no longer the room's");
+}
+
+/// With a live key held, a seek back to the start leaves the heard position at 0 for the
+/// shifter's latency while the playhead reads on, so a block not rendered there still delays the
+/// song, and a move holds it.
+#[test]
+fn a_move_under_the_live_keys_latency_after_a_seek_to_the_start_holds_the_backing() {
+    let mut song = Song::new();
+    song.send(Command::SetKey { id: 11, semitones: 2 });
+    song.play(SECOND);
+    song.send(Command::Seek { id: 12, to_frame: 0 });
+    while !song.acked.contains(&12) {
+        song.play(BLOCK);
+    }
+    assert!(song.move_output(), "reading under the key's latency, the stop holds the playhead");
 }

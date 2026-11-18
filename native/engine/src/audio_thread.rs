@@ -291,7 +291,7 @@ impl Movable for AudioThread {
     fn moved(&mut self) -> bool {
         self.restart = true;
         self.faded_in = 0;
-        self.live.is_advancing()
+        self.live.is_reading()
     }
 
     fn callback_frames(&self) -> Arc<AtomicU32> {

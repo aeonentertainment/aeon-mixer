@@ -65,10 +65,10 @@ impl Graph {
         self.backing.as_ref().map_or(0, Backing::position_frames)
     }
 
-    /// Whether the next block moves the backing playhead on: playing, or fading out to a seek or
-    /// a pause. False with no backing.
-    pub fn is_advancing(&self) -> bool {
-        self.backing.as_ref().is_some_and(Backing::is_advancing)
+    /// Whether the next block reads the backing, so a block not rendered delays the song:
+    /// playing, or fading out to a seek or a pause. False with no backing.
+    pub fn is_reading(&self) -> bool {
+        self.backing.as_ref().is_some_and(Backing::is_reading)
     }
 
     /// The device's output latency, which the guide clock subtracts so a singer is corrected
