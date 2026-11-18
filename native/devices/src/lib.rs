@@ -8,6 +8,10 @@
 //! 128-frame renders into whatever the device asks for, the feed that takes one channel of what an
 //! input delivers, and the stats a stream records.
 
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod buffer_hold;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod buffer_holds;
 mod capture;
 mod capture_feed;
 mod capture_request;
@@ -15,6 +19,8 @@ mod capture_request;
 mod channel_count;
 mod feed;
 mod follow;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod io_buffer;
 #[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
 mod nominal_rate;
 mod output;
