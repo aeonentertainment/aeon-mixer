@@ -39,8 +39,7 @@ says so and why, and step 2 is done.
 - Pack the PR head: `pnpm install`, `pnpm exec vp run build:native`, `pnpm exec vp pack`, then
   `pnpm pack --pack-destination <scratch>`. The lockfile needs the pnpm that `devEngines` in
   `package.json` pins. An older global pnpm fails with `ERR_PNPM_BROKEN_LOCKFILE`, so run each
-  pnpm command as `pnpm dlx pnpm@<that version>`. The build rewrites `native/binding/index.js`;
-  `git checkout` it before you commit.
+  pnpm command as `pnpm dlx pnpm@<that version>`.
 - Install the tarball into a temporary Aeon Karaoke worktree. In the host's checkout:
   `git fetch origin main`, `git worktree add --detach <scratch>/host origin/main`. In that
   worktree: `npm ci`, `npm rebuild mediasoup --ignore-scripts=false`, then

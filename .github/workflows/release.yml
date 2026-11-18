@@ -67,6 +67,13 @@ jobs:
           name: release-addon-${{ matrix.name }}
           path: native/binding/index.${{ matrix.name }}.node
           if-no-files-found: error
+      # The loader napi writes is the same on every platform. Named so pack's download takes it too
+      - if: matrix.name == 'linux-x64-gnu'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-addon-loader
+          path: native/binding/index.js
+          if-no-files-found: error
 
   pack:
     name: pack
