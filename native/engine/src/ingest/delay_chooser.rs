@@ -64,8 +64,6 @@ pub struct DelayChooser {
     /// Where the next note goes, and how many have been taken, up to all of them.
     next: usize,
     filled: usize,
-    /// How far the anchor sits ahead of where it opened.
-    fallen: i64,
     has_fallen: bool,
     wanted: Option<Move>,
     quiet_blocks: u32,
@@ -79,17 +77,15 @@ impl DelayChooser {
             intervals: [Interval::EMPTY; INTERVALS],
             next: 0,
             filled: 0,
-            fallen: 0,
             has_fallen: false,
             wanted: None,
             quiet_blocks: 0,
         }
     }
 
-    /// How far the anchor sits ahead of where it opened, which is how much sooner a packet is late
-    /// here than at the opening delay.
-    pub fn fallen(&self) -> i64 {
-        self.fallen
+    /// Whether the delay has fallen, after which it is the earliest packets' wait.
+    pub fn has_fallen(&self) -> bool {
+        self.has_fallen
     }
 
     /// A packet's slack against its due time, whether it made it or not.
@@ -126,7 +122,6 @@ impl DelayChooser {
 
     /// The caller moved the anchor as `tick` asked.
     pub fn made(&mut self, moved: Move) {
-        self.fallen -= moved.by;
         self.has_fallen |= moved.by < 0;
         self.shift(moved.by);
     }
@@ -147,7 +142,9 @@ impl DelayChooser {
     /// `worst - margin` is how far the anchor can move earlier and still cover what these ten
     /// seconds did. A quarter of the spread goes on the margin, because a link that varies by more
     /// has more left to show than ten seconds of it did; the block a packet can wait is no such
-    /// evidence.
+    /// evidence. No move leaves the delay, the earliest packets' wait, over the opening delay: a
+    /// first packet that came late anchors the stream that much later, and neither a fall nor a
+    /// rise keeps that lateness.
     fn choose(&self) -> Option<Move> {
         if self.filled < INTERVALS {
             return None;
@@ -156,16 +153,14 @@ impl DelayChooser {
         let best = self.intervals.iter().map(|interval| interval.best).max()?;
         let margin = MARGIN + (best - worst - BLOCK as i64).max(0) / 4;
         let room = (worst - margin).min(best - FLOOR);
-        if self.has_fallen {
-            // Bounded on the delay itself, the earliest packets' wait. Bounded on how far the
-            // anchor fell, a rise gave back the lateness of a stream's first packet, which the
-            // fall had taken off, and every skew step the stream made later since
+        let by = (-room).min(i64::from(OPENING) - best);
+        let wanted = if self.has_fallen {
             let late = self.intervals.iter().filter(|interval| interval.worst < 0).count();
-            let by = (-room).min(i64::from(OPENING) - best);
-            (late >= RISE_AFTER && by > 0).then_some(Move { by, delay: best + by })
+            late >= RISE_AFTER && by > 0
         } else {
-            (room >= LEAST_FALL).then_some(Move { by: -room, delay: best - room })
-        }
+            room >= LEAST_FALL
+        };
+        wanted.then_some(Move { by, delay: best + by })
     }
 }
 
@@ -293,44 +288,44 @@ mod tests {
         let settled = rig.stats();
         let delay = delay_frames(&rig);
         let spread = stalls.stall + stalls.jitter;
-        assert!(
-            delay >= spread && delay <= i64::from(OPENING) + 48,
-            "rose to {delay}: {settled:?}"
-        );
+        assert!(delay >= spread && delay <= i64::from(OPENING), "rose to {delay}: {settled:?}");
         rig.run(&arrivals, 40 * SECOND);
         assert_eq!(rig.stats().late, settled.late, "nothing late once it rose: {:?}", rig.stats());
         assert_eq!(rig.stats().late_at_opening, 0, "a held slot never lost one of these");
         assert!(settled.late * 100 <= rig.stats().pushed, "{settled:?}");
     }
 
-    /// After the fall, a 25 ms stall every 400 ms, which 15 ms never covers. The delay rises,
-    /// and never past where it opened: not on a stream whose first packets came 7 ms late, which
-    /// the opening's anchor kept and the fall took off, nor on 5 ms frames, whose skew
-    /// correction at the floor moves the anchor a step later before the rise.
+    /// A 25 ms stall every 400 ms after the first twelve seconds, which 15 ms never covers. No
+    /// move leaves the delay over where it opened. Not on a stream whose first packets came 7 ms
+    /// late, which the opening's anchor kept and the fall took off, so a rise bounded on how far
+    /// the anchor fell gave it back, at 23 ms. Not on 5 ms frames, whose skew correction at the
+    /// floor moves the anchor a step later before the rise, at 17.5 ms. And not on one whose first
+    /// packets came 20 ms late on a link whose 12 ms stalls held its fall at 27 ms, a fall that
+    /// raised the delay it reported.
     #[test]
-    fn a_rise_never_leaves_the_delay_over_where_it_opened() {
+    fn no_move_leaves_the_delay_over_where_it_opened() {
         let signal = vec![0.0; 22 * RATE as usize];
-        for (frame, first_late) in [(960usize, 336i64), (240, 0)] {
-            let mut sent = OpusSender::new(frame, 53).send_all(&signal, 0);
-            let released = sent[0].at + first_late;
-            sent.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+        for (frame, first_late, calm_stall) in
+            [(960usize, 336i64, 0i64), (240, 0, 0), (960, 960, 576)]
+        {
+            let sent = OpusSender::new(frame, 53).send_all(&signal, 0);
             let (calm, rough) = sent.split_at(sent.partition_point(|a| a.at < 12 * SECOND));
-            let mut arrivals = calm.to_vec();
+            let mut arrivals = match calm_stall {
+                0 => calm.to_vec(),
+                stall => Stalls::new(stall, 8 * frame as i64).apply(calm, 8),
+            };
+            let released = arrivals[0].at + first_late;
+            arrivals.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
             arrivals.extend(Stalls::new(RATE as i64 / 40, 2 * SECOND / 5).apply(rough, 7));
             let mut rig = Rig::choosing(Codec::opus().unwrap());
-            rig.run(&arrivals, 12 * SECOND);
-            let fell = rig.stats().playout_delay_ms;
-            let mut highest = fell;
-            for half in 25..=44 {
+            let mut delays = Vec::new();
+            for half in 1..=44 {
                 rig.run(&arrivals, half * SECOND / 2);
-                highest = highest.max(rig.stats().playout_delay_ms);
+                delays.push(rig.stats().playout_delay_ms);
             }
             let stats = rig.stats();
-            assert!(
-                fell < 15.0 && stats.playout_delay_ms > fell,
-                "{frame}: fell to {fell}: {stats:?}"
-            );
-            assert!(highest <= 15.0, "{frame}: rose to {highest}: {stats:?}");
+            assert!(stats.resyncs >= 1, "{frame}: it moved: {stats:?}");
+            assert!(delays.iter().all(|delay| *delay <= 15.0), "{frame}: {delays:?}");
         }
     }
 
