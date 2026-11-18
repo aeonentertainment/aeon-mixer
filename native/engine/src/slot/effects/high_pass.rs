@@ -1,7 +1,5 @@
-use std::f64::consts::{FRAC_1_SQRT_2, TAU};
-
-use crate::block::RATE;
 use crate::params::CleanupParams;
+use crate::slot::effects::tone::{Biquad, Section};
 
 /// Where the filter turns over. A sung E2 fundamental, 82 Hz, loses 2.8 dB; handling thumps at
 /// 50 Hz lose 9 and at 25 Hz about 20. Decision 0011 has why it is not higher or steeper.
@@ -12,23 +10,15 @@ const CORNER_HZ: f64 = 80.0;
 /// out on the sample it went in. Its phase shift is still a cost on the mic path: it delays a
 /// 220 Hz fundamental by 0.41 ms, a 110 Hz one by 1.8 ms and an 82 Hz one by 2.7 ms.
 pub struct HighPass {
-    b: [f64; 3],
-    a: [f64; 2],
-    /// Transposed direct form II state, in f64: at 80 Hz the poles sit close enough to 1 that f32
-    /// state adds audible noise.
-    state: [f64; 2],
+    pass: Biquad,
+    section: Section,
     /// How much of the filtered voice this block ends on, 0 or 1; on and off ramp across a block.
     wet: f32,
 }
 
 impl HighPass {
     pub fn new() -> Self {
-        let w0 = TAU * CORNER_HZ / f64::from(RATE);
-        let (sin, cos) = w0.sin_cos();
-        let alpha = sin / (2.0 * FRAC_1_SQRT_2);
-        let a0 = 1.0 + alpha;
-        let b = [(1.0 + cos) / 2.0 / a0, -(1.0 + cos) / a0, (1.0 + cos) / 2.0 / a0];
-        Self { b, a: [-2.0 * cos / a0, (1.0 - alpha) / a0], state: [0.0; 2], wet: 0.0 }
+        Self { pass: Biquad::high_pass(CORNER_HZ), section: Section::new(), wet: 0.0 }
     }
 
     /// One run of the slot's voice, in place. Turned on or off, it crossfades across one block;
@@ -39,19 +29,14 @@ impl HighPass {
             return;
         }
         let step = (target - self.wet) / block.len().max(1) as f32;
-        let [b0, b1, b2] = self.b;
-        let [a1, a2] = self.a;
         for sample in block {
-            let dry = f64::from(*sample);
-            let filtered = b0 * dry + self.state[0];
-            self.state[0] = b1 * dry - a1 * filtered + self.state[1];
-            self.state[1] = b2 * dry - a2 * filtered;
+            let filtered = self.section.tick(&self.pass, f64::from(*sample));
             self.wet += step;
             *sample += self.wet * (filtered as f32 - *sample);
         }
         self.wet = target;
         if target == 0.0 {
-            self.state = [0.0; 2];
+            self.section = Section::new();
         }
     }
 }
@@ -69,7 +54,7 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
-    use crate::block::BLOCK;
+    use crate::block::{BLOCK, RATE};
 
     const ON: CleanupParams = CleanupParams { enabled: true };
 
