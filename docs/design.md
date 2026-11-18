@@ -884,9 +884,9 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   silence lands in two gaps. Nothing else bounds it: a stream with no callback rendered nothing,
   so a move after a 6.4 s stall reports 6.4 s and more, because the room heard that much
   silence. Every backend the follower runs marks its callbacks with `Stats::callback`, so
-  `Stats::last_callback` and the wake are read from one clock, `std::time::Instant`, which on
-  macOS and Linux stands still while the machine sleeps. The second the follower waits for an
-  output before it gives up still counts from the wake.
+  `Stats::last_callback` and the wake are read from one clock, `std::time::Instant`, the one the
+  stall wait reads. Whether a gap counts time the machine slept is that clock's call on each OS.
+  The second the follower waits for an output before it gives up still counts from the wake.
 - A move whose output will not start starts the output it left again, if the OS still lists it,
   and failing that the default, which only a pinned engine has not tried yet, and sets
   `Playing.refused`. No output is tried twice in one attempt. The fallback counts as a move:
