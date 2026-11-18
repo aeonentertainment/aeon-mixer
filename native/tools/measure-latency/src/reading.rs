@@ -5,7 +5,7 @@
 use engine::block::RATE;
 
 use crate::clock_line::{ClockLine, Wake};
-use crate::matched_filter::{MatchedFilter, first_arrival, signal_to_noise_db};
+use crate::matched_filter::{MatchedFilter, ONSET_REACH, first_arrival, signal_to_noise_db};
 use crate::programme::Programme;
 
 /// The least a first arrival may stand over the input's noise. The onset rule takes the earliest
@@ -80,7 +80,10 @@ pub fn read(take: &Take, programme: &Programme) -> Result<Reading, String> {
     let rendered = filter.envelope(&take.rendered);
     let out: Vec<f64> = programme
         .starts()
-        .map(|start| first_arrival(&rendered, start..start + interval).map(|arrival| arrival.frame))
+        .map(|start| {
+            first_arrival(&rendered, start..start + interval, ONSET_REACH)
+                .map(|arrival| arrival.frame)
+        })
         .collect::<Option<_>>()
         .ok_or("a chirp never reached the render, which is a bug in the engine or this tool")?;
 
@@ -124,9 +127,13 @@ pub fn read(take: &Take, programme: &Programme) -> Result<Reading, String> {
         let rendered_ns = render_line.at(out);
         // Causality fixes where to look: not before the chirp was rendered, and in its own interval
         let from = capture_line.frame_at(rendered_ns).max(0.0) as usize;
-        let arrival = first_arrival(&captured, from..from + interval).ok_or_else(|| {
-            format!("no chirp in the {} ms after one was rendered", interval * 1000 / RATE as usize)
-        })?;
+        let arrival =
+            first_arrival(&captured, from..from + interval, ONSET_REACH).ok_or_else(|| {
+                format!(
+                    "no chirp in the {} ms after one was rendered",
+                    interval * 1000 / RATE as usize
+                )
+            })?;
         let snr = signal_to_noise_db(&arrival, &captured, 0..quiet_until.max(1));
         if snr < MIN_SNR_DB {
             return Err(format!(

@@ -112,7 +112,15 @@ both arrived exactly at the delay read before them.
 
 So the row plays an off-pitch voiced phrase, then a rest, then the short sweep, through the existing
 `MatchedFilter`. The phrase's length sets how far the delay has moved, and the row prints the span for
-a low, middle and high voice. It has not been tried through Opus.
+a low, middle and high voice.
+
+Through Opus the onset rule took noise for the sweep. At 64 kb/s the codec leaves peaks 15 to 20 dB
+under the short sweep's and ahead of it, inside the rule's 20 dB, and with the corrector off it
+timed the sweep up to 184 frames early on 2.5 ms frames. Sweeps of 100 ms from 1, 1.5 or 2 kHz to
+7.5 kHz missed by 70 to 158 frames on CELT's 2.5 ms frames, and those topping out at 4 or 5 kHz got
+through Opus but set the shifter moving. Offline there is one path and no reflection, so
+`measure-latency` takes the strongest peak there, and every path then lands within 2.5 frames of the
+delay read before the sweep.
 
 ## Not measured
 

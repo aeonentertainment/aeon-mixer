@@ -4,6 +4,7 @@
 
 use engine::block::{BLOCK, RATE};
 use engine::driver::OfflineDriver;
+use engine::params::{CleanupParams, CorrectorParams, EffectParams};
 
 use crate::ingest::Ingest;
 use crate::matched_filter::{MatchedFilter, first_arrival};
@@ -15,13 +16,22 @@ use crate::rig::{Delay, Rig};
 /// begins is chance: one frame's wait and a whole block's are the two ends of what it can cost.
 const FIRST_PACKET_WAITS: [usize; 5] = [1, 32, 64, 96, BLOCK];
 
+/// The voices a corrected row sings, low, middle and high: A2, A3 and A4, each 40 cents sharp so
+/// the corrector keeps shifting it and its delay keeps moving.
+pub fn voices() -> [f64; 3] {
+    [110.0, 220.0, 440.0].map(|hz| hz * 2f64.powf(40.0 / 1200.0))
+}
+
+/// Full correction to the nearest semitone at once, with no guide: the most the corrector moves.
+const CORRECTING: CorrectorParams =
+    CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
+
 /// One path's number, in frames, as a range across where in a block the stream began.
 #[derive(Clone, Copy, Debug)]
 pub struct Row {
     pub ingest: Ingest,
-    /// Whether the slot's corrector is engaged. Off in every row today: a row with it on needs the
-    /// voiced phrase and short sweep decision 0009 describes, since the corrector acts on this chirp.
-    pub corrected: bool,
+    /// The slot's corrector, when it is engaged.
+    pub corrector: Option<Correction>,
     /// Whether the slot's high-pass, gate and compressor are on. None buffers, so this row says
     /// the path holds a sample no longer; the high-pass's phase delay on a low fundamental is
     /// under this chirp, which starts at 500 Hz, and decision 0012 gives it.
@@ -34,6 +44,16 @@ pub struct Row {
     pub lag: (f64, f64),
 }
 
+/// The voice a corrected row sang, and the delay the slot's corrector reported as each chirp went
+/// through, least and most, in frames. The chirps go through at different heights of its sawtooth,
+/// so this is the span they found, not the most it can reach: a budget counts
+/// `correctorMaxDelayMs`.
+#[derive(Clone, Copy, Debug)]
+pub struct Correction {
+    pub hz: f64,
+    pub reported: (f64, f64),
+}
+
 impl Row {
     /// What the engine itself holds a sample for, least and most: the lag less what the sender
     /// spends gathering and encoding.
@@ -43,19 +63,28 @@ impl Row {
     }
 }
 
-/// Runs every path at the given playout delay, with the slot's cleanup off and then on, and every
-/// jitter-buffered path once more with the slot left to choose its own delay and cleanup off.
+/// Runs every path at the given playout delay, with the slot's corrector off and then on for each
+/// voice, then with its cleanup on, and every jitter-buffered path once more with the slot left to
+/// choose its own delay and cleanup off.
 pub fn measure_all(playout_frames: u32) -> Result<Vec<Row>, String> {
-    let pinned = [false, true].into_iter().flat_map(|cleanup| {
-        Ingest::every().into_iter().map(move |ingest| measure(ingest, playout_frames, cleanup))
+    let corrected = Ingest::every().into_iter().flat_map(|ingest| {
+        let off = measure(ingest, playout_frames, false);
+        let on = voices().map(|hz| measure_corrected(ingest, playout_frames, hz));
+        [off].into_iter().chain(on)
     });
+    let cleaned = Ingest::every().into_iter().map(|ingest| measure(ingest, playout_frames, true));
     let chooses = Ingest::every().into_iter().filter(Ingest::has_playout_delay).map(measure_chosen);
-    pinned.chain(chooses).collect()
+    corrected.chain(cleaned).chain(chooses).collect()
 }
 
 /// Sends the programme through `ingest` from each first-packet wait and reads where it came out.
 pub fn measure(ingest: Ingest, playout_frames: u32, cleanup: bool) -> Result<Row, String> {
     measure_with(ingest, Delay::Pinned(playout_frames), Programme::offline(), cleanup)
+}
+
+/// The same with the corrector engaged, on phrases sung at `hz` ahead of each chirp.
+pub fn measure_corrected(ingest: Ingest, playout_frames: u32, hz: f64) -> Result<Row, String> {
+    measure_with(ingest, Delay::Pinned(playout_frames), Programme::corrected(hz), false)
 }
 
 /// The same with the slot choosing its delay, read once it has. There is no network here, so this
@@ -70,46 +99,99 @@ fn measure_with(
     programme: Programme,
     cleanup: bool,
 ) -> Result<Row, String> {
-    let signal = programme.signal();
-    let filter = MatchedFilter::new(programme.chirp.samples());
     let mut lag = (f64::INFINITY, f64::NEG_INFINITY);
-    let mut lookahead = 0;
-    let mut slot_delay_ms = None;
+    let mut reported = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut last = None;
     for wait in FIRST_PACKET_WAITS {
-        let phase = (2 * BLOCK - (ingest.gather_frames() + wait) % BLOCK) as u64 % BLOCK as u64;
-        let mut rig = Rig::new(ingest, delay, &signal, phase)
-            .map_err(|error| format!("{ingest}: {error}"))?;
-        rig.controls.params.update(|params| params.slots[0].effects.cleanup.enabled = cleanup);
-        lookahead = rig.lookahead;
-        let stats = rig.stats.clone();
-        let envelope = filter.envelope(&pump(rig, signal.len() + programme.interval()));
-        for start in programme.starts() {
-            let from = start + phase as usize;
-            let arrival = first_arrival(&envelope, from..from + programme.interval())
-                .ok_or_else(|| format!("{ingest}: chirp at {start} never came out"))?;
-            let seen = arrival.frame - from as f64;
-            lag = (lag.0.min(seen), lag.1.max(seen));
+        let run = run(ingest, delay, programme, cleanup, wait)?;
+        for crossing in &run.crossings {
+            lag = (lag.0.min(crossing.lag), lag.1.max(crossing.lag));
+            reported = (reported.0.min(crossing.corrector), reported.1.max(crossing.corrector));
         }
-        slot_delay_ms = stats.map(|stats| stats.read().playout_delay_ms);
+        last = Some(run);
     }
-    Ok(Row { ingest, corrected: false, cleanup, delay, slot_delay_ms, lookahead, lag })
+    let Run { lookahead, slot_delay_ms, .. } = last.expect("there are waits");
+    let corrector = programme.phrases.map(|phrases| Correction { hz: phrases.hz, reported });
+    Ok(Row { ingest, corrector, cleanup, delay, slot_delay_ms, lookahead, lag })
+}
+
+/// One stream through `ingest`, its first packet waiting `wait` frames for a block.
+struct Run {
+    crossings: Vec<Crossing>,
+    lookahead: usize,
+    slot_delay_ms: Option<f32>,
+}
+
+/// One chirp through the path, in frames: from entering the sender to leaving the master, and the
+/// corrector's delay as it went through.
+struct Crossing {
+    lag: f64,
+    corrector: f64,
+}
+
+/// Sends the programme through `ingest` once, from one first-packet wait. The corrector is engaged
+/// when the programme sings ahead of its chirps: a voice is what it corrects, and the chirp alone
+/// would set it shifting.
+fn run(
+    ingest: Ingest,
+    delay: Delay,
+    programme: Programme,
+    cleanup: bool,
+    wait: usize,
+) -> Result<Run, String> {
+    let signal = programme.signal();
+    let effects = EffectParams {
+        corrector: if programme.phrases.is_some() {
+            CORRECTING
+        } else {
+            CorrectorParams::default()
+        },
+        cleanup: CleanupParams { enabled: cleanup },
+        ..EffectParams::default()
+    };
+    let phase = (2 * BLOCK - (ingest.gather_frames() + wait) % BLOCK) as u64 % BLOCK as u64;
+    let mut rig =
+        Rig::new(ingest, delay, &signal, phase).map_err(|error| format!("{ingest}: {error}"))?;
+    rig.controls.params.update(|params| params.slots[0].effects = effects);
+    let lookahead = rig.lookahead;
+    let stats = rig.stats.clone();
+    let (left, corrector) = pump(rig, signal.len() + programme.interval());
+    let envelope = MatchedFilter::new(programme.chirp.samples()).envelope(&left);
+    let crossings = programme
+        .starts()
+        .map(|start| {
+            let from = start + phase as usize;
+            // No room offline, so the strongest peak is the chirp: Opus leaves noise near a short
+            // one within the 20 dB a room's onset rule would take
+            let arrival = first_arrival(&envelope, from..from + programme.interval(), 0)
+                .ok_or_else(|| format!("{ingest}: chirp at {start} never came out"))?;
+            // As the chirp enters the sender, the phrase has gone through the corrector and the
+            // chirp has yet to reach it, so this is the delay it meets
+            let corrector = f64::from(corrector[from / BLOCK]);
+            Ok(Crossing { lag: arrival.frame - from as f64, corrector })
+        })
+        .collect::<Result<_, String>>()?;
+    let slot_delay_ms = stats.map(|stats| stats.read().playout_delay_ms);
+    Ok(Run { crossings, lookahead, slot_delay_ms })
 }
 
 /// The left channel over `frames`, a block at a time, each block under the allocation guard in
-/// tests.
-pub fn pump(rig: Rig, frames: usize) -> Vec<f32> {
-    let Rig { render, controls: _controls, .. } = rig;
+/// tests, and the corrector's delay in frames as `stats()` reads it after each block.
+pub fn pump(rig: Rig, frames: usize) -> (Vec<f32>, Vec<u32>) {
+    let Rig { render, controls: _controls, corrector, .. } = rig;
     let mut driver = OfflineDriver::new(render);
     let mut block = [0.0f32; 2 * BLOCK];
     let mut left = Vec::with_capacity(frames);
+    let mut held = Vec::with_capacity(frames.div_ceil(BLOCK));
     while left.len() < frames {
         #[cfg(test)]
         assert_no_alloc::assert_no_alloc(|| driver.pump_into(&mut block));
         #[cfg(not(test))]
         driver.pump_into(&mut block);
         left.extend(block.iter().step_by(2));
+        held.push(corrector.frames());
     }
-    left
+    (left, held)
 }
 
 /// A frame count in milliseconds.
@@ -215,5 +297,36 @@ mod tests {
         assert_eq!(voip.lookahead - low.lookahead, 192);
         let difference = voip.lag.0 - low.lag.0;
         assert!((difference - 192.0).abs() < 4.0, "the lags differ by {difference} frames");
+    }
+
+    /// The corrector delays the voice by what the slot reports and nothing else on the path moves:
+    /// stream by stream, each chirp after a phrase leaves when the same chirp left with no phrase
+    /// and the corrector off, plus the delay the slot reported as it went through. To within a
+    /// frame on raw PCM, the shifter's fractional read point, and 3 on Opus. The phrases leave the
+    /// delay over a millisecond apart, so the run follows a sawtooth, not one height of it.
+    #[test]
+    fn a_corrected_chirp_leaves_late_by_what_the_corrector_reports() {
+        let [low, middle, _] = voices();
+        for (ingest, hz, tolerance) in [
+            (Ingest::L16 { frame: 240 }, low, 1.0),
+            (Ingest::Rtp { frame: 120, encoder: Encoder::RestrictedLowDelay }, middle, 3.0),
+        ] {
+            let row = measure_corrected(ingest, PLAYOUT, hz).unwrap();
+            let reported = row.corrector.expect("a corrected row says so").reported;
+            assert!(reported.1 - reported.0 > 48.0, "{ingest}: one height, {reported:?}");
+            let pinned = Delay::Pinned(PLAYOUT);
+            for wait in FIRST_PACKET_WAITS {
+                let off = run(ingest, pinned, Programme::offline(), false, wait).unwrap();
+                let on = run(ingest, pinned, Programme::corrected(hz), false, wait).unwrap();
+                let path = off.crossings[0].lag;
+                for crossing in on.crossings {
+                    let beyond = crossing.lag - path - crossing.corrector;
+                    assert!(
+                        beyond.abs() <= tolerance,
+                        "{ingest}, wait {wait}: {beyond} frames past what the corrector reported"
+                    );
+                }
+            }
+        }
     }
 }
