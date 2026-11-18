@@ -985,9 +985,12 @@ should reach that slot.
   the anchor moves earlier, once, until the latest of them would have a millisecond and a quarter
   of the spread over the block to spare, and never under 3.67 ms: a block a packet can wait to be
   drained, and a millisecond. After that fall, three late notes out of the last 20 move it later
-  to cover them, at most back to where it opened. A move waits for the slot to be under -30 dBFS
-  for 21 ms, happens at the head of what waits to play, drops only samples that are quiet too, and
-  counts as a resync. The echo moves by what the move drops or delays, but the new delay also
+  to cover them, at most back to where it opened: 15 ms is the most a slot chooses. Before the
+  fall a stream's earliest packets can wait longer, since its first packet anchors it: 15 ms plus
+  how late that packet came, and up to a block for the drain. A pinned stream keeps that for
+  good, while `stats()` reports the delay it opened at. A move waits for the slot to be under
+  -30 dBFS for 21 ms, happens at the head of what waits to play, drops only samples that are quiet
+  too, and counts as a resync. The echo moves by what the move drops or delays, but the new delay also
   takes up the slack the stream had drifted into, so the part of the new delay the echo did not
   move by is a splice in the source's `delay()`, and the latency and splices together move by
   what the echo did. A delay means how long the stream's earliest packets wait, and

@@ -7,7 +7,7 @@
 
 use crate::block::{BLOCK, RATE};
 
-/// The delay a stream opens at, and the most a fall can ever give back.
+/// The delay a stream opens at, and the most a rise may leave it at.
 pub const OPENING: u32 = RATE * 15 / 1000;
 
 /// One note per half second: a stall spans at most a few, and neither a frame's length nor how
@@ -157,8 +157,11 @@ impl DelayChooser {
         let margin = MARGIN + (best - worst - BLOCK as i64).max(0) / 4;
         let room = (worst - margin).min(best - FLOOR);
         if self.has_fallen {
+            // Bounded on the delay itself, the earliest packets' wait. Bounded on how far the
+            // anchor fell, a rise gave back the lateness of a stream's first packet, which the
+            // fall had taken off, and every skew step the stream made later since
             let late = self.intervals.iter().filter(|interval| interval.worst < 0).count();
-            let by = (-room).min(self.fallen);
+            let by = (-room).min(i64::from(OPENING) - best);
             (late >= RISE_AFTER && by > 0).then_some(Move { by, delay: best + by })
         } else {
             (room >= LEAST_FALL).then_some(Move { by: -room, delay: best - room })
@@ -298,6 +301,37 @@ mod tests {
         assert_eq!(rig.stats().late, settled.late, "nothing late once it rose: {:?}", rig.stats());
         assert_eq!(rig.stats().late_at_opening, 0, "a held slot never lost one of these");
         assert!(settled.late * 100 <= rig.stats().pushed, "{settled:?}");
+    }
+
+    /// After the fall, a 25 ms stall every 400 ms, which 15 ms never covers. The delay rises,
+    /// and never past where it opened: not on a stream whose first packets came 7 ms late, which
+    /// the opening's anchor kept and the fall took off, nor on 5 ms frames, whose skew
+    /// correction at the floor moves the anchor a step later before the rise.
+    #[test]
+    fn a_rise_never_leaves_the_delay_over_where_it_opened() {
+        let signal = vec![0.0; 22 * RATE as usize];
+        for (frame, first_late) in [(960usize, 336i64), (240, 0)] {
+            let mut sent = OpusSender::new(frame, 53).send_all(&signal, 0);
+            let released = sent[0].at + first_late;
+            sent.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+            let (calm, rough) = sent.split_at(sent.partition_point(|a| a.at < 12 * SECOND));
+            let mut arrivals = calm.to_vec();
+            arrivals.extend(Stalls::new(RATE as i64 / 40, 2 * SECOND / 5).apply(rough, 7));
+            let mut rig = Rig::choosing(Codec::opus().unwrap());
+            rig.run(&arrivals, 12 * SECOND);
+            let fell = rig.stats().playout_delay_ms;
+            let mut highest = fell;
+            for half in 25..=44 {
+                rig.run(&arrivals, half * SECOND / 2);
+                highest = highest.max(rig.stats().playout_delay_ms);
+            }
+            let stats = rig.stats();
+            assert!(
+                fell < 15.0 && stats.playout_delay_ms > fell,
+                "{frame}: fell to {fell}: {stats:?}"
+            );
+            assert!(highest <= 15.0, "{frame}: rose to {highest}: {stats:?}");
+        }
     }
 
     /// A singer never stops: the delay stays where it opened and nothing is dropped to move it.
