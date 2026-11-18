@@ -62,9 +62,11 @@ fn guide(notes: &[(u64, u64)]) -> Box<Guide> {
 
 fn pitch(event: Event) -> Option<Read> {
     match event {
-        Event::Pitch { position_ms, target_midi, confidence, .. } => {
-            Some(Read { position_ms, target: target_midi, confidence })
-        }
+        Event::Pitch { reading, .. } => Some(Read {
+            position_ms: reading.position_ms,
+            target: reading.note.map(|note| note.midi),
+            confidence: reading.confidence,
+        }),
         _ => None,
     }
 }

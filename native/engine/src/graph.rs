@@ -345,7 +345,11 @@ mod tests {
             bench.render_blocks(SECOND / 2 / BLOCK);
             std::iter::from_fn(|| bench.drain.pop())
                 .filter_map(|e| {
-                    if let Event::Pitch { position_ms, .. } = e { Some(position_ms) } else { None }
+                    if let Event::Pitch { reading, .. } = e {
+                        Some(reading.position_ms)
+                    } else {
+                        None
+                    }
                 })
                 .collect::<Vec<f64>>()
         };
