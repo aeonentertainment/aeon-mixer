@@ -301,6 +301,35 @@ mod tests {
         assert!(checked > 60, "checked {checked} readings");
     }
 
+    // A voice gone for 100 ms inside a note lets go of it and takes it again; one gone for 20 ms,
+    // a dropped frame, is held through
+    #[test]
+    fn a_long_dropout_lets_go_of_the_note_and_a_short_one_does_not() {
+        let guide = Guide {
+            notes: vec![Note { midi: 57, start_frame: 0, end_frame: 96_000 }],
+            key_mask: 0,
+        };
+        let pulls = |gap_ms: usize| {
+            let mut voice = tone(57.3, 96_000);
+            let gap = 48_000..48_000 + gap_ms * 48;
+            voice[gap].fill(0.0);
+            let mut corrector = Corrector::new();
+            let mut pulling = Vec::with_capacity(200);
+            assert_no_alloc(|| {
+                for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+                    let frame = (index * BLOCK) as i64;
+                    corrector.process(&ON, Some(&guide), playing(frame), block, |r| {
+                        pulling.push(r.pulling)
+                    });
+                }
+            });
+            // Past the first 100 ms, before the detector has heard the voice
+            pulling[10..].chunk_by(|a, b| a == b).filter(|run| run[0]).count()
+        };
+        assert_eq!(pulls(100), 2, "a 100 ms gap");
+        assert_eq!(pulls(20), 1, "a 20 ms gap");
+    }
+
     // Off is the singer's own voice, with no delay, and the readings still come
     #[test]
     fn off_is_the_voice_itself_and_still_reads() {
