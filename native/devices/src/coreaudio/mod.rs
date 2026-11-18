@@ -6,6 +6,7 @@ mod driver;
 mod hal_rate;
 mod io;
 mod property;
+mod state;
 mod steps;
 mod watch;
 
@@ -19,6 +20,7 @@ use objc2_core_audio::{
 
 pub use capture::CoreAudioCapture;
 pub use driver::CoreAudioDriver;
+pub use state::DeviceState;
 pub use watch::Watch;
 
 use crate::output::Output;

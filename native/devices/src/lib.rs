@@ -59,7 +59,7 @@ mod os;
 #[cfg(all(feature = "hardware", target_os = "linux"))]
 pub use alsa::{AlsaCapture, AlsaDriver, inputs, outputs};
 #[cfg(all(feature = "hardware", target_os = "macos"))]
-pub use coreaudio::{CoreAudioCapture, CoreAudioDriver, inputs, outputs};
+pub use coreaudio::{CoreAudioCapture, CoreAudioDriver, DeviceState, inputs, outputs};
 #[cfg(feature = "hardware")]
 pub use os::Os;
 #[cfg(all(feature = "hardware", windows))]
