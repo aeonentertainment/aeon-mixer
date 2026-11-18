@@ -30,7 +30,7 @@ mod tests {
 
     #[test]
     fn every_constant_in_the_headers_maps_as_decision_0025_says() {
-        let table: [(&[u8; 4], Transport); 17] = [
+        let table = [
             (b"bltn", Transport::BuiltIn),
             (b"usb ", Transport::Usb),
             (b"blue", Transport::Bluetooth),
