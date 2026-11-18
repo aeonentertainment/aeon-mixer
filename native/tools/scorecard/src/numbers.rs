@@ -81,12 +81,13 @@ fn errors_cents(slot: &PlayedSlot, error: impl Fn(&Reading) -> f32) -> Vec<f64> 
 }
 
 /// Times correction let go of a note and took it again while the guide still held it: each gap
-/// in the pull with a pulled reading either side, within one run of readings on one guide note.
+/// in the pull with a pulled reading either side, within one run of readings on one guide note,
+/// told apart by where it starts, since two notes in a row can share a pitch.
 /// `None` when no reading had a guide note to pull toward.
 pub(crate) fn let_goes(readings: &[Reading]) -> Option<u32> {
     let mut gaps = None;
-    for note in readings.chunk_by(|a, b| a.target_midi == b.target_midi) {
-        if note[0].target_midi.is_none() {
+    for note in readings.chunk_by(|a, b| a.target_start_ms == b.target_start_ms) {
+        if note[0].target_start_ms.is_none() {
             continue;
         }
         let pulls = note.chunk_by(|a, b| a.pulling == b.pulling).filter(|run| run[0].pulling);

@@ -8,7 +8,7 @@ use crate::slot::effects::{Reading, Target, melody};
 use crate::slot::guide::Guide;
 
 /// With no guide every class is a target, so a voice goes to its nearest semitone.
-const CHROMATIC: Target = Target { mask: EVERY_PITCH_CLASS, midi: None };
+const CHROMATIC: Target = Target { mask: EVERY_PITCH_CLASS, midi: None, start_frame: None };
 
 /// The slot's pitch corrector, following the song's melody guide: Aeon Karaoke's `aeonpitch`
 /// element, ported off GStreamer. It splits a run at every note edge, so the target changes on
@@ -107,6 +107,10 @@ impl Corrector {
                     hz: pitch.hz,
                     confidence: pitch.confidence,
                     target_midi: target.midi.filter(|_| correcting),
+                    target_start_ms: target
+                        .start_frame
+                        .filter(|_| correcting)
+                        .map(|frame| frame as f64 * 1000.0 / f64::from(RATE)),
                     error_semitones: if correcting { self.kernel.error_semitones() } else { 0.0 },
                     shift_semitones: self.shifts.at(left),
                     pulling: self.kernel.correcting(),

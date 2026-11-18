@@ -8,6 +8,9 @@ pub struct Reading {
     /// The guide note the corrector pulls toward, after the key shift; `None` with correction
     /// off, with no guide, or between notes, where it pulls toward the key.
     pub target_midi: Option<i16>,
+    /// Where that note starts on the guide's clock, so two notes in a row on one pitch are told
+    /// apart; `None` whenever `target_midi` is.
+    pub target_start_ms: Option<f64>,
     /// The class it pulls toward less the reading, in the singer's own octave, so positive is
     /// flat; 0 with correction off or while unvoiced.
     pub error_semitones: f32,
