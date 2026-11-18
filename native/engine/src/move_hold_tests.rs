@@ -188,3 +188,23 @@ fn a_move_with_no_song_or_before_start_holds_nothing() {
     assert_no_alloc(|| audio.render(Stereo { left: &mut left, right: &mut right }));
     assert!(!Movable::moved(&mut audio), "armed, not started");
 }
+
+/// A seek fades out before it jumps, with the playhead running on, so a move in the fade holds
+/// it. A song that has ended, or been swapped out for the next one, has nothing left to hold,
+/// though its graph still fades out of the room.
+#[test]
+fn a_seek_fade_holds_the_backing_and_an_ended_or_swapped_out_song_does_not() {
+    let mut song = Song::new();
+    song.play(SECOND);
+    song.send(Command::Seek { id: 9, to_frame: 5 * SECOND as u64 });
+    song.play(BLOCK);
+    assert!(song.move_output(), "fading to the seek, the stop holds the playhead");
+    song.play(2 * SECOND);
+    assert!(!song.move_output(), "ended, nothing moves on to hold");
+
+    let mut song = Song::new();
+    song.play(SECOND);
+    song.send(Command::Swap { id: 10, graph: Box::new(Graph::silent()) });
+    song.play(BLOCK);
+    assert!(!song.move_output(), "swapped out mid-fade, the song is no longer the room's");
+}
