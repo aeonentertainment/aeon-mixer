@@ -395,7 +395,7 @@ pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
     MasterLevel { rms_db: f32, peak_db: f32 },
-    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, error_semitones: f32 },
+    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, error_semitones: f32, shift_semitones: f32, pulling: bool },
     Position { frames: u64 },
     BackingEnded,
     Underrun,
@@ -448,7 +448,7 @@ pub struct RenderJob;      // control thread starts it on the worker thread; yie
 pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the first change
 
 // kernels/src/
-pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples()
+pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples(), shift_semitones()
 pub struct Stretch;         // new(channels, rate, preset), set_transpose_semitones(f32), process(planar in, planar out), latency_frames()
 pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
 pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
@@ -1167,6 +1167,13 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   then carry no target and no error, since nothing pulls.
 - A reading carries the note the follower set for the run it closes and the kernel's error at
   that reading, so the target and the error a host shows are the ones the shifter acts on.
+- A reading also carries `shift_semitones`, the transposition the voice at its centre came out
+  of the shifter with, and `pulling`, whether the kernel was pulling as it read: a voice it
+  hears, a class to pull it to, and a strength over 0. The corrected voice sat
+  `error_semitones - shift_semitones` from its class. The follower keeps the shift of its last
+  32 runs by the input sample each began on, and looks up the reading's centre plus the
+  shifter's delay, where that sample left. It costs a store a run and a scan of 32 a reading, in
+  a fixed array. The binding carries neither yet; the scorecard reads both (8.9).
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
   growing, following it through a corrector's move and a moment unseen. Decision
@@ -1356,13 +1363,17 @@ Given a session bundle's directory in place of a file, it replays the whole song
 `native/tools/scorecard` opens no device or socket. It replays each session bundle it is given,
 or each in a directory of them, as `replay` does, under `--profile` and with `--backing` as there,
 and turns each song into numbers. Every number is read from what the replay's engine reported, as
-`stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see. It
+`stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see, except
+the two that read a reading's shift and pull, which the binding does not carry yet (8.6). It
 reads each slot's `stats()` after every block. Per recorded slot: `late`, `concealed` and
 `playoutDelayMs` as the song ended; `correctorDelayMs`, the mean of `correctorDelayMs` over the
 blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in cents over the
 `pitch` readings with a `targetMidi`, a `confidence` of at least 0.9 and an `hz` of at least 82,
 the corrector's own bar, so a reading between notes, with no guide or with correction off counts
-for nothing; `echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
+for nothing; `correctedErrorCents`, the same median of `|errorSemitones - shift_semitones|`, where
+the corrected voice sat; `letGoes`, each gap in `pulling` with a pulled reading either side, within
+a run of readings on one guide note, so a voice that stops as its note ends lets go of nothing;
+`echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
 over the blocks where `echo` was not null; `howlCatches`, every rise in it over the song, so a
 reset that starts it from 0 again loses none; and `levelTopTenthDb` and `levelMedianDb`, the
 90th percentile and the median of every `rmsDb` the slot's `level` reported in the song, as
@@ -1380,12 +1391,9 @@ master has the two levels, from
 - **The fixture.** Its tests score a short duet written on the offline driver, with no real
   voice in it, against a committed baseline, so a change that moves one of its numbers past its
   tolerance fails `cargo test`.
-- **Not yet.** The corrected voice's pitch and how often correction lets go of a note: `pitch`
-  reads the voice before correction, and whether the corrector is pulling is the slot's own
-  state, which no control-thread reader has once the graph is on the audio thread. Each needs the
-  slot to publish one more value. Of the tone stage's rows (decision 0029), the five that compare
-  a phone with a reference mic need that recording stored beside a bundle, and `tone_late` and
-  `tone_readings` come with the stage.
+- **Not yet.** Of the tone stage's rows (decision 0029), the five that compare a phone with a
+  reference mic need that recording stored beside a bundle, and `tone_late` and `tone_readings`
+  come with the stage.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
