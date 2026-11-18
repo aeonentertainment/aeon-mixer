@@ -12,6 +12,8 @@ pub mod song;
 pub mod stems;
 
 #[cfg(test)]
+mod echo_fixture;
+#[cfg(test)]
 mod live_song;
 #[cfg(test)]
 mod scorecard_fixture;

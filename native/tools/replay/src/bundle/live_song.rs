@@ -91,9 +91,10 @@ impl LiveSong {
         let mut tapped = Vec::new();
         let mut slots = Vec::new();
         for (index, kind) in kinds.iter().enumerate() {
-            if *kind == "rtp" {
+            if is_recorded(kind) {
                 let (producer, consumer) = packet_ring(RING_CAPACITY);
-                let jitter = JitterBuffer::new(15 * RATE / 1000, Codec::opus().unwrap());
+                let codec = if *kind == "l16" { Codec::L16 } else { Codec::opus().unwrap() };
+                let jitter = JitterBuffer::new(15 * RATE / 1000, codec);
                 slots.push(Slot::new(Box::new(PacketSource::new(consumer, jitter))));
                 rings.push(Some(producer));
                 let path = dir.join("slots").join(format!("{index}.pcap"));
@@ -148,7 +149,7 @@ impl LiveSong {
             .iter()
             .enumerate()
             .map(
-                |(index, kind)| json!({ "index": index, "kind": kind, "recorded": *kind == "rtp" }),
+                |(index, kind)| json!({ "index": index, "kind": kind, "recorded": is_recorded(kind) }),
             )
             .collect();
         let manifest = json!({
@@ -249,6 +250,11 @@ impl LiveSong {
         }
         (self.dir, self.out)
     }
+}
+
+/// Whether a slot of `kind` arrives as packets, which the bundle records.
+fn is_recorded(kind: &str) -> bool {
+    matches!(kind, "rtp" | "l16")
 }
 
 /// Where engine frame `frame` falls on the song's own time.

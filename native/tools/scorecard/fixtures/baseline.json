@@ -74,6 +74,48 @@
         "value": 15.0,
         "tolerance": 0.0
       }
+    },
+    "echo": {
+      "master.levelMedianDb": {
+        "value": -19.79,
+        "tolerance": 1.0
+      },
+      "master.levelTopTenthDb": {
+        "value": -17.22,
+        "tolerance": 1.0
+      },
+      "slot0.bleedDb": {
+        "value": -7.12,
+        "tolerance": 0.5
+      },
+      "slot0.concealed": {
+        "value": 0.0,
+        "tolerance": 2.0
+      },
+      "slot0.echoRemovedDb": {
+        "value": 12.52,
+        "tolerance": 1.0
+      },
+      "slot0.howlCatches": {
+        "value": 0.0,
+        "tolerance": 0.0
+      },
+      "slot0.late": {
+        "value": 0.0,
+        "tolerance": 0.0
+      },
+      "slot0.levelMedianDb": {
+        "value": -46.05,
+        "tolerance": 1.0
+      },
+      "slot0.levelTopTenthDb": {
+        "value": -17.27,
+        "tolerance": 1.0
+      },
+      "slot0.playoutDelayMs": {
+        "value": 15.0,
+        "tolerance": 0.0
+      }
     }
   }
 }

@@ -66,7 +66,7 @@ baseline lacks; a person sets them, so which movement fails is the file's to say
 further than its tolerance or is gone. A number the baseline lacks is reported as new and fails
 nothing.
 
-## The fixture
+## The fixtures
 
 `fixtures/bundles/duet` is an 8.5 s duet written on the offline driver, with no real singer in
 it. Slot 0 holds a synthetic voice 46 cents sharp of its guide notes, with correction and reverb
@@ -84,12 +84,19 @@ corrector delay and two concealed frames. Late packets, howl catches, let-goes a
 delay have none. Slot 0's correction runs at the profile's strength, 0.6, so 22 of its 48 cents
 are left after correction; at 0.3, 34 are, and nothing else moves past its tolerance.
 
-The echo canceller and the howl guard are off in it. With them on and the backing in slot 0's
-phone, the canceller's bleed read anywhere from -3 to -9 dB as the delay moved, and the guard
-ducked the held synthetic note at some delays and not others. So neither stage gave the same
-number twice under a change that should not move it. Their numbers wait for a fixture where
-they hold still.
+The echo canceller and the howl guard are off in the duet. `fixtures/bundles/echo` holds the
+canceller's numbers instead: a 16 s song on one house mic that hears the backing, pink noise
+from `fixtures/stems`, through a room 30 ms away and 10 dB down. The room plays alone for 10 s
+and a synthetic singer sings over it for the last 6. It is an `l16` slot because a phone's Opus
+at 32 kb/s fills noise in where the backing's waveform was. Through a phone, the canceller took
+out at most 5 dB and its bleed read anywhere from -3 to -12 dB as the delay moved. Through PCM
+it takes out 36 dB by the tenth second, and across playout delays from 10 to 60 ms its bleed
+moves 0.06 dB, its removal 0.4 dB and the slot's levels under a dB. The baseline gives a dB to
+the removal and each level, and half a dB to the bleed.
 
-To change the fixture, run `cargo test -p replay -- --ignored writes_the_scorecard_fixture`, then
-score it into the baseline with `--baseline fixtures/baseline.json --write fixtures/baseline.json`,
-which keeps the tolerances.
+The guard is off in both. On over a singer it catches the synthetic voice at some delays and
+not others (#245), so `howlCatches` waits for a fixture where it holds still.
+
+To change a fixture, run `cargo test -p replay -- --ignored writes_the_scorecard_fixture` or
+`writes_the_echo_fixture`, then score it into the baseline with
+`--baseline fixtures/baseline.json --write fixtures/baseline.json`, which keeps the tolerances.
