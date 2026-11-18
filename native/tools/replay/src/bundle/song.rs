@@ -278,10 +278,8 @@ impl Desk<'_> {
             }
             Event::SetSlotEffects { index, effects } => {
                 let slot = self.slot(*index)?;
-                let defaults = &self.profile.slot.effects;
-                self.controls
-                    .params
-                    .update(|p| calls::set_slot_effects(&mut p.slots[slot], effects, defaults));
+                let chain = calls::effects(effects, &self.profile.slot.effects)?;
+                self.controls.params.update(|p| p.slots[slot].effects = chain);
             }
             Event::SetSlotGuide { index, guide, guide_offset_ms } => {
                 let slot = self.slot(*index)?;

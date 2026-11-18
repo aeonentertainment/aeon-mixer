@@ -5,7 +5,7 @@ use std::path::Path;
 
 use engine::block::RATE;
 use engine::command::Command;
-use engine::params::{CorrectorParams, ReverbParams};
+use engine::params::{CorrectorParams, ReverbParams, ToneBand, ToneBands, ToneParams};
 use serde_json::json;
 
 use super::Bundle;
@@ -148,6 +148,43 @@ fn a_second_profile_changes_only_the_slot_whose_call_left_its_value_out() {
     // A hard right pan leaves -147 dB of slot 1 on the left, which is all that moves there
     assert!(left < 1e-5, "slot 0 named its reverb, so it plays as it did: {left}");
     assert!(right > 0.01, "slot 1 took the profile's reverb, so it moves: {right}");
+}
+
+// A tone stage replays as it played: its bands as given and the amounts it left out at 0, since
+// they are not in the profile. A bundle never holds "match", which the mixer refuses.
+#[test]
+fn a_tone_stage_replays_with_its_left_out_amounts_at_0() {
+    let mut song = LiveSong::new("tone", &["rtp"], None);
+    song.start();
+    song.send(0, sender(40), 0, &singing(2.0));
+    song.line(json!({
+        "type": "setSlotEffects",
+        "index": 0,
+        "effects": [{
+            "kind": "tone",
+            "enabled": true,
+            "bands": [
+                { "kind": "low-shelf", "hz": 200, "gainDb": 2 },
+                { "kind": "peak", "hz": 3000, "gainDb": 4, "q": 1 }
+            ],
+            "deEssDb": 6
+        }]
+    }));
+    let bands = [
+        ToneBand::LowShelf { hz: 200.0, gain_db: 2.0 },
+        ToneBand::Peak { hz: 3000.0, gain_db: 4.0, q: 1.0 },
+    ];
+    song.params(|p| {
+        p.slots[0].effects.tone = ToneParams {
+            enabled: true,
+            bands: ToneBands::given(&bands).unwrap(),
+            de_ess_db: 6.0,
+            ..ToneParams::default()
+        };
+    });
+    song.play_to(2 * SECOND + SECOND / 2);
+    let (dir, live) = song.end();
+    assert!(replay(&dir, None, None).mix == live);
 }
 
 #[test]
