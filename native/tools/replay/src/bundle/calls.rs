@@ -4,11 +4,11 @@
 
 use engine::params::{
     CleanupParams, CorrectorParams, EchoCancelParams, EffectParams, HowlGuardParams, ReverbParams,
-    SlotParams, VoiceParams,
+    SlotParams, ToneBands, ToneParams, VoiceParams,
 };
 use engine::slot::guide::Note;
 
-use super::line::{Effect, Guide, SlotSettings};
+use super::line::{Effect, Guide, SlotSettings, ToneBand};
 use super::profile::{EffectsProfile, SlotProfile};
 
 /// A slot as a mixer starts it: the profile's gain and pan, every effect off.
@@ -30,8 +30,8 @@ pub fn set_slot(params: &mut SlotParams, settings: &SlotSettings) {
 }
 
 /// `setSlotEffects`: the slot's whole chain. An effect not in `effects` is off, and a parameter
-/// an effect leaves out is the profile's.
-pub fn set_slot_effects(params: &mut SlotParams, effects: &[Effect], profile: &EffectsProfile) {
+/// an effect leaves out is the profile's, or for the tone stage, which is not in the profile, 0.
+pub fn effects(effects: &[Effect], profile: &EffectsProfile) -> Result<EffectParams, String> {
     let mut chain = EffectParams::default();
     for effect in effects {
         match *effect {
@@ -60,9 +60,28 @@ pub fn set_slot_effects(params: &mut SlotParams, effects: &[Effect], profile: &E
             Effect::EchoCancel { enabled } => chain.echo_cancel = EchoCancelParams { enabled },
             Effect::Cleanup { enabled } => chain.cleanup = CleanupParams { enabled },
             Effect::HowlGuard { enabled } => chain.howl_guard = HowlGuardParams { enabled },
+            Effect::Tone { enabled, ref bands, plosive_db, air_db, de_ess_db } => {
+                let bands: Vec<_> = bands.iter().flatten().map(tone_band).collect();
+                chain.tone = ToneParams {
+                    enabled,
+                    bands: ToneBands::given(&bands)
+                        .ok_or_else(|| format!("a tone effect holds {} bands", bands.len()))?,
+                    plosive_db: plosive_db.unwrap_or(0.0),
+                    air_db: air_db.unwrap_or(0.0),
+                    de_ess_db: de_ess_db.unwrap_or(0.0),
+                };
+            }
         }
     }
-    params.effects = chain;
+    Ok(chain)
+}
+
+fn tone_band(band: &ToneBand) -> engine::params::ToneBand {
+    match *band {
+        ToneBand::Peak { hz, gain_db, q } => engine::params::ToneBand::Peak { hz, gain_db, q },
+        ToneBand::LowShelf { hz, gain_db } => engine::params::ToneBand::LowShelf { hz, gain_db },
+        ToneBand::HighShelf { hz, gain_db } => engine::params::ToneBand::HighShelf { hz, gain_db },
+    }
 }
 
 /// A melody guide in frames, as `toGuideInput` hands it to the engine.

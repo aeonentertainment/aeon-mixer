@@ -1,7 +1,7 @@
 //! A slot's effect stages: the echo canceller, which takes the room's echo of the master out of
 //! the input, the howl guard, the high-pass, gate and compressor that clean the voice, the pitch
-//! corrector, which follows the song's melody guide and reads the singer's pitch, the voice, and
-//! the reverb. Each processes the slot's mono block in place on the audio thread, reads its knobs
+//! corrector, which follows the song's melody guide and reads the singer's pitch, the tone stage
+//! that makes a phone sound like a good vocal mic, the voice, and the reverb. Each processes the slot's mono block in place on the audio thread, reads its knobs
 //! from the slot's `EffectParams`, and allocates nothing.
 
 mod compressor;
@@ -15,6 +15,7 @@ mod melody;
 mod reading;
 mod reverb;
 mod target;
+pub mod tone;
 mod voice;
 
 pub use compressor::Compressor;
@@ -26,4 +27,5 @@ pub use howl_guard::HowlGuard;
 pub use reading::Reading;
 pub use reverb::Reverb;
 pub use target::Target;
+pub use tone::{Tone, ToneFindings};
 pub use voice::Voice;

@@ -51,12 +51,46 @@ pub struct SlotSettings {
 #[derive(Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Effect {
-    PitchCorrection { enabled: bool, strength: Option<f32>, retune_ms: Option<f32> },
-    Reverb { enabled: bool, room_size: Option<f32>, mix: Option<f32> },
-    Voice { enabled: bool, formant_semitones: Option<f32> },
-    EchoCancel { enabled: bool },
-    Cleanup { enabled: bool },
-    HowlGuard { enabled: bool },
+    PitchCorrection {
+        enabled: bool,
+        strength: Option<f32>,
+        retune_ms: Option<f32>,
+    },
+    Reverb {
+        enabled: bool,
+        room_size: Option<f32>,
+        mix: Option<f32>,
+    },
+    Voice {
+        enabled: bool,
+        formant_semitones: Option<f32>,
+    },
+    EchoCancel {
+        enabled: bool,
+    },
+    Cleanup {
+        enabled: bool,
+    },
+    HowlGuard {
+        enabled: bool,
+    },
+    Tone {
+        enabled: bool,
+        bands: Option<Vec<ToneBand>>,
+        plosive_db: Option<f32>,
+        air_db: Option<f32>,
+        de_ess_db: Option<f32>,
+    },
+}
+
+/// One band of a tone effect. A bundle holds only calls the mixer took, so never `"match"`,
+/// which the mixer refuses; a line that holds one fails to read.
+#[derive(Clone, Copy, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum ToneBand {
+    Peak { hz: f32, gain_db: f32, q: f32 },
+    LowShelf { hz: f32, gain_db: f32 },
+    HighShelf { hz: f32, gain_db: f32 },
 }
 
 #[derive(Clone, Deserialize, PartialEq)]

@@ -19,4 +19,5 @@ export type {
   SlotSettings,
   SlotStats,
   StemKind,
+  ToneBand,
 } from "./types.ts";

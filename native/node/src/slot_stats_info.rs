@@ -2,10 +2,12 @@ use engine::block::RATE;
 use engine::ingest::SlotStats;
 use engine::slot::echo_report::EchoReport;
 use engine::slot::effects::Corrector;
+use engine::slot::tone_report::ToneReport;
 use napi::bindgen_prelude::{Either, Null};
 use napi_derive::napi;
 
 use crate::echo_info::EchoInfo;
+use crate::tone_info::ToneInfo;
 
 /// `SlotStats` as JavaScript reads it.
 #[napi(object)]
@@ -23,11 +25,18 @@ pub struct SlotStatsInfo {
     pub echo: Either<EchoInfo, Null>,
     pub playout_delay_ms: f64,
     pub howl_catches: u32,
+    /// Null while the tone stage is off.
+    pub tone: Either<ToneInfo, Null>,
 }
 
 impl SlotStatsInfo {
     /// Both corrector fields read 0 with correction off, the state the delay's own 0 marks.
-    pub fn new(stats: SlotStats, corrector_delay_frames: u32, echo: &EchoReport) -> Self {
+    pub fn new(
+        stats: SlotStats,
+        corrector_delay_frames: u32,
+        echo: &EchoReport,
+        tone: &ToneReport,
+    ) -> Self {
         let max_frames = if corrector_delay_frames > 0 { Corrector::MAX_LATENCY_FRAMES } else { 0 };
         let ms = |frames: u32| f64::from(frames) * 1000.0 / f64::from(RATE);
         Self {
@@ -43,6 +52,7 @@ impl SlotStatsInfo {
             echo: echo.findings().map_or(Either::B(Null), |findings| Either::A(findings.into())),
             playout_delay_ms: f64::from(stats.playout_delay_ms),
             howl_catches: echo.howl_catches(),
+            tone: tone.findings().map_or(Either::B(Null), |findings| Either::A(findings.into())),
         }
     }
 }

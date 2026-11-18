@@ -5,7 +5,10 @@ use engine::params::{
     CleanupParams, CorrectorParams, EchoCancelParams, EffectParams, HowlGuardParams, ReverbParams,
     SlotParams, VoiceParams,
 };
+use napi::bindgen_prelude::Result;
 use napi_derive::napi;
+
+use crate::tone_input::ToneInput;
 
 #[napi(object)]
 pub struct SlotParamsInput {
@@ -21,6 +24,7 @@ pub struct SlotParamsInput {
     pub echo_cancel: SwitchInput,
     pub cleanup: CleanupInput,
     pub howl_guard: SwitchInput,
+    pub tone: ToneInput,
     pub guide_offset_ms: f64,
 }
 
@@ -55,9 +59,11 @@ pub struct VoiceInput {
     pub formant_semitones: f64,
 }
 
-impl From<SlotParamsInput> for SlotParams {
-    fn from(input: SlotParamsInput) -> Self {
-        Self {
+impl TryFrom<SlotParamsInput> for SlotParams {
+    type Error = napi::Error;
+
+    fn try_from(input: SlotParamsInput) -> Result<Self> {
+        Ok(Self {
             gain: input.gain as f32,
             pan: input.pan as f32,
             mute: input.mute,
@@ -80,8 +86,9 @@ impl From<SlotParamsInput> for SlotParams {
                 echo_cancel: EchoCancelParams { enabled: input.echo_cancel.enabled },
                 cleanup: CleanupParams { enabled: input.cleanup.enabled },
                 howl_guard: HowlGuardParams { enabled: input.howl_guard.enabled },
+                tone: input.tone.params()?,
             },
             guide_offset_ms: input.guide_offset_ms as f32,
-        }
+        })
     }
 }

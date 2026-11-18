@@ -55,6 +55,9 @@ await engine.close();
   a pitch reading, a melody guide and pitch correction toward it, whose delay `stats()` reports.
   A slot can also take the room's echo of the mix out of its input and duck itself when its loop
   through the speakers starts to howl; both add no delay, and `stats()` reports what they found.
+  A tone stage takes the host's bands for the mic it knows, an air shelf, a de-esser and a
+  plosive guard. Its filters hold no sample, and `setSlotEffects` refuses bands and air that would
+  leave any frequency from 80 Hz over 0.2 ms late or lift one over 6 dB.
 - **The backing** is any format Symphonia decodes, resampled to 48 kHz. The armed key and speed
   are rendered before `start` resolves. Live, it supports seek, pause, resume, a key change and
   stem gains, and `start`, `seek` and `resume` report the position the lyric clock follows.

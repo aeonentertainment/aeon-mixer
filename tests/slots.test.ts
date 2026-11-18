@@ -22,6 +22,7 @@ const SILENT_STATS = {
   echo: null,
   playoutDelayMs: 0,
   howlCatches: 0,
+  tone: null,
 };
 
 async function startLive(engine: OfflineEngine, mixer: Mixer) {
