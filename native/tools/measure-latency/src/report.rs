@@ -161,7 +161,10 @@ blank when it reports none. **OS says output**: `StreamInfo`, the figure decisio
 house-mic path's own cost. **Moved**: most to least across the chirps of that opening; over 0.75 means no number. **Render spread**: how far block \
 renders stand from their mean, most to least, so a long callback's bursts show. **Mic path \
 at most**: the offline total plus the output: a sample entering the sender to its leaving the \
-speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer.";
+speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer. \
+**Corrector**: as in the offline table. An on row's offline total holds the delay the corrector \
+reported for its sweeps there; the output's figure is taken with the corrector off, since it \
+holds nothing past the master.";
 
 fn opening_row(opening: &Opening, air: f64) -> String {
     let asked = format!("{}, {}", opening.asked, opening.output_period);
