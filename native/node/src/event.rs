@@ -47,11 +47,12 @@ pub enum NativeEvent {
     RenderFinished {
         job: u32,
     },
-    /// The engine moved to another output: where it plays now, and how long the room heard
-    /// nothing.
+    /// The engine moved to another output: where it plays now, how long the room heard nothing,
+    /// and how long that held the backing's playhead.
     OutputChanged {
         output: OutputInfo,
         gap_ms: f64,
+        held_ms: f64,
     },
 }
 

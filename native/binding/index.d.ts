@@ -195,7 +195,7 @@ export type NativeEvent =
   | { kind: 'retired' }
   | { kind: 'renderProgress'; job: number; fraction: number }
   | { kind: 'renderFinished'; job: number }
-  | { kind: 'outputChanged'; output: OutputInfo; gapMs: number }
+  | { kind: 'outputChanged'; output: OutputInfo; gapMs: number; heldMs: number }
 
 export interface NoteInput {
   midi: number

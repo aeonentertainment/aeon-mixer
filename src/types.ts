@@ -191,10 +191,12 @@ export interface SlotStats {
 export type EngineEvents = {
   fault: (error: Error) => void;
   /**
-   * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing, and with
-   * `gapMs` 0 when `refused` clears with no move.
+   * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing and
+   * `heldMs` how long that held the backing's playhead, `gapMs` while it was playing or fading to
+   * a pause and 0 while it was not; both 0 when `refused` clears with no move. A host's lyric
+   * clock moves by `heldMs` and the change in `latencyMs`.
    */
-  outputChanged: (output: OutputInfo, gapMs: number) => void;
+  outputChanged: (output: OutputInfo, gapMs: number, heldMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */
   masterLevel: (rmsDb: number, peakDb: number) => void;
 };

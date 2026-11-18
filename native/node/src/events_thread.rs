@@ -129,10 +129,11 @@ impl Drain {
             }
         }
         if let Some(playing) = self.current.as_ref().map(Current::get)
-            && let Some(gap) = self.output_seen.change(&playing)
+            && let Some((gap, held)) = self.output_seen.change(&playing)
         {
             batch.push(NativeEvent::OutputChanged {
                 gap_ms: gap.as_secs_f64() * 1000.0,
+                held_ms: held.as_secs_f64() * 1000.0,
                 output: OutputInfo::new(playing.info, Some(playing)),
             });
         }
