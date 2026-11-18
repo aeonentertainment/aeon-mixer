@@ -219,8 +219,9 @@ export type EngineEvents = {
   /**
    * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing and
    * `heldMs` how long that held the backing's playhead, `gapMs` while it was playing or fading out
-   * to a pause or a seek and 0 while it was not; both 0 when `refused` clears with no move. A
-   * host's lyric clock moves by `heldMs` and the change in `latencyMs`.
+   * to a pause or a seek and 0 while it was not; both 0 when `refused` clears with no move. The
+   * gap starts where the old output stopped asking for audio, so after a stall it counts the
+   * stall. A host's lyric clock moves by `heldMs` and the change in `latencyMs`.
    */
   outputChanged: (output: OutputInfo, gapMs: number, heldMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */

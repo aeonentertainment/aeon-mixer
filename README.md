@@ -86,9 +86,10 @@ await engine.close();
   moves to the new output after a short gap, a pinned engine moving back when its output
   returns. `engine.output` names the output playing and its latency, and `outputChanged` fires
   after each move with both, the gap, and how long the gap held the backing: the gap while it
-  plays, 0 while it is paused. A lyric clock moves by that hold and the change in latency. When
-  the new output will not start, the song goes back to the output it left, or failing that to the
-  default, as a move with its own gap.
+  plays, 0 while it is paused. Both count from the last audio the old output asked for, so an
+  output that stalled first counts the stall. A lyric clock moves by that hold and the change in
+  latency. When the new output will not start, the song goes back to the output it left, or
+  failing that to the default, as a move with its own gap.
   `engine.output.refused` names the one that would not start, with what the OS said, until the
   pin or default rule picks another output, as when the default changes or the refused output
   leaves the list.
