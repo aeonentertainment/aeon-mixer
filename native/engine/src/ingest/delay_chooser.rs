@@ -8,7 +8,7 @@
 
 use crate::block::{BLOCK, RATE};
 
-/// The delay a stream opens at, and the most a rise may leave it at.
+/// The delay a stream opens at, and the most any move may leave it at.
 pub const OPENING: u32 = RATE * 15 / 1000;
 
 /// One note per half second: a stall spans at most a few, and neither a frame's length nor how
