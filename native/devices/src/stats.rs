@@ -65,7 +65,8 @@ impl Stats {
     }
 
     /// `callback` for a backend that has already read its own clock: the timer reads it to
-    /// decide what to render. `now` is from any fixed epoch, the same on every call.
+    /// decide what to render. `now` is from any fixed epoch, the same on every call, so
+    /// `last_callback` is on that clock too; the timer never runs under a follower.
     pub fn callback_at(&self, now: Duration) -> Option<Duration> {
         let now = now.as_nanos() as u64;
         self.callbacks.fetch_add(1, Relaxed);
@@ -77,7 +78,8 @@ impl Stats {
     }
 
     /// When the last callback came, from any stream on this `Stats`. The follower reads it to
-    /// tell a stream that stopped asking for audio.
+    /// tell a stream that stopped asking for audio and where a move's gap starts, against its own
+    /// `Instant::now()`, so every backend it runs marks callbacks with `callback`.
     pub fn last_callback(&self) -> Option<Instant> {
         let last = self.last_ns.load(Relaxed);
         (last != NEVER).then(|| self.epoch + Duration::from_nanos(last))
@@ -167,6 +169,15 @@ mod tests {
         assert_eq!(first, None);
         assert!(second.is_some());
         assert_eq!(stats.report().callbacks, 2);
+    }
+
+    #[test]
+    fn the_last_callback_is_on_the_clock_the_follower_reads() {
+        let stats = Stats::new();
+        let before = Instant::now();
+        stats.callback();
+        let last = stats.last_callback().expect("it called back");
+        assert!((before..=Instant::now()).contains(&last));
     }
 
     #[test]

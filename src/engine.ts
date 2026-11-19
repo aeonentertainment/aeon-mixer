@@ -1,4 +1,5 @@
 import { Acks } from "./acks.ts";
+import { bundleRequest } from "./bundle/bundle-request.ts";
 import { Emitter } from "./emitter.ts";
 import { Mixer, type MixerHost } from "./mixer.ts";
 import {
@@ -10,6 +11,7 @@ import {
 } from "./native.ts";
 import type {
   Capability,
+  DeviceInfo,
   EngineEvents,
   MixerConfig,
   MixerEvents,
@@ -117,8 +119,8 @@ export class Engine {
   readonly #host: MixerHost;
   readonly #acks = new Acks();
   readonly #events = new Emitter<EngineEvents>();
-  /** Swaps in flight, oldest first; a `retired` event completes the oldest. */
-  readonly #retirements: Array<() => void> = [];
+  /** Swaps in flight, oldest first; a `retired` event resolves the oldest. */
+  readonly #retirements: Waiter[] = [];
   /** Each mixer's release until it is destroyed; `close` calls whatever is left. */
   readonly #held = new Set<() => void>();
   /** Render jobs on the worker thread, by the id their progress events carry. */
@@ -157,6 +159,7 @@ export class Engine {
       swapIn: (mixer, graph, events, onTimeout) => this.#swapIn(mixer, graph, events, onTimeout),
       swapOut: (mixer) => this.#swapOut(mixer),
       onFault: (listener) => this.#events.on("fault", listener),
+      onOutputChanged: (listener) => this.#events.on("outputChanged", listener),
       hold: (release) => {
         this.#held.add(release);
         return () => this.#held.delete(release);
@@ -193,7 +196,7 @@ export class Engine {
    * lists. None on the timer and offline clocks, which play on no output; the module's call lists
    * the OS's whatever engine is open.
    */
-  async outputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>> {
+  async outputDevices(): Promise<ReadonlyArray<DeviceInfo>> {
     this.#assertRunning();
     return this.#native.outputs();
   }
@@ -202,7 +205,7 @@ export class Engine {
    * The inputs a `capture` slot may name, the default marked: the module's `inputDevices()`. None
    * on an offline engine, which opens no input.
    */
-  async inputDevices(): Promise<ReadonlyArray<{ id: string; name: string; isDefault: boolean }>> {
+  async inputDevices(): Promise<ReadonlyArray<DeviceInfo>> {
     this.#assertRunning();
     return this.#native.inputs();
   }
@@ -216,12 +219,19 @@ export class Engine {
     }
     const slots = config.slots.map((slot, i) => slotInput(`slots[${i}]`, slot));
     const destination = config.rtpReturn === undefined ? null : rtpReturn(config.rtpReturn);
+    const bundle =
+      config.bundle === undefined
+        ? null
+        : await bundleRequest(config.bundle, config.backing, this.profile.backing.stemGains);
+    // The engine can fault or close while the stems hash, and a mixer is built on a running one
+    this.#assertRunning();
     return new Mixer(
       this.#host,
       slots,
       new Emitter<MixerEvents>(),
       config.backing ?? null,
       destination,
+      bundle,
     );
   }
 
@@ -233,7 +243,9 @@ export class Engine {
   async close() {
     if (this.#state === "closed") return;
     if (this.#live && this.#state === "running") {
-      await this.#live.mixer.destroy();
+      // A closing engine has nothing left to hand back, so a destroy cut short by a fault or a
+      // stall is not an error here; a fault has already reached the host through `fault`
+      await this.#live.mixer.destroy().catch(() => {});
     }
     this.#state = "closed";
     this.#native.close();
@@ -252,7 +264,7 @@ export class Engine {
     const swapped = this.#command(() => this.#native.swap(graph), onTimeout);
     this.#live = { mixer, events };
     // The silent graph comes back; nothing waits for it
-    this.#retirements.push(() => {});
+    this.#retirements.push({ resolve() {}, reject() {} });
     return swapped;
   }
 
@@ -265,9 +277,11 @@ export class Engine {
     }
     const swapped = this.#command(() => this.#native.swapSilent());
     this.#live = null;
-    const retired = new Promise<void>((resolve) => this.#retirements.push(resolve));
-    await swapped;
-    await retired;
+    const retired = new Promise<void>((resolve, reject) => {
+      this.#retirements.push({ resolve, reject });
+    });
+    // A stopping engine rejects both, and both are awaited so neither rejection goes unheard
+    await Promise.all([swapped, retired]);
   }
 
   #command(send: () => number, onTimeout?: (error: Error) => void) {
@@ -322,14 +336,14 @@ export class Engine {
           this.#fault();
           break;
         case "retired":
-          this.#retirements.shift()?.();
+          this.#retirements.shift()?.resolve();
           break;
         case "renderProgress":
           this.#renders.get(event.job)?.onProgress(event.fraction);
           break;
         case "outputChanged":
           this.#output = outputInfo(event.output);
-          this.#events.emit("outputChanged", this.#output, event.gapMs);
+          this.#events.emit("outputChanged", this.#output, event.gapMs, event.heldMs);
           break;
         case "renderFinished": {
           const render = this.#renders.get(event.job);
@@ -353,18 +367,26 @@ export class Engine {
     this.#events.emit("fault", error);
   }
 
-  /** Nothing in flight will be answered: the commands and the renders waited on reject. */
+  /**
+   * Nothing in flight will be answered: every promise waiting on the audio thread rejects. A new
+   * wait on an event joins this list.
+   */
   #stop(error: Error) {
     this.#acks.rejectAll(error);
-    for (const render of this.#renders.values()) render.reject(error);
+    for (const waiter of [...this.#renders.values(), ...this.#retirements]) waiter.reject(error);
     this.#renders.clear();
+    this.#retirements.length = 0;
   }
 }
 
-interface RenderWatch {
-  onProgress(fraction: number): void;
+/** A promise's settlers, kept until the event it waits on arrives or the engine stops. */
+interface Waiter {
   resolve(): void;
   reject(error: Error): void;
+}
+
+interface RenderWatch extends Waiter {
+  onProgress(fraction: number): void;
 }
 
 function outputInfo(info: NativeOutputInfo): OutputInfo {

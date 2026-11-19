@@ -81,8 +81,11 @@ export declare class Engine {
 }
 
 export declare class Mixer {
-  /** Moves a finished render's stems into the graph as its backing path, before `swap`. */
-  installBacking(render: BackingRender): void
+  /**
+   * Moves a finished render's stems into the graph as its backing path, before `swap`, and
+   * returns their length in frames, at the armed speed.
+   */
+  installBacking(render: BackingRender): number
   /** The UDP port a slot listens on, or null for a push or capture slot. */
   port(index: number): number | null
   /**
@@ -92,12 +95,18 @@ export declare class Mixer {
   push(index: number, stereo: Float32Array): number
   /**
    * Records what reaches an `rtp` or `l16` slot's port to a new pcap file at `path`, or stops
-   * recording it for null.
+   * recording it for null. `for_bundle` makes it the mixer's session bundle's: stamped on the
+   * bundle's clock, with each sender written as 0.0.0.0 at a port of its own (docs/design.md 8.11).
    */
-  recordSlot(index: number, path?: string | undefined | null): void
+  recordSlot(index: number, path: string | undefined | null, forBundle: boolean): void
   /**
-   * Every slot's ingest counters, corrector delay and echo findings, as the audio thread last
-   * published them.
+   * The frames the audio thread has rendered and the wall clock a recording stamps arrivals
+   * with, read together: a session bundle's clock.
+   */
+  clock(): ClockReading
+  /**
+   * Every slot's ingest counters, corrector delay, echo findings and tone stage, as the audio
+   * thread last published them.
    */
   stats(): Array<SlotStatsInfo>
   /** The return stream's counters, or null for a mixer without one. */
@@ -109,14 +118,21 @@ export declare class Mixer {
   release(): void
 }
 
+/** Each stem is its path, or the whole encoded file in memory. */
 export interface BackingInput {
-  instrumental: string
-  guide?: string
+  instrumental: string | Uint8Array
+  guide?: string | Uint8Array
   /** The armed key, rendered before start. */
   semitones: number
   /** The armed speed factor, rendered before start. */
   speed: number
 }
+
+/**
+ * Throws when the bands and the air together leave a frequency from 80 Hz over 0.2 ms late or
+ * lift one over 6 dB, naming the worst. Needs no engine, so an armed mixer checks at the call.
+ */
+export declare function checkTone(input: ToneInput): void
 
 export interface CleanupInput {
   enabled: boolean
@@ -130,6 +146,17 @@ export declare const enum ClockKind {
   Timer = 'timer',
   /** An OS output. */
   Device = 'device',
+}
+
+/**
+ * Both cross as f64, since a u64 is not a JavaScript number: exact to 2^53, which is six
+ * thousand years of frames and three centuries of microseconds.
+ */
+export interface ClockReading {
+  /** Frames the audio thread has rendered since the engine opened. */
+  frame: number
+  /** Microseconds since the Unix epoch. */
+  us: number
 }
 
 export interface CorrectorInput {
@@ -154,7 +181,10 @@ export interface GuideInput {
   keyMask: number
 }
 
-/** Every input the OS offers, the default marked: the devices a `capture` slot may name. */
+/**
+ * Every input the OS offers, the default marked: the devices a `capture` slot may name. The test
+ * OS's when it stands in.
+ */
 export declare function inputs(): Array<OutputEntry>
 
 export type NativeEvent =
@@ -169,7 +199,7 @@ export type NativeEvent =
   | { kind: 'retired' }
   | { kind: 'renderProgress'; job: number; fraction: number }
   | { kind: 'renderFinished'; job: number }
-  | { kind: 'outputChanged'; output: OutputInfo; gapMs: number }
+  | { kind: 'outputChanged'; output: OutputInfo; gapMs: number; heldMs: number }
 
 export interface NoteInput {
   midi: number
@@ -198,6 +228,7 @@ export interface OutputEntry {
   id: string
   name: string
   isDefault: boolean
+  transport: 'builtIn' | 'usb' | 'bluetooth' | 'display' | 'network' | 'aggregate' | 'virtual' | 'other' | 'unknown'
 }
 
 export interface OutputInfo {
@@ -263,6 +294,7 @@ export interface SlotParamsInput {
   echoCancel: SwitchInput
   cleanup: CleanupInput
   howlGuard: SwitchInput
+  tone: ToneInput
   guideOffsetMs: number
 }
 
@@ -281,6 +313,8 @@ export interface SlotStatsInfo {
   echo: EchoInfo | null
   playoutDelayMs: number
   howlCatches: number
+  /** Null while the tone stage is off. */
+  tone: ToneInfo | null
 }
 
 export interface StemGainsInput {
@@ -291,6 +325,30 @@ export interface StemGainsInput {
 /** An effect with no knob but on and off. */
 export interface SwitchInput {
   enabled: boolean
+}
+
+/** One band, spelt as the public `ToneBand` is. */
+export type ToneBandInput =
+  | { kind: 'peak'; hz: number; gainDb: number; q: number }
+  | { kind: 'low-shelf'; hz: number; gainDb: number }
+  | { kind: 'high-shelf'; hz: number; gainDb: number }
+
+/** What a slot's tone stage did, as JavaScript reads it. */
+export interface ToneInfo {
+  /** The blind match, which does not run until it has a target to aim at (decision 0029). */
+  match: null
+  /** The most the de-esser took off in the last second. */
+  deEssDb: number
+  /** Pops the guard has ducked. */
+  plosives: number
+}
+
+export interface ToneInput {
+  enabled: boolean
+  bands: Array<ToneBandInput>
+  plosiveDb: number
+  airDb: number
+  deEssDb: number
 }
 
 export interface VoiceInput {

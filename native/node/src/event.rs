@@ -47,11 +47,12 @@ pub enum NativeEvent {
     RenderFinished {
         job: u32,
     },
-    /// The engine moved to another output: where it plays now, and how long the room heard
-    /// nothing.
+    /// The engine moved to another output: where it plays now, how long the room heard nothing,
+    /// and how long that held the backing's playhead.
     OutputChanged {
         output: OutputInfo,
         gap_ms: f64,
+        held_ms: f64,
     },
 }
 
@@ -69,16 +70,14 @@ impl From<Event> for NativeEvent {
             Event::MasterLevel { rms_db, peak_db } => {
                 Self::MasterLevel { rms_db: f64::from(rms_db), peak_db: f64::from(peak_db) }
             }
-            Event::Pitch { slot, position_ms, hz, confidence, target_midi, error_semitones } => {
-                Self::Pitch {
-                    slot: u32::from(slot),
-                    position_ms,
-                    hz: f64::from(hz),
-                    confidence: f64::from(confidence),
-                    target_midi: target_midi.map(i32::from),
-                    error_semitones: f64::from(error_semitones),
-                }
-            }
+            Event::Pitch { slot, reading } => Self::Pitch {
+                slot: u32::from(slot),
+                position_ms: reading.position_ms,
+                hz: f64::from(reading.hz),
+                confidence: f64::from(reading.confidence),
+                target_midi: reading.note.map(|note| i32::from(note.midi)),
+                error_semitones: f64::from(reading.error_semitones),
+            },
             Event::Position { frames } => Self::Position { frames: frames as f64 },
             Event::BackingEnded => Self::BackingEnded,
             Event::Underrun => Self::Underrun,

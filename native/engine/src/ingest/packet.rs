@@ -2,6 +2,8 @@
 //! travels in. One ring per slot: the network thread produces, the audio thread consumes at
 //! the top of each block.
 
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
 /// The largest payload a LAN MTU carries. A longer datagram is dropped at the socket.
 pub const MAX_PAYLOAD: usize = 1500;
 
@@ -17,12 +19,14 @@ pub struct Packet {
     pub timestamp: u32,
     pub ssrc: u32,
     pub marker: bool,
+    /// The sender's address, which the receiver fills. A stream plays only its own (8.4).
+    pub from: SocketAddr,
     pub len: u16,
     pub payload: [u8; MAX_PAYLOAD],
 }
 
 impl Packet {
-    /// Copies `payload` in; `None` when it is longer than an MTU.
+    /// Copies `payload` in, from an unspecified sender; `None` when it is longer than an MTU.
     pub fn new(seq: u16, timestamp: u32, ssrc: u32, marker: bool, payload: &[u8]) -> Option<Self> {
         if payload.len() > MAX_PAYLOAD {
             return None;
@@ -32,6 +36,7 @@ impl Packet {
             timestamp,
             ssrc,
             marker,
+            from: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
             len: payload.len() as u16,
             payload: [0; MAX_PAYLOAD],
         };

@@ -1,0 +1,16 @@
+[package]
+name = "scorecard"
+description = "A session bundle's replay as numbers, compared against a baseline scorecard."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+engine = { workspace = true }
+replay = { path = "../replay" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+assert_no_alloc = "1.1"

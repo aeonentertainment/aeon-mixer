@@ -58,15 +58,18 @@ impl Receiver {
     }
 }
 
-/// An RTP datagram as the ring's packet; `None` for anything else, which is dropped. mediasoup
-/// multiplexes RTCP onto the RTP port, and a report parses as RTP with a payload type in RFC
-/// 5761's reserved range and a timestamp where the SSRC goes, which would re-anchor the stream.
-pub fn packet_from(datagram: &[u8]) -> Option<Packet> {
+/// An RTP datagram from `from` as the ring's packet; `None` for anything else, which is dropped.
+/// mediasoup multiplexes RTCP onto the RTP port, and a report parses as RTP with a payload type in
+/// RFC 5761's reserved range and a timestamp where the SSRC goes, which would re-anchor the stream.
+pub fn packet_from(datagram: &[u8], from: SocketAddr) -> Option<Packet> {
     let (header, payload) = Header::parse(datagram)?;
     if RTCP_PAYLOAD_TYPES.contains(&header.payload_type) {
         return None;
     }
-    Packet::new(header.seq, header.timestamp, header.ssrc, header.marker, payload)
+    let mut packet =
+        Packet::new(header.seq, header.timestamp, header.ssrc, header.marker, payload)?;
+    packet.from = from;
+    Some(packet)
 }
 
 /// RFC 5761 section 4: RTCP packet types 192 to 223 read as these payload types.
@@ -88,7 +91,7 @@ impl Task for Receiver {
                 Ok((len, from)) => {
                     let at = self.tap.as_ref().map(|_| Instant::now());
                     let datagram = &self.datagram[..len];
-                    if let Some(packet) = packet_from(datagram) {
+                    if let Some(packet) = packet_from(datagram, from) {
                         self.packets.push(&packet);
                     }
                     if let (Some(tap), Some(at)) = (&mut self.tap, at) {
@@ -117,15 +120,17 @@ mod tests {
         Header { marker: false, payload_type: 111, seq: 5, timestamp: 960, ssrc: 42 }
             .write((&mut datagram[..12]).try_into().unwrap());
         datagram[12..].copy_from_slice(&[1, 2]);
-        let packet = packet_from(&datagram).unwrap();
+        let from = SocketAddr::from(([192, 168, 1, 20], 50_000));
+        let packet = packet_from(&datagram, from).unwrap();
         assert_eq!((packet.seq, packet.timestamp, packet.ssrc, packet.marker), (5, 960, 42, false));
+        assert_eq!(packet.from, from, "the sender travels with its packet");
         assert_eq!(packet.payload(), &[1, 2]);
-        assert!(packet_from(b"not rtp at all").is_none());
+        assert!(packet_from(b"not rtp at all", from).is_none());
 
         // A sender report on the same port: version 2, packet type 200, then its own fields
         let mut report = [0u8; 28];
         report[0] = 0x81;
         report[1] = 200;
-        assert!(packet_from(&report).is_none(), "RTCP never reaches the ring");
+        assert!(packet_from(&report, from).is_none(), "RTCP never reaches the ring");
     }
 }

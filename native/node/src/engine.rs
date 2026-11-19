@@ -3,6 +3,9 @@
 //! id their ack will carry; `src/` turns that into a promise.
 
 use devices::Playing;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+
 use engine::audio_thread::{AudioThread, Controls};
 use engine::block::MAX_SLOTS;
 use engine::command::{Command, CommandProducer};
@@ -22,6 +25,7 @@ use crate::guide::GuideInput;
 use crate::mixer::Mixer;
 use crate::opening::Opening;
 use crate::rtp_return::RtpReturnInput;
+use crate::session_clock::SessionClock;
 use crate::slot_input::SlotInput;
 use crate::slot_params::SlotParamsInput;
 use crate::test_os::TestOs;
@@ -107,6 +111,8 @@ pub struct Engine {
     /// The thread behind every slot's socket, spawned at open so a mixer never fails for it.
     network: Option<Network>,
     playout_delay_frames: Option<u32>,
+    /// The audio thread's count of frames rendered, which every mixer's clock reads.
+    frames: Arc<AtomicU64>,
     next_id: u32,
 }
 
@@ -120,7 +126,7 @@ impl Engine {
         deliver: Deliver,
         playout_delay_frames: Option<u32>,
     ) -> Self {
-        let Controls { params, commands, events, retired, reactions } = controls;
+        let Controls { params, commands, events, retired, reactions, frames } = controls;
         let events = EventsThread::spawn(events, retired, clock.stats(), clock.current(), deliver);
         Self {
             params,
@@ -130,6 +136,7 @@ impl Engine {
             events: Some(events),
             network: Some(network),
             playout_delay_frames,
+            frames,
             next_id: 0,
         }
     }
@@ -177,7 +184,8 @@ impl Engine {
             ));
         }
         let period = clock.info().period_frames;
-        Mixer::build(slots, rtp_return.as_ref(), self.playout_delay_frames, period, network)
+        let clock = SessionClock::new(Arc::clone(&self.frames));
+        Mixer::build(slots, rtp_return.as_ref(), self.playout_delay_frames, period, network, clock)
     }
 
     /// The output playing now. After a move the events thread sends the same as `outputChanged`.
@@ -219,7 +227,8 @@ impl Engine {
     #[napi]
     pub fn set_slot_params(&mut self, index: u32, params: SlotParamsInput) -> Result<()> {
         let index = slot_index(index)?;
-        self.params.update(|snapshot| snapshot.slots[index] = params.into());
+        let params = params.try_into()?;
+        self.params.update(|snapshot| snapshot.slots[index] = params);
         Ok(())
     }
 

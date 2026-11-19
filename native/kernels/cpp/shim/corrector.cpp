@@ -62,4 +62,6 @@ std::int32_t aeon_corrector_latency_samples(const PitchCorrector *corrector) noe
   return corrector->latencySamples();
 }
 
+float aeon_corrector_shift_semitones(const PitchCorrector *corrector) noexcept { return corrector->shiftSemitones(); }
+
 }  // extern "C"

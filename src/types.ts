@@ -12,6 +12,32 @@ export type Capability =
   | "pause"
   | "level";
 export type IngestKind = "rtp" | "l16" | "push" | "capture";
+
+/**
+ * How a device reaches the machine, as its OS or driver reports it; decision 0025 maps each OS.
+ * `virtual` has no hardware behind it (BlackHole, ZoomAudioDevice, a virtual cable): it starts
+ * and plays to nobody. `network` plays somewhere else, seconds late. `other` is hardware on a bus
+ * not named here; `unknown` is a device the OS or driver did not say. A new OS transport maps into
+ * one of these, so the union does not grow.
+ */
+export type Transport =
+  | "builtIn"
+  | "usb"
+  | "bluetooth"
+  | "display"
+  | "network"
+  | "aggregate"
+  | "virtual"
+  | "other"
+  | "unknown";
+
+/** One device as `outputDevices()` and `inputDevices()` list it. */
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  transport: Transport;
+}
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
@@ -64,10 +90,19 @@ export type SlotConfig =
   | { kind: Exclude<IngestKind, "capture"> }
   | { kind: "capture"; device?: string; channel?: number };
 
+/**
+ * A stem is the encoded file at `path`, or the whole encoded file in `bytes`, decoded the same way:
+ * docs/design.md 8.5. `createMixer` reads `bytes` until it settles, so leave them unchanged until
+ * then. Either keeps every capability: seek, key and speed work on the decoded stem.
+ */
+export type BackingStem =
+  | { kind: StemKind; path: string; bytes?: never }
+  | { kind: StemKind; bytes: Uint8Array; path?: never };
+
 export interface MixerConfig {
   slots: ReadonlyArray<SlotConfig>;
   backing?: {
-    stems: ReadonlyArray<{ kind: StemKind; path: string }>;
+    stems: ReadonlyArray<BackingStem>;
     /** Semitones, rendered before start. */
     key: number;
     /** A factor, rendered before start. */
@@ -77,6 +112,13 @@ export interface MixerConfig {
     stopAtMs?: number;
   };
   rtpReturn?: { host: string; port: number; payloadType: number; ssrc: number };
+  /**
+   * Writes this mixer's session bundle into a new directory at `dir`, from now until `destroy`:
+   * docs/design.md 8.11. `createMixer` rejects when `dir` exists. A bundle holds every singer's
+   * voice in the song: nothing in this package sends it anywhere, and the host owns it and
+   * answers for each singer's consent.
+   */
+  bundle?: { dir: string };
 }
 
 export interface SlotSettings {
@@ -105,7 +147,32 @@ export type SlotEffect =
    */
   | { kind: "cleanup"; enabled: boolean }
   /** Ducks the slot when its loop through the speakers starts to howl, with no added delay. */
-  | { kind: "howl-guard"; enabled: boolean };
+  | { kind: "howl-guard"; enabled: boolean }
+  /**
+   * Makes a phone sound like a good vocal mic and holds no sample. `bands` is the host's
+   * correction for the mic it knows, at most 8. `plosiveDb` 0 to 12, `airDb` 0 to 6 and `deEssDb`
+   * 0 to 12 are amounts; they are not in the profile, and left out each is 0 and its part is out
+   * of the path. Throws when the bands and the air together leave a frequency from 80 Hz over
+   * 0.2 ms late or lift one over 6 dB. `"match"`, the blind match for a mic with no bands, throws
+   * too: it has no target curve to aim at yet. Decision 0029 has the reasons and numbers.
+   */
+  | {
+      kind: "tone";
+      enabled: boolean;
+      bands?: ReadonlyArray<ToneBand> | "match";
+      plosiveDb?: number;
+      airDb?: number;
+      deEssDb?: number;
+    };
+
+/**
+ * One filter of a tone stage's `bands`: the Audio EQ Cookbook's peaking or shelf biquad at 48 kHz,
+ * a shelf at slope 1, so a host's fitting tool draws the same curve from the same numbers. `hz`
+ * 80 to 16 000, `gainDb` -12 to 6, `q` 0.3 to 8.
+ */
+export type ToneBand =
+  | { kind: "peak"; hz: number; gainDb: number; q: number }
+  | { kind: "low-shelf" | "high-shelf"; hz: number; gainDb: number };
 
 export interface MelodyGuide {
   notes: ReadonlyArray<{ midi: number; startMs: number; endMs: number }>;
@@ -144,15 +211,28 @@ export interface SlotStats {
   playoutDelayMs: number;
   /** How often the howl guard has ducked this slot. */
   howlCatches: number;
+  /**
+   * What the tone stage did; null while it is off. `match` is null until the blind match ships.
+   * `deEssDb` is the most the de-esser took off in the last second, `plosives` the pops the guard
+   * has ducked.
+   */
+  tone: {
+    match: { bands: ReadonlyArray<{ hz: number; gainDb: number }>; countedMs: number } | null;
+    deEssDb: number;
+    plosives: number;
+  } | null;
 }
 
 export type EngineEvents = {
   fault: (error: Error) => void;
   /**
-   * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing, and with
-   * `gapMs` 0 when `refused` clears with no move.
+   * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing and
+   * `heldMs` how long that held the backing's playhead, `gapMs` while it was playing or fading out
+   * to a pause or a seek and 0 while it was not; both 0 when `refused` clears with no move. The
+   * gap starts no later than the old output last asked for audio, so after a stall it counts the
+   * stall. A host's lyric clock moves by `heldMs` and the change in `latencyMs`.
    */
-  outputChanged: (output: OutputInfo, gapMs: number) => void;
+  outputChanged: (output: OutputInfo, gapMs: number, heldMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */
   masterLevel: (rmsDb: number, peakDb: number) => void;
 };

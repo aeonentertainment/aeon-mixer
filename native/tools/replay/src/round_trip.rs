@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use engine::block::RATE;
 use engine::ingest::Codec;
-use transport::record::{Recording, Written};
+use transport::record::{Recording, WallClock, Written};
 use transport::rtp::Header;
 
 use crate::capture;
@@ -19,9 +19,12 @@ use crate::stream::{Arrival, Stream};
 const FRAME: usize = 960;
 const DELAY: u32 = RATE * 15 / 1000;
 const PORT: u16 = 40_000;
+/// The one sender in a round trip, live and recorded alike.
+const PHONE: SocketAddr =
+    SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 168, 1, 30), 50_000));
 
 /// A harmonic voice in `on` seconds of singing and `off` of silence, so DTX has pauses to take.
-fn voice(seconds: f32, on: f32, off: f32) -> Vec<f32> {
+pub(crate) fn voice(seconds: f32, on: f32, off: f32) -> Vec<f32> {
     let mut phase = 0.0f32;
     (0..(seconds * RATE as f32) as usize)
         .map(|i| {
@@ -36,16 +39,16 @@ fn voice(seconds: f32, on: f32, off: f32) -> Vec<f32> {
 }
 
 /// A datagram and the output frame it reached the socket at.
-struct Sent {
-    at: i64,
-    datagram: Vec<u8>,
+pub(crate) struct Sent {
+    pub at: i64,
+    pub datagram: Vec<u8>,
 }
 
 /// What a phone sends: Opus in 20 ms frames at 32 kb/s with FEC, and DTX when asked, which
 /// sends one silent frame and then nothing until the voice comes back. A sender report goes
 /// with every 50th packet. A LAN delays each by 5 ms and up to `jitter` frames more, and when it
 /// `swaps`, trades the arrivals of one pair of neighbours in twenty. Deterministic.
-fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<Sent> {
+pub(crate) fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<Sent> {
     let mut encoder =
         opus::Encoder::new(RATE, opus::Channels::Mono, opus::Application::Voip).unwrap();
     encoder.set_bitrate(opus::Bitrate::Bits(32_000)).unwrap();
@@ -97,11 +100,41 @@ fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<Sent> {
     sent
 }
 
+/// What a house mic's sender puts on loopback: `rtpL16pay` at GStreamer's default 1400-byte MTU,
+/// 350 frames of 16-bit big-endian stereo PCM a packet, as `measure-latency` models it, with the
+/// mono signal on both channels. Each arrives a millisecond after its last sample. Deterministic.
+pub(crate) fn house_mic(signal: &[f32]) -> Vec<Sent> {
+    const PACKET: usize = 350;
+    signal
+        .as_chunks::<PACKET>()
+        .0
+        .iter()
+        .enumerate()
+        .map(|(k, pcm)| {
+            let mut datagram = vec![0u8; 12];
+            let header = Header {
+                marker: false,
+                payload_type: 96,
+                seq: 100u16.wrapping_add(k as u16),
+                timestamp: (k * PACKET) as u32,
+                ssrc: 0xAE16,
+            };
+            header.write((&mut datagram[..12]).try_into().unwrap());
+            for sample in pcm {
+                let bytes = ((sample.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_be_bytes();
+                datagram.extend_from_slice(&bytes);
+                datagram.extend_from_slice(&bytes);
+            }
+            Sent { at: ((k + 1) * PACKET) as i64 + 48, datagram }
+        })
+        .collect()
+}
+
 /// The packets as a live receiver pushes them, straight from the datagrams.
 fn live(sent: &[Sent]) -> Vec<Arrival> {
     sent.iter()
         .filter_map(|s| {
-            Some(Arrival { at: s.at, packet: transport::receive::packet_from(&s.datagram)? })
+            Some(Arrival { at: s.at, packet: transport::receive::packet_from(&s.datagram, PHONE)? })
         })
         .collect()
 }
@@ -111,13 +144,12 @@ fn live(sent: &[Sent]) -> Vec<Arrival> {
 fn recorded(sent: &[Sent], name: &str) -> (Stream, Written) {
     let path = std::env::temp_dir().join(format!("aeon-replay-{}-{name}.pcap", std::process::id()));
     let _ = std::fs::remove_file(&path);
-    let (recording, mut tap) = Recording::create(&path, PORT).unwrap();
-    let from = SocketAddr::from(([192, 168, 1, 30], 50_000));
+    let (recording, mut tap) = Recording::create(&path, PORT, WallClock::now()).unwrap();
     let base = Instant::now();
     for s in sent {
         let at =
             base + Duration::from_nanos((s.at as u64 * 1_000_000_000).div_ceil(u64::from(RATE)));
-        assert_no_alloc::assert_no_alloc(|| tap.record(&s.datagram, from, at));
+        assert_no_alloc::assert_no_alloc(|| tap.record(&s.datagram, PHONE, at));
     }
     drop(tap);
     let written = recording.finish().unwrap();

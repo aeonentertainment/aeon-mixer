@@ -17,6 +17,9 @@ mod silent_source_tests;
 pub mod source;
 #[cfg(test)]
 mod stream_return_tests;
+pub mod tone_report;
+#[cfg(test)]
+mod tone_tests;
 
 use std::f32::consts::FRAC_PI_4;
 use std::sync::Arc;
@@ -27,12 +30,15 @@ use crate::params::SlotParams;
 use corrector_delay::CorrectorDelay;
 use cue::Cue;
 use echo_report::EchoReport;
-use effects::{Compressor, Corrector, EchoCanceller, Gate, HighPass, HowlGuard, Reverb, Voice};
+use effects::{
+    Compressor, Corrector, EchoCanceller, Gate, HighPass, HowlGuard, Reverb, Tone, Voice,
+};
 use guide::Guide;
 use kernels::EchoHistory;
 use meter::Meter;
 use shared::Shared;
 use source::Source;
+use tone_report::ToneReport;
 
 pub struct Slot {
     source: Box<dyn Source>,
@@ -49,6 +55,8 @@ pub struct Slot {
     reverb: Reverb,
     voice: Voice,
     meter: Meter,
+    tone: Tone,
+    tone_report: Arc<ToneReport>,
     compressor: Compressor,
     /// While the playhead holds, the cue's frame and the slot's frame on the guide clock when the
     /// hold began. A source's latency can move every block, as a push ring's depth does, and the
@@ -76,6 +84,8 @@ impl Slot {
             reverb: Reverb::new(),
             voice: Voice::new(),
             meter: Meter::new(),
+            tone: Tone::new(),
+            tone_report: Arc::default(),
             compressor: Compressor::new(),
             held: None,
             gains: None,
@@ -104,10 +114,15 @@ impl Slot {
         Arc::clone(&self.echo_report)
     }
 
+    /// What the tone stage did, for the control thread.
+    pub fn tone_report(&self) -> Arc<ToneReport> {
+        Arc::clone(&self.tone_report)
+    }
+
     /// Pulls one block, takes the room's echo of the master out of it, guards it against a howl,
-    /// cleans it, corrects it toward the guide at the cue, meters it, compresses it, voices it, adds
-    /// reverb, and adds it to `out` at the ramped gain, silent while another slot is soloed and this
-    /// one is not.
+    /// cleans it, corrects it toward the guide at the cue, meters it, shapes its tone, compresses
+    /// it, voices it, adds reverb, and adds it to `out` at the ramped gain, silent while another
+    /// slot is soloed and this one is not.
     pub fn render(
         &mut self,
         index: u8,
@@ -148,20 +163,11 @@ impl Slot {
             self.guide.as_deref(),
             Cue { frame, ..shared.cue },
             &mut self.input,
-            |reading| {
-                events.push(Event::Pitch {
-                    slot: index,
-                    position_ms: reading.position_ms,
-                    hz: reading.hz,
-                    confidence: reading.confidence,
-                    target_midi: reading.target_midi,
-                    error_semitones: reading.error_semitones,
-                });
-            },
+            |reading| events.push(Event::Pitch { slot: index, reading }),
         );
         self.corrector_delay.publish(self.corrector.latency_frames());
-        // The meter reads the corrected voice ahead of the compressor, the voice and the reverb:
-        // it is the singing
+        // The meter reads the corrected voice ahead of the tone stage, the compressor, the voice
+        // and the reverb: it is the singing
         for sample in self.input {
             if let Some(reading) = self.meter.push_frame(sample * sample, sample.abs()) {
                 events.push(Event::Level {
@@ -171,6 +177,8 @@ impl Slot {
                 });
             }
         }
+        self.tone.process(&params.effects.tone, &mut self.input);
+        self.tone_report.publish(self.tone.findings());
         self.compressor.process(&params.effects.cleanup, &mut self.input);
         self.voice.process(&params.effects.voice, &mut self.input);
         self.reverb.process(&params.effects.reverb, &mut self.input);
@@ -267,6 +275,7 @@ mod tests {
     use crate::ingest::packet::RING_CAPACITY;
     use crate::ingest::{Codec, JitterBuffer, PacketSource, packet_ring};
     use crate::params::{CleanupParams, CorrectorParams, EffectParams, Params};
+    use crate::slot::effects::Reading;
     use crate::slot::guide::Note;
 
     const CORRECTING: CorrectorParams =
@@ -436,22 +445,14 @@ mod tests {
         assert!(most > 0 && most <= bound, "delay reached {most} frames, bound {bound}");
     }
 
-    /// What a tuning panel reads from one `Event::Pitch`: where, the target, and the error.
-    #[derive(Debug)]
-    struct Shown {
-        position_ms: f64,
-        target_midi: Option<i16>,
-        error_semitones: f32,
-    }
-
     /// `input` through a one-slot graph following `guide` on the offline driver, hard left, under
     /// the allocation guard. The backing plays silence from frame 0, so the guide's clock is the
-    /// output's. Returns the left channel and what every pitch event showed.
+    /// output's. Returns the left channel and every pitch event's reading.
     fn on_the_offline_driver(
         input: &[f32],
         guide: Guide,
         corrector: CorrectorParams,
-    ) -> (Vec<f32>, Vec<Shown>) {
+    ) -> (Vec<f32>, Vec<Reading>) {
         let mut slot = Slot::new(Box::new(Clip { samples: input.to_vec(), at: 0 }));
         slot.set_guide(Some(Box::new(guide)));
         let mut graph = Graph::new(vec![slot]);
@@ -475,9 +476,7 @@ mod tests {
         }
         let shown = std::iter::from_fn(|| drain.pop())
             .filter_map(|event| match event {
-                Event::Pitch { position_ms, target_midi, error_semitones, .. } => {
-                    Some(Shown { position_ms, target_midi, error_semitones })
-                }
+                Event::Pitch { reading, .. } => Some(reading),
                 _ => None,
             })
             .collect();
@@ -533,7 +532,7 @@ mod tests {
                 in_key += 1;
                 (None, -0.3)
             };
-            assert_eq!(reading.target_midi, target, "{reading:?}");
+            assert_eq!(reading.note.map(|note| note.midi), target, "{reading:?}");
             assert!((reading.error_semitones - error).abs() < ERROR_TOLERANCE, "{reading:?}");
         }
         assert!(in_note >= 35 && in_key >= 75, "{in_note} readings in the note, {in_key} in key");
@@ -547,7 +546,7 @@ mod tests {
         let (left, shown) = on_the_offline_driver(&input, b_flat_in_c_major(), off);
         assert_eq!(shown.len(), 150, "readings every 10 ms");
         for reading in shown {
-            assert_eq!((reading.target_midi, reading.error_semitones), (None, 0.0), "{reading:?}");
+            assert_eq!((reading.note, reading.error_semitones), (None, 0.0), "{reading:?}");
         }
         for (frame, (out, sample)) in left.iter().zip(&input).enumerate() {
             assert_eq!(out.to_bits(), sample.to_bits(), "frame {frame} changed");

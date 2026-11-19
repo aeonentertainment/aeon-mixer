@@ -5,6 +5,10 @@ import {
   type RenderHost,
   STOP_FADE_MS,
 } from "./backing.ts";
+import { Bundle } from "./bundle/bundle.ts";
+import type { CommandCall } from "./bundle/bundle-event.ts";
+import { bundleOutput } from "./bundle/bundle-manifest.ts";
+import type { BundleRequest } from "./bundle/bundle-request.ts";
 import type { Emitter } from "./emitter.ts";
 import type {
   GuideInput,
@@ -15,6 +19,7 @@ import type {
 } from "./native.ts";
 import type { SettingsProfile } from "./profile/settings-profile.ts";
 import type {
+  EngineEvents,
   IngestKind,
   MelodyGuide,
   MixerEvents,
@@ -24,6 +29,7 @@ import type {
   SlotStats,
   StemKind,
 } from "./types.ts";
+import { toneInput, toneOff } from "./tone.ts";
 import { framesToMs, msToFrames } from "./units.ts";
 import { finiteIn, integerIn, pcm, RANGES } from "./validate.ts";
 
@@ -55,6 +61,8 @@ export interface MixerHost extends RenderHost {
   swapOut(mixer: Mixer): Promise<void>;
   /** Hears the engine's fault until the returned function is called. */
   onFault(listener: (error: Error) => void): () => void;
+  /** Hears each change of the engine's output until the returned function is called. */
+  onOutputChanged(listener: EngineEvents["outputChanged"]): () => void;
   /**
    * Holds `release` until the returned function is called, and calls it when the engine closes:
    * a mixer's capture inputs and ports outlive no engine, whatever state the mixer is in.
@@ -69,7 +77,7 @@ type Phase = "armed" | "starting" | "live" | "destroyed";
 
 type Effects = Pick<
   SlotParamsInput,
-  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel" | "howlGuard"
+  "corrector" | "reverb" | "voice" | "cleanup" | "echoCancel" | "howlGuard" | "tone"
 >;
 
 /** Every effect off: a slot's chain as it starts, and what `setSlotEffects` builds on. */
@@ -81,6 +89,7 @@ function effectsOff(): Effects {
     echoCancel: { enabled: false },
     cleanup: { enabled: false },
     howlGuard: { enabled: false },
+    tone: toneOff(),
   };
 }
 
@@ -89,7 +98,8 @@ function effectsOff(): Effects {
  * `capture` slots hold their inputs open, from here until `destroy`; its return stream sends the
  * mix from `start` until `destroy`. Settings
  * made while armed are kept here and written to the engine when `start` swaps the graph in, so
- * arming the next song never touches the live one.
+ * arming the next song never touches the live one. A mixer asked for a session bundle writes it
+ * from here until `destroy`: docs/design.md 8.11.
  */
 export class Mixer {
   /** Each slot's kind and, for `rtp` and `l16`, the UDP port it listens on; `null` for the rest. */
@@ -102,6 +112,12 @@ export class Mixer {
   readonly #backing: Backing | null;
   readonly #offFault: () => void;
   readonly #letGo: () => void;
+  readonly #bundle: Bundle | null;
+  /** The file stems, for `#withoutPaths`; a bytes stem is never held past its copy. */
+  readonly #files: ReadonlyArray<{ kind: StemKind; path: string }>;
+  #offOutput = () => {};
+  /** The backing position the engine last reported, for the bundle's stats lines. */
+  #positionMs: number | null = null;
   #phase: Phase = "armed";
   #failed = false;
 
@@ -112,6 +128,7 @@ export class Mixer {
   readonly #fail = (error: Error) => {
     if (this.#failed || this.#phase === "destroyed") return;
     this.#failed = true;
+    this.#bundle?.event({ type: "error", message: this.#withoutPaths(error.message) });
     this.#events.emit("error", error);
   };
 
@@ -121,9 +138,13 @@ export class Mixer {
     events: Emitter<MixerEvents>,
     backing: BackingConfig | null,
     rtpReturn: RtpReturnInput | null,
+    bundle: BundleRequest | null = null,
   ) {
     this.#host = host;
     this.#events = events;
+    this.#files = (backing?.stems ?? []).flatMap(({ kind, path }) =>
+      path === undefined ? [] : [{ kind, path }],
+    );
     // Checked before the native mixer binds its ports and opens its inputs, which a throw after it
     // would leave held with no mixer to destroy
     const { slot, backing: backingDefaults } = host.profile;
@@ -148,13 +169,21 @@ export class Mixer {
               if (this.#phase !== "destroyed") this.#events.emit("renderProgress", fraction);
             },
             failed: this.#fail,
+            installed: (frames) => this.#bundle?.event({ type: "backingRendered", frames }),
           });
     this.#offFault = host.onFault(this.#fail);
+    try {
+      this.#bundle = bundle === null ? null : this.#startBundle(bundle);
+    } catch (error) {
+      this.#release();
+      throw error;
+    }
   }
 
   setSlot(index: number, settings: Partial<SlotSettings>) {
     const slot = this.#slot(index);
     const current = this.#paramsOf(slot);
+    const record = this.#bundle?.stamp();
     this.#write(slot, {
       ...current,
       gain:
@@ -165,6 +194,7 @@ export class Mixer {
       mute: settings.mute ?? current.mute,
       solo: settings.solo ?? current.solo,
     });
+    record?.({ type: "setSlot", index: slot, settings });
   }
 
   /**
@@ -175,6 +205,7 @@ export class Mixer {
     const slot = this.#slot(index);
     const next = { ...this.#paramsOf(slot), ...effectsOff() };
     const defaults = this.#host.profile.slot.effects;
+    const record = this.#bundle?.stamp();
     for (const effect of effects) {
       switch (effect.kind) {
         case "pitch-correction": {
@@ -214,14 +245,19 @@ export class Mixer {
         case "howl-guard":
           next.howlGuard = { enabled: effect.enabled };
           break;
+        case "tone":
+          next.tone = toneInput(effect);
+          break;
       }
     }
     this.#write(slot, next);
+    record?.({ type: "setSlotEffects", index: slot, effects });
   }
 
   setSlotGuide(index: number, guide: MelodyGuide | null, guideOffsetMs?: number) {
     const slot = this.#slot(index);
     const input = guide === null ? null : toGuideInput(guide);
+    const record = this.#bundle?.stamp();
     if (guideOffsetMs !== undefined) {
       this.#write(slot, {
         ...this.#paramsOf(slot),
@@ -232,17 +268,26 @@ export class Mixer {
     if (this.#host.isLive(this)) {
       this.#host.native.setGuide(slot, input);
     }
+    record?.({
+      type: "setSlotGuide",
+      index: slot,
+      guide,
+      ...(guideOffsetMs === undefined ? {} : { guideOffsetMs }),
+    });
   }
 
   /**
    * Forget the stream a slot was hearing; the next packets, or the next pushed audio, are a new
-   * singer. An armed mixer has heard nothing yet, so there is nothing to forget.
+   * singer. Call it whenever a slot's sender changes: the sender it released is turned away until
+   * it has been quiet a second. An armed mixer has heard nothing yet, so there is nothing to forget.
    */
   resetSlot(index: number) {
     const slot = this.#slot(index);
+    const record = this.#bundle?.stamp();
     if (this.#host.isLive(this)) {
       this.#host.native.resetSlot(slot);
     }
+    record?.({ type: "resetSlot", index: slot });
   }
 
   /**
@@ -251,7 +296,8 @@ export class Mixer {
    * is created here and never over an existing one, so a bad path throws. A recording holds a
    * singer's voice and their phone's LAN address: it is made only when a person asks for one, and
    * nothing in this package sends it anywhere. Start it after `start`, so a replay begins where
-   * the live slot did. docs/design.md 8.4.
+   * the live slot did. docs/design.md 8.4. A mixer writing a session bundle already records the
+   * slot there, and a slot has one recording, so this throws.
    */
   recordSlot(index: number, path: string | null) {
     const slot = this.#slot(index);
@@ -262,8 +308,9 @@ export class Mixer {
     if (this.#phase === "destroyed") {
       throw new Error("the mixer is destroyed");
     }
+    if (this.#bundle) throw new Error(`slot ${slot} is recording into the mixer's bundle`);
     if (path === "") throw new RangeError("path must name a file");
-    this.#native.recordSlot(slot, path);
+    this.#native.recordSlot(slot, path, false);
   }
 
   /**
@@ -295,9 +342,11 @@ export class Mixer {
     }
     this.#phase = "starting";
     let swapped: Promise<number>;
+    let record: ReturnType<Bundle["stamp"]> | undefined;
     try {
       if (this.#backing?.rendering) await this.#backing.rendered;
       if (this.#host.anyLive()) throw new Error("another mixer is live; destroy it first");
+      record = this.#bundle?.stamp();
       this.#backing?.install();
       this.#params.forEach((params, slot) => {
         this.#host.native.setSlotParams(slot, params);
@@ -310,6 +359,7 @@ export class Mixer {
     }
     // From here the graph is the audio thread's, so the mixer is live whatever the acks say.
     this.#phase = "live";
+    record?.({ type: "start" });
     this.#guides.forEach((guide, slot) => {
       if (guide) this.#host.native.setGuide(slot, guide);
     });
@@ -319,7 +369,8 @@ export class Mixer {
       stopAtFrames === undefined
         ? undefined
         : this.#command(() => this.#host.native.stopAt(stopAtFrames, msToFrames(STOP_FADE_MS)));
-    await Promise.all([swapped, started, stopping]);
+    const [, position] = await Promise.all([swapped, started, stopping]);
+    this.#bundle?.event({ type: "ack", call: "start", positionMs: this.#heard(position) });
     const { latencyMs } = this.#host.output();
     return {
       startedAt: Date.now() + latencyMs,
@@ -332,36 +383,38 @@ export class Mixer {
   async seek(toMs: number) {
     const toFrame = msToFrames(finiteIn("toMs", toMs, 0, Number.MAX_SAFE_INTEGER));
     const native = this.#liveBacking();
-    const landed = await this.#command(() => native.seek(toFrame));
-    return { positionMs: framesToMs(landed) };
+    const positionMs = await this.#steer(() => native.seek(toFrame), { type: "seek", toMs });
+    return { positionMs };
   }
 
   /** Resolves once the fade out is done and the playhead holds. */
   async pause() {
     const native = this.#liveBacking();
-    await this.#command(() => native.pause());
+    await this.#steer(() => native.pause(), { type: "pause" });
   }
 
   async resume() {
     const native = this.#liveBacking();
-    const position = await this.#command(() => native.resume());
-    return { positionMs: framesToMs(position) };
+    const positionMs = await this.#steer(() => native.resume(), { type: "resume" });
+    return { positionMs };
   }
 
   /** The live key, on top of the armed one; its crossfade follows the ack. */
   async setBackingKey(semitones: number) {
     const checked = integerIn("semitones", semitones, -12, 12);
     const native = this.#liveBacking();
-    await this.#command(() => native.setKey(checked));
+    await this.#steer(() => native.setKey(checked), { type: "setBackingKey", semitones });
   }
 
   /** A parameter write, held while armed like the slot settings. */
   setStemGain(kind: StemKind, gain: number) {
     if (!this.#backing) throw new Error("this mixer has no backing");
+    const record = this.#bundle?.stamp();
     const gains = this.#backing.setStemGain(kind, gain);
     if (this.#host.isLive(this)) {
       this.#host.native.setStemGains(gains);
     }
+    record?.({ type: "setStemGain", kind, gain });
   }
 
   on<K extends keyof MixerEvents>(event: K, listener: MixerEvents[K]) {
@@ -386,7 +439,8 @@ export class Mixer {
 
   /**
    * Closes the slots' ports, stops the return stream, swaps the silent graph in when this one is
-   * live, and resolves once this graph is back and dropped.
+   * live, and resolves once this graph is back and dropped. A bundle's `end` line is written
+   * here, last.
    */
   async destroy() {
     switch (this.#phase) {
@@ -412,12 +466,68 @@ export class Mixer {
   #release() {
     this.#phase = "destroyed";
     this.#offFault();
+    this.#offOutput();
     this.#letGo();
+    this.#bundle?.end();
     this.#native.release();
+  }
+
+  /**
+   * Starts the bundle, whose pcaps the native mixer writes, and tells it what the engine reports
+   * from here on.
+   */
+  #startBundle({ dir, backing }: BundleRequest) {
+    const bundle = new Bundle(dir, backing, {
+      profile: this.#host.profile,
+      output: this.#host.output(),
+      slots: this.slots,
+      clock: () => this.#native.clock(),
+      record: (slot, path) => {
+        this.#native.recordSlot(slot, path, true);
+      },
+      stats: () => ({ positionMs: this.#positionMs, ...this.stats() }),
+    });
+    this.#offOutput = this.#host.onOutputChanged((output, gapMs, heldMs) => {
+      bundle.event({ type: "outputChanged", output: bundleOutput(output), gapMs, heldMs });
+    });
+    this.#events.on("position", (positionMs) => {
+      this.#positionMs = positionMs;
+    });
+    this.#events.on("backingEnded", () => {
+      bundle.event({ type: "backingEnded" });
+    });
+    return bundle;
+  }
+
+  /**
+   * A failed render's message names a file stem by path, and a bytes stem by kind already. A
+   * bundle holds no path, so by kind.
+   */
+  #withoutPaths(message: string) {
+    return this.#files.reduce((text, { kind, path }) => text.replaceAll(path, kind), message);
   }
 
   #command(send: () => number) {
     return this.#host.command(send, this.#fail);
+  }
+
+  /**
+   * Sends a backing command and resolves with the position its ack carries, in milliseconds. A
+   * bundle's line for it is written as the command is sent, and its ack's as the ack arrives.
+   */
+  async #steer(send: () => number, call: CommandCall) {
+    const record = this.#bundle?.stamp();
+    const acked = this.#command(send);
+    record?.(call);
+    const positionMs = this.#heard(await acked);
+    this.#bundle?.event({ type: "ack", call: call.type, positionMs });
+    return positionMs;
+  }
+
+  /** Keeps the backing position an ack carried, and returns it in milliseconds. */
+  #heard(positionFrames: number) {
+    this.#positionMs = framesToMs(positionFrames);
+    return this.#positionMs;
   }
 
   #slot(index: number) {

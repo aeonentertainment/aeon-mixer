@@ -8,11 +8,13 @@ const binding: typeof Binding = createRequire(import.meta.url)("../native/bindin
 export const NativeEngine = binding.Engine;
 export const nativeOutputs = binding.outputs;
 export const nativeInputs = binding.inputs;
+export const nativeCheckTone = binding.checkTone;
 export type NativeEngine = Binding.Engine;
 export type NativeMixer = Binding.Mixer;
 export type NativeBackingRender = Binding.BackingRender;
 export type {
   BackingInput,
+  ClockReading,
   GuideInput,
   NativeEvent,
   OpenOptions as NativeOpenOptions,
@@ -22,4 +24,5 @@ export type {
   SlotInput,
   SlotParamsInput,
   StemGainsInput,
+  ToneInput,
 } from "../native/binding/index.js";

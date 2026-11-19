@@ -13,12 +13,15 @@ mod watch;
 use std::thread;
 
 use engine::driver::DriverError;
-use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Devices::FunctionDiscovery::{
+    PKEY_Device_EnumeratorName, PKEY_Device_FriendlyName,
+};
 use windows::Win32::Media::Audio::{
-    DEVICE_STATE_ACTIVE, EDataFlow, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
-    eConsole, eRender,
+    DEVICE_STATE_ACTIVE, EDataFlow, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    PKEY_AudioEndpoint_FormFactor, eCapture, eConsole, eRender,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::core::PCWSTR;
 
 pub use capture::WasapiCapture;
@@ -26,7 +29,9 @@ pub use driver::WasapiDriver;
 pub use mode::WasapiMode;
 pub use watch::Watch;
 
+use crate::endpoint_transport::endpoint_transport;
 use crate::output::Output;
+use crate::transport::Transport;
 use com::Com;
 
 /// The active render endpoints, by MMDevice id, with the default console output marked. Runs on
@@ -58,9 +63,11 @@ fn endpoints(flow: EDataFlow) -> Result<Vec<Output>, DriverError> {
                 .map(|index| {
                     let device = devices.Item(index).map_err(failed("read a device"))?;
                     let id = id(&device)?;
+                    let store = properties(&device)?;
                     Ok(Output {
                         is_default: default.as_ref() == Some(&id),
-                        name: name(&device)?,
+                        name: friendly_name(&store)?,
+                        transport: transport(&store),
                         id,
                     })
                 })
@@ -114,14 +121,28 @@ fn id(device: &IMMDevice) -> Result<String, DriverError> {
 }
 
 fn name(device: &IMMDevice) -> Result<String, DriverError> {
+    friendly_name(&properties(device)?)
+}
+
+fn properties(device: &IMMDevice) -> Result<IPropertyStore, DriverError> {
     // SAFETY: COM is initialised on the calling thread.
-    unsafe {
-        let store =
-            device.OpenPropertyStore(STGM_READ).map_err(failed("open a device's properties"))?;
-        let name =
-            store.GetValue(&PKEY_Device_FriendlyName).map_err(failed("read a device name"))?;
-        Ok(name.to_string())
-    }
+    unsafe { device.OpenPropertyStore(STGM_READ) }.map_err(failed("open a device's properties"))
+}
+
+fn friendly_name(store: &IPropertyStore) -> Result<String, DriverError> {
+    // SAFETY: COM is initialised on the calling thread.
+    let name = unsafe { store.GetValue(&PKEY_Device_FriendlyName) }
+        .map_err(failed("read a device name"))?;
+    Ok(name.to_string())
+}
+
+fn transport(store: &IPropertyStore) -> Transport {
+    // SAFETY: COM is initialised on the calling thread.
+    let read = |key| unsafe { store.GetValue(key) }.ok().filter(|value| !value.is_empty());
+    let form_factor =
+        read(&PKEY_AudioEndpoint_FormFactor).and_then(|value| u32::try_from(&value).ok());
+    let enumerator = read(&PKEY_Device_EnumeratorName).map(|value| value.to_string());
+    endpoint_transport(form_factor, enumerator.as_deref())
 }
 
 fn failed(doing: &'static str) -> impl FnOnce(windows::core::Error) -> DriverError {

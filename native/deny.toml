@@ -31,6 +31,10 @@ multiple-versions = "allow"
 wildcards = "deny"
 # The workspace's own crates depend on each other by path, which reads as a wildcard
 allow-wildcard-paths = true
+# devices names windows-core for the `implement` macro, whose traits must be the ones `windows`
+# implements. Two versions build on Linux and break the Windows build, so a bump to either crate
+# fails here until both move together.
+deny = [{ crate = "windows-core", deny-multiple-versions = true }]
 
 [sources]
 unknown-registry = "deny"

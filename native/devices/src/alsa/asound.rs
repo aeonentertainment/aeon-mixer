@@ -21,10 +21,22 @@ pub struct SwParams {
     _opaque: [u8; 0],
 }
 
+#[repr(C)]
+pub struct Ctl {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+pub struct CardInfo {
+    _opaque: [u8; 0],
+}
+
 // From alsa/pcm.h
 pub const STREAM_PLAYBACK: c_int = 0;
 pub const STREAM_CAPTURE: c_int = 1;
 pub const ACCESS_RW_INTERLEAVED: c_int = 3;
+// From alsa/control.h
+pub const CTL_READONLY: c_int = 4;
 
 macro_rules! asound {
     ($(fn $name:ident($($ty:ty),* $(,)?) $(-> $ret:ty)?;)*) => {
@@ -52,7 +64,7 @@ macro_rules! asound {
                             return Err(dl_error());
                         }
                         // SAFETY: the symbol is the libasound function of this name, whose C
-                        // signature in alsa/pcm.h is the one this field declares.
+                        // signature in alsa's headers is the one this field declares.
                         unsafe {
                             std::mem::transmute::<*mut c_void, unsafe extern "C" fn($($ty),*) $(-> $ret)?>(symbol)
                         }
@@ -98,6 +110,12 @@ asound! {
     fn snd_device_name_hint(c_int, *const c_char, *mut *mut *mut c_void) -> c_int;
     fn snd_device_name_get_hint(*const c_void, *const c_char) -> *mut c_char;
     fn snd_device_name_free_hint(*mut *mut c_void) -> c_int;
+    fn snd_ctl_open(*mut *mut Ctl, *const c_char, c_int) -> c_int;
+    fn snd_ctl_close(*mut Ctl) -> c_int;
+    fn snd_ctl_card_info_malloc(*mut *mut CardInfo) -> c_int;
+    fn snd_ctl_card_info_free(*mut CardInfo);
+    fn snd_ctl_card_info(*mut Ctl, *mut CardInfo) -> c_int;
+    fn snd_ctl_card_info_get_driver(*const CardInfo) -> *const c_char;
 }
 
 impl Asound {

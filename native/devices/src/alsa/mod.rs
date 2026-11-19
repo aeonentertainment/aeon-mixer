@@ -5,7 +5,7 @@ mod driver;
 mod format;
 mod pcm;
 
-use std::ffi::{CStr, c_void};
+use std::ffi::{CStr, CString, c_void};
 use std::ptr::null_mut;
 
 use engine::driver::DriverError;
@@ -13,8 +13,9 @@ use engine::driver::DriverError;
 pub use capture::AlsaCapture;
 pub use driver::AlsaDriver;
 
+use crate::alsa_transport::alsa_transport;
 use crate::output::Output;
-use asound::{Asound, asound};
+use asound::{Asound, CTL_READONLY, asound};
 
 /// The hardware playback devices, `hw:CARD=...,DEV=...`. The first is the default: card 0's
 /// first device, which is where ALSA's own default points on a box with no sound server.
@@ -49,8 +50,9 @@ fn devices(other_way: &str) -> Result<Vec<Output>, DriverError> {
         if let Some(id) = name.filter(|name| name.starts_with("hw:"))
             && direction.as_deref() != Some(other_way)
         {
+            let transport = alsa_transport(card_driver(lib, &id).as_deref(), pcm(&description));
             let name = label(&id, &description);
-            outputs.push(Output { is_default: outputs.is_empty(), id, name });
+            outputs.push(Output { is_default: outputs.is_empty(), id, name, transport });
         }
         // SAFETY: still inside the array: this entry was not the terminator.
         at = unsafe { at.add(1) };
@@ -74,6 +76,37 @@ fn default_output() -> Result<String, DriverError> {
         .find(|output| output.is_default)
         .map(|output| output.id)
         .ok_or(DriverError::NoDevice)
+}
+
+// The driver string the kernel gave `id`'s card, read through the card's control device: a query
+// that opens no pcm.
+fn card_driver(lib: &Asound, id: &str) -> Option<String> {
+    let card = CString::new(id.split_once(',')?.0).ok()?;
+    let mut ctl = null_mut();
+    // SAFETY: `ctl` and `info` are opened and allocated here and freed before return, and the
+    // driver string is copied out of `info` before it is freed.
+    unsafe {
+        if (lib.snd_ctl_open)(&mut ctl, card.as_ptr(), CTL_READONLY) < 0 {
+            return None;
+        }
+        let mut info = null_mut();
+        let mut driver = None;
+        if (lib.snd_ctl_card_info_malloc)(&mut info) >= 0 {
+            if (lib.snd_ctl_card_info)(ctl, info) >= 0 {
+                let name = CStr::from_ptr((lib.snd_ctl_card_info_get_driver)(info));
+                driver = Some(name.to_string_lossy().into_owned());
+            }
+            (lib.snd_ctl_card_info_free)(info);
+        }
+        (lib.snd_ctl_close)(ctl);
+        driver
+    }
+}
+
+// The pcm's name, from ALSA's "card, pcm name" description.
+fn pcm(description: &str) -> &str {
+    let line = description.lines().next().unwrap_or_default();
+    line.rsplit_once(", ").map_or(line, |(_, pcm)| pcm)
 }
 
 // ALSA describes a device as "card, pcm name", and many cards leave the analog pcm unnamed.

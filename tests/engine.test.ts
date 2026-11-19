@@ -143,6 +143,7 @@ test("the OS's outputs and inputs list with no engine open", async () => {
         id: expect.any(String),
         name: expect.any(String),
         isDefault: expect.any(Boolean),
+        transport: expect.any(String),
       });
     }
     expect(devices.filter((device) => device.isDefault).length).toBeLessThanOrEqual(1);
