@@ -111,14 +111,15 @@ What the engine reports so the rest of the device can follow:
   that frame leaving the speaker; and `speedFactor`.
 - A move to another output (section 5) changes the output latency, and holds a playing backing
   for the gap. `outputChanged` carries the new `latencyMs`, the gap, and `heldMs`, how long the
-  move held the playhead: the gap when the backing was playing or fading to a pause as the old
-  stream stopped, 0 when it was paused, not started, ended or absent. A host that keeps a lyric
-  clock from `startedAt` moves it by `heldMs` and the change in latency, or re-anchors it on the
-  next `position` event. A pause or resume still in flight at the move counts on the side of it
-  where the audio thread took it, so the host keeps no paused state of its own to tell whether a
-  gap counts. The guide clock moves by the new latency itself: from the first block after the new
-  stream's `start` returns, every pitch reading and every note edge the corrector follows is on the
-  new output's clock.
+  move held the playhead: the gap when the backing was playing or fading out to a pause or a seek
+  as the old stream stopped, 0 when it was paused, not started, ended or absent. The gap starts
+  no later than the old stream's last callback, so after a stall it counts the stall (section 8.3).
+  A host that keeps a lyric clock from `startedAt` moves it by `heldMs` and the change in
+  latency, or re-anchors it on the next `position` event. A pause or resume still in flight at
+  the move counts on the side of it where the audio thread took it, so the host keeps no paused
+  state of its own to tell whether a gap counts. The guide clock moves by the new latency itself:
+  from the first block after the new stream's `start` returns, every pitch reading and every note
+  edge the corrector follows is on the new output's clock.
 - Every ack carries the backing position at the block the command landed. `seek`, `resume` and
   `start` return it. A `position` event also fires once a second.
 - When a live key shifter is engaged, its latency is subtracted from the reported position, so
@@ -353,7 +354,8 @@ pub struct TimerDriver;
 /// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
 /// test's render. `moved` is called between streams, never on the audio thread: the next block
 /// starts every slot's stream again and fades in over 5 ms. It returns whether the live graph's
-/// backing was playing or fading to a pause as the stream stopped, so the gap held its playhead.
+/// backing was playing or fading out to a pause or a seek as the stream stopped, so the gap held
+/// its playhead.
 pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self) -> bool; fn callback_frames(&self) -> Arc<AtomicU32>; fn output_latency_frames(&self) -> Arc<AtomicU32>; }   // where the follower writes each stream's StreamInfo.period_frames and StreamInfo.output_latency_frames as its start returns
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
@@ -576,8 +578,8 @@ export interface Engine {
   on(event: "fault", listener: (error: Error) => void): () => void;
   /** Whenever `output` changes: after every move, the fallback from a refused output included,
    * with `gapMs` how long the room heard nothing and `heldMs` how long that held the backing's
-   * playhead, `gapMs` when it was playing or fading to a pause and 0 when not (section 3); both 0
-   * when a refusal clears alone. */
+   * playhead, `gapMs` when it was playing or fading out to a pause or a seek and 0 when not
+   * (section 3); both 0 when a refusal clears alone. */
   on(
     event: "outputChanged",
     listener: (output: OutputInfo, gapMs: number, heldMs: number) => void,
@@ -872,8 +874,19 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   stream with it on the same `Stats`. What `moved` returns sets the move's `held`: the gap when
   it held a playhead, zero when not. As every stream's `start` returns, the first one's too, the
   follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell and its
-  `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
-  to the new stream running.
+  `StreamInfo.output_latency_frames` into its `output_latency_frames` cell.
+- The gap runs from the earlier of the wake and the old stream's last callback to the new stream
+  running. The engine renders nothing after that callback, so the room hears silence from there
+  and the playhead stands still. For a default change the two are within a period of each other.
+  For a stall the callback comes first by the stall's 200 ms or more, and for a loss by however
+  late the OS reports it. A callback counts only from the old stream's start, which ended the
+  last move's gap, so a stream that never called back counts from its start and no stretch of
+  silence lands in two gaps. Nothing else bounds it: a stream with no callback rendered nothing,
+  so a move after a 6.4 s stall reports 6.4 s and more, because the room heard that much
+  silence. Every backend the follower runs marks its callbacks with `Stats::callback`, so
+  `Stats::last_callback` and the wake are read from one clock, `std::time::Instant`, the one the
+  stall wait reads. Whether a gap counts time the machine slept is that clock's call on each OS.
+  The second the follower waits for an output before it gives up still counts from the wake.
 - A move whose output will not start starts the output it left again, if the OS still lists it,
   and failing that the default, which only a pinned engine has not tried yet, and sets
   `Playing.refused`. No output is tried twice in one attempt. The fallback counts as a move:
