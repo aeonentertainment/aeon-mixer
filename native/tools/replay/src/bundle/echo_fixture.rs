@@ -27,8 +27,9 @@ const SINGS_TO: usize = 27 * SECOND / 2;
 /// A howl at 1.2 kHz in the room after the singer: from -40 dBFS it grows 25 dB a second for
 /// 0.45 s, as a loop 2 dB over unity on an 80 ms trip does, then holds until 15.5 s. The guard
 /// catches it once, as it grows; held, it grows no further and is not caught again. It comes last
-/// because a tone in the master drives the canceller's filter off the room, and the canceller's
-/// numbers are of the room.
+/// because it is sound at the mic, not echo, and the canceller's removal and the slot's levels are
+/// medians over the song: placed mid-song, it and the singer after it would fill more than half the
+/// song, and those numbers would read them instead of the room.
 const HOWLS_FROM: usize = 138 * SECOND / 10;
 const HOWL_GROWS: usize = 45 * SECOND / 100;
 const HOWL_ENDS: usize = 31 * SECOND / 2;

@@ -109,16 +109,16 @@ delay have none. Slot 0's correction runs at the profile's strength, 0.6, so 22 
 are left after correction; at 0.3, 34 are, and nothing else moves past its tolerance.
 
 The echo canceller and the howl guard are off in the duet. `fixtures/bundles/echo` holds their
-numbers instead: a 16 s song on one house mic in a room 30 ms away and 10 dB down, with both on.
-The room plays the mic back whatever the speakers play: the backing, pink noise from
-`fixtures/stems`, and the slot itself, as the master carried it. The writer builds each of the
-mic's packets from the master the engine has rendered by then, so the room hears the slot's ducks
-as well. The room plays alone for 10 s, a synthetic singer sings for 3.5 s, and then a howl at
-1.2 kHz grows from -40 dBFS at 25 dB a second for 0.45 s and holds until 15.5 s. The howl comes
-last because a tone in the master drives the canceller's filter off the room. It is an `l16` slot
-because a phone's Opus at 32 kb/s fills noise in where the backing's waveform was. Through a
-phone, the canceller took out at most 5 dB, and its bleed read from -8.7 to -12.3 dB as the delay
-moved.
+numbers instead: a 16 s song on one house mic in a room 30 ms away and 10 dB down, with both on. The
+room plays the mic back whatever the speakers play: the backing, pink noise from `fixtures/stems`,
+and the slot itself, as the master carried it. The writer builds each of the mic's packets from the
+master the engine has rendered by then, so the room hears the slot's ducks as well. The room plays
+alone for 10 s, a synthetic singer sings for 3.5 s, and then a howl at 1.2 kHz grows from -40 dBFS
+at 25 dB a second for 0.45 s and holds until 15.5 s. The howl comes last because it is sound at the
+mic, not echo, and the removal and the slot's levels are medians over the song: mid-song, it and the
+singer after it would fill more than half of it. It is an `l16` slot because a phone's Opus at 32
+kb/s fills noise in where the backing's waveform was. Through a phone, the canceller took out at
+most 5 dB, and its bleed read from -8.7 to -12.3 dB as the delay moved.
 
 The guard catches the howl once and never the singer: `howlCatches` is 1 at every playout delay
 from 10 to 60 ms, the same from run to run, and its tolerance is 0. The bundle is exact only at its
