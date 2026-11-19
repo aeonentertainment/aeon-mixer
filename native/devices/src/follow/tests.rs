@@ -526,6 +526,58 @@ fn a_stream_that_stops_calling_back_reopens_and_waits_longer_each_time_it_stays_
     assert!(reopened < 4 * STALL, "reopened {reopened:?} after the callback, not 8 stalls on");
 }
 
+/// A stalled stream fell silent at its last callback, a stall or more before the follower woke,
+/// and the playhead stood still from there, so a host moving its lyric clock by the hold needs
+/// all of it. A reopened stream that never calls back fell silent at its start, where the last
+/// gap ended, so no stretch of silence is in two gaps.
+#[test]
+fn a_stall_moves_gap_and_hold_from_where_the_room_went_silent() {
+    let rig = Rig::with(&[("built-in", true)], None, false, STALL);
+    let current = rig.follower.as_ref().expect("following").current();
+    rig.expect(&[started("built-in")]);
+    rig.settle();
+    rig.fake.pump(1);
+    let last = rig.stats.last_callback().expect("it called back");
+
+    rig.expect(&[stopped("built-in"), started("built-in")]);
+    rig.settle();
+    let (first, read) = (current.get(), Instant::now());
+    let reopened = rig.fake.room().starts[1];
+    assert_eq!(first.moves, 1);
+    assert!((reopened - last..=read - last).contains(&first.gap), "{:?}", first.gap);
+    assert_eq!(first.held, first.gap, "the hold starts at the callback too");
+
+    rig.expect(&[stopped("built-in"), started("built-in")]);
+    rig.settle();
+    let second = current.get();
+    let starts = rig.fake.room().starts.clone();
+    assert_eq!(second.moves, 2);
+    let silent = starts[2] - read..=Instant::now() - starts[1];
+    assert!(silent.contains(&second.gap), "{:?} from its start", second.gap);
+    assert_eq!(second.held, second.gap);
+}
+
+/// A stream on a default change calls back every period up to the change, so its gap runs from
+/// no earlier than that callback and no later than the change: the gap from the wake, within a
+/// period.
+#[test]
+fn a_default_changes_gap_runs_from_the_change() {
+    let rig = Rig::new(&[("hdmi", true), ("built-in", false)], None);
+    rig.expect(&[started("hdmi")]);
+    rig.settle();
+    rig.fake.pump(1);
+    let last = rig.stats.last_callback().expect("it called back");
+    let changed = Instant::now();
+
+    rig.fake.offer(&[("hdmi", false), ("built-in", true)]);
+    rig.expect(&[stopped("hdmi"), started("built-in")]);
+    rig.settle();
+    let (gap, held) = rig.gap();
+    let started = rig.fake.room().starts[1];
+    assert!((started - changed..=Instant::now() - last).contains(&gap), "{gap:?}");
+    assert_eq!(held, gap);
+}
+
 #[test]
 fn a_list_that_fails_to_read_moves_only_a_stream_that_lost_its_device() {
     let rig = Rig::new(&[("usb", true)], None);
