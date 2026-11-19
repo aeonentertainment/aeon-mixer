@@ -983,15 +983,19 @@ should reach that slot.
   15 ms. Every half second the buffer notes the slack of the half second's latest and earliest
   packets against their due times. Once 20 notes, ten seconds, leave at least a block of room,
   the anchor moves earlier, once, until the latest of them would have a millisecond and a quarter
-  of the spread over the block to spare, and never under 3.67 ms: a block a packet can wait to be
-  drained, and a millisecond. After that fall, three late notes out of the last 20 move it later
-  to cover them, at most back to where it opened. A move waits for the slot to be under -30 dBFS
-  for 21 ms, happens at the head of what waits to play, drops only samples that are quiet too, and
-  counts as a resync. The echo moves by what the move drops or delays, but the new delay also
-  takes up the slack the stream had drifted into, so the part of the new delay the echo did not
-  move by is a splice in the source's `delay()`, and the latency and splices together move by
-  what the echo did. A delay means how long the stream's earliest packets wait, and
-  `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
+  of the spread over the block to spare. After that fall, three late notes out of the last 20 move
+  it later to cover them. No move leaves a delay under 3.67 ms, a block a packet can wait to be
+  drained and a millisecond, nor over 15 ms, the delay it opened at, with no exception: a fall goes
+  at least to 15 ms even when some of what it saw is then late, and a rise stops there. Before its
+  first move a stream's earliest packets can wait longer, since its first packet anchors it: 15 ms
+  plus how late that packet came, and up to a block for the drain. A pinned stream keeps that for
+  good; a chosen one gives it up at the fall. A move waits for the slot
+  to be under -30 dBFS for 21 ms, happens at the head of what waits to play, drops only samples
+  that are quiet too, and counts as a resync. The echo moves by what the move drops or delays, but
+  the new delay also takes up the slack the stream had drifted into, so the part of the new delay
+  the echo did not move by is a splice in the source's `delay()`, and the latency and splices
+  together move by what the echo did. A delay means how long the stream's earliest packets wait,
+  and `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
   reasons and the numbers.
 - Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
   last second's packets arrived against their due times. A step is a frame, or as many whole
@@ -1138,8 +1142,8 @@ than the frame it missed; a stream that pauses for two seconds resumes without a
 pause under a second with its sequence numbers contiguous loses nothing and every packet after it
 plays at the stream's delay; a slot left to choose falls to the floor on a clean link on every
 frame size, stays exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a
-quiet moment, and loses at most 0.1 percent more of its packets to lateness than the same song at
-the opening delay.
+quiet moment, and, when its first packet came on time, loses at most 0.1 percent more of its
+packets to lateness than the same song at the opening delay.
 
 ### 8.5 Backing: `engine/src/backing/`
 
