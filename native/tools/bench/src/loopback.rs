@@ -20,6 +20,8 @@ use measure_latency::physical::Physical;
 use measure_latency::programme::Programme;
 use rtrb::RingBuffer;
 
+use crate::cli::LoopbackArgs;
+use crate::result;
 use crate::round_trip;
 
 /// Decision 0008's budget for the mic path, mouth to speaker, in ms.
@@ -143,21 +145,37 @@ pub fn loopback(
     // The output opens first, as a host's engine is open before a mixer makes a capture slot, so
     // the input and the slot are set up for the callback the output was granted, not the one asked
     // for. The programme waits for the slot, and its opening drops what came before it
-    let running = output.start(render).map_err(|e| format!("the output would not start: {e}"))?;
+    let running = output.start(render).map_err(|e| {
+        format!(
+            "the output would not start ({e}): check --output against the ids `measure-latency \
+             list` prints, and that nothing else holds that output on its own"
+        )
+    })?;
     let info = running.info;
     let capturing = input(input_period_for(info.period_frames))
         .start(Box::new(move |captured| {
             producer.push(captured.samples);
         }))
-        .map_err(|e| format!("the input would not start: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "the input would not start ({e}): check --input against the ids `measure-latency \
+                 list` prints, and on macOS that this terminal may use the microphone"
+            )
+        })?;
     let input_info = capturing.info;
     let hardware = input_info.input_latency_frames.unwrap_or(0);
-    let voice = voice
-        .for_input(input_info.period_frames, hardware, info.period_frames)
-        .map_err(|reason| format!("the input cannot feed a capture slot: {reason}"))?;
+    let voice = voice.for_input(input_info.period_frames, hardware, info.period_frames).map_err(
+        |reason| {
+            format!(
+                "the input cannot play through a house mic's slot ({reason}): try another --period"
+            )
+        },
+    )?;
     let graph = Box::new(Graph::new(vec![Slot::new(Box::new(voice))]));
     if controls.commands.push(Command::Swap { id: 1, graph }).is_err() {
-        return Err("a new command ring had no room for the slot".into());
+        return Err(
+            "a new command ring had no room for the slot, which is a bug in the bench".into()
+        );
     }
     joined.store(true, Release);
 
@@ -188,24 +206,46 @@ pub fn loopback(
         let (out, into) = (output_stats.report(), input_stats.report());
         // Whatever went wrong before the programme's end refuses the run, whichever wake sees it
         match waited {
-            _ if faulted => break Some("the engine faulted".to_owned()),
-            _ if out.lost || into.lost => break Some("a device went away".to_owned()),
-            _ if out.failed || into.failed => break Some("a stream failed".to_owned()),
+            _ if faulted => {
+                break Some(
+                    "the engine faulted, which is a bug in the mixer: rerun, and report it if it \
+                     happens again"
+                        .to_owned(),
+                );
+            }
+            _ if out.lost || into.lost => {
+                break Some(
+                    "a device went away: plug it back in, or pick another with --output or --input"
+                        .to_owned(),
+                );
+            }
+            _ if out.failed || into.failed => {
+                break Some(
+                    "a stream failed: rerun, and pick another device if it fails again".to_owned(),
+                );
+            }
             Ok(Finished::NeverPlayed) => {
                 break Some(format!(
-                    "the input never delivered enough for the slot to play it in the {} s after it \
-                 joined the graph",
+                    "the input delivered no sound in the {} s after the house mic's slot opened: \
+                     check --input and --input-channel, and on macOS that this terminal may use \
+                     the microphone",
                     MOST_WAITED / RATE as usize
                 ));
             }
             Ok(Finished::Programme { stops: 0 }) => break None,
             Ok(Finished::Programme { stops }) => {
                 break Some(format!(
-                    "the capture slot judged its input stopped {stops} times, so a chirp may have \
-                     gone unheard"
+                    "the input stopped delivering sound {stops} times while the chirps played: \
+                     check the cable or the mic's connection, and that nothing else is using the \
+                     input"
                 ));
             }
-            Err(RecvTimeoutError::Disconnected) => break Some("the output stopped".to_owned()),
+            Err(RecvTimeoutError::Disconnected) => {
+                break Some(
+                    "the output stopped: rerun, and pick another --output if it stops again"
+                        .to_owned(),
+                );
+            }
             Err(RecvTimeoutError::Timeout) => second += 1,
         }
     };
@@ -232,9 +272,10 @@ pub fn loopback(
     println!("measured");
     println!("  round trip   {round_trip:>8.2} ms  median of {} chirps", reading.gaps_ms.len());
     println!(
-        "               another opening can read up to {period_ms:.2} ms away, one input period: \
-         where the input's deliveries\n               fall against the output's wakes picks the \
-         point, so compare two runs with a tolerance of {period_ms:.2} ms"
+        "               another opening can read up to one input period away, {period_ms:.2} ms \
+         here: where the input's\n               deliveries fall against the output's wakes picks \
+         the point, so compare two runs with a\n               tolerance of one period, 2.67 ms at \
+         the default period and 1.33 ms at --period 64"
     );
     println!("  spread       {spread:>8.2} ms  how far the chirps disagree");
     println!(
@@ -265,4 +306,25 @@ pub fn loopback(
         slot_ms,
         period_ms,
     })
+}
+
+/// `bench loopback`: reads the baseline `args` names, runs the loopback on `output` and the input
+/// `input` opens, and files its numbers as a scorecard under `loopback`. Ok(false) when a number
+/// moved past what the baseline allows; a refusal is its reason.
+pub fn command(
+    args: &LoopbackArgs,
+    output: Box<dyn Driver + Send>,
+    output_stats: Arc<Stats>,
+    input: impl FnOnce(u32) -> Box<dyn Capture + Send>,
+    input_stats: Arc<Stats>,
+) -> Result<bool, String> {
+    let baseline = args.baseline.as_deref().map(scorecard::card::Scorecard::read).transpose()?;
+    let measured = loopback(&args.loopback, output, output_stats, input, input_stats)?;
+    let numbers = [
+        ("loopback.roundTripMs", measured.round_trip_ms),
+        ("loopback.spreadMs", measured.spread_ms),
+        ("loopback.gainDb", measured.gain_db),
+        ("loopback.snrDb", measured.snr_db),
+    ];
+    result::settle("loopback", numbers, baseline.as_ref(), args.write.as_deref())
 }

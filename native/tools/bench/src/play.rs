@@ -16,11 +16,11 @@ use replay::bundle::song::{Song, SongSlot};
 use replay::bundle::{Bundle, report};
 use rtrb::RingBuffer;
 use scorecard::card::Scorecard;
-use scorecard::movement;
 use serde_json::{Value, json};
 
 use crate::cli::{Args, Clock};
 use crate::render_times::RenderTimes;
+use crate::result;
 use crate::run_bundle::{self, Run};
 
 /// Plays the bundle `args` names on `driver`, whose stream records into `stats`, and prints what
@@ -31,7 +31,9 @@ pub fn play(
     driver: Box<dyn Driver + Send>,
     stats: Arc<Stats>,
 ) -> Result<bool, String> {
-    let (bundle, profile, stems) = report::load(&args.bundle, &args.replay)?;
+    let (bundle, profile, stems) = report::load(&args.bundle, &args.replay).map_err(|e| {
+        format!("{} is not a session bundle bench can play: {e}", args.bundle.display())
+    })?;
     let baseline = args.baseline.as_deref().map(Scorecard::read).transpose()?;
     if let Some(out) = args.out.as_deref().filter(|out| out.exists()) {
         return Err(format!("{} already exists; --out writes a new bundle", out.display()));
@@ -184,20 +186,12 @@ pub fn run(
     println!("verdict  {verdict}");
 
     let name = args.bundle.file_name().map_or("bundle".into(), |n| n.to_string_lossy().to_string());
-    let mut numbers = std::collections::BTreeMap::new();
-    numbers.insert("output.underruns".into(), underruns as f64);
-    numbers.insert("output.renderP99Ms".into(), hundredths(ms(p99)));
-    numbers.insert("output.renderMaxMs".into(), hundredths(ms(longest)));
-    let mut card = Scorecard::new();
-    card.add(&name, numbers, baseline.as_ref());
-    if let Some(path) = &args.write {
-        card.write(path)?;
-        println!("wrote    this result to {}", path.display());
-    }
-    let held = baseline.is_none_or(|baseline| {
-        println!("\nagainst the baseline");
-        movement::report(&card, &baseline)
-    });
+    let numbers = [
+        ("output.underruns", underruns as f64),
+        ("output.renderP99Ms", ms(p99)),
+        ("output.renderMaxMs", ms(longest)),
+    ];
+    let held = result::settle(&name, numbers, baseline.as_ref(), args.write.as_deref())?;
     if let Some(out) = &args.out {
         let profile_file = args.replay.profile.clone().unwrap_or(args.bundle.join("profile.json"));
         let profile_text = std::fs::read_to_string(&profile_file)
@@ -262,8 +256,4 @@ pub fn block_budget(period_frames: u32) -> Duration {
 
 fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
-}
-
-fn hundredths(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
 }

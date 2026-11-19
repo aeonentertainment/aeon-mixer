@@ -18,12 +18,13 @@ use engine::slot::Slot;
 use engine::slot::source::Source;
 use replay::bundle::report::{self, Options as Replay};
 use replay::bundle::song::Song;
+use scorecard::card::Scorecard;
 use serde_json::{Value, json};
 
 use measure_latency::physical::Physical;
 
-use crate::cli::{Args, Clock};
-use crate::loopback::{Loopback, Measured, loopback};
+use crate::cli::{Args, Clock, LoopbackArgs};
+use crate::loopback::{Loopback, Measured, command, loopback};
 use crate::play::{block_budget, play, run};
 
 /// The timer clock's time, made up: each wait returns at once at its deadline, and every
@@ -250,6 +251,8 @@ struct Behaves {
     /// A quiet noise floor under what it hears, as a microphone has; without it the loop is
     /// lossless, an exact copy of the output, as S/PDIF, ADAT or a virtual cable is.
     hiss: bool,
+    /// Delivers digital silence on time, as a microphone macOS has refused this terminal does.
+    mute: bool,
 }
 
 /// An input that delivers from its opening on, losslessly.
@@ -258,6 +261,7 @@ const LOSSLESS: Behaves = Behaves {
     stops_after_a_chirp: None,
     late_wake_after_a_chirp: None,
     hiss: false,
+    mute: false,
 };
 
 /// About -86 dBFS RMS of white noise: deterministic, so every run hears the same floor.
@@ -297,6 +301,7 @@ impl Driver for FakeLoop {
                 // What reached the cable, by the frame it left the output: a ring, since only the
                 // cable's length and a wake or two are ever still to deliver
                 let mut tape = vec![0.0f32; TAPE];
+                let silence = vec![0.0f32; TAPE];
                 let (mut played, mut delivered, mut noise) = (0usize, 0, 1u64);
                 let (mut opened, mut chirped, mut woke_late) = (None, None, false);
                 while !stop.load(Ordering::Acquire) {
@@ -341,7 +346,11 @@ impl Driver for FakeLoop {
                             while from < reached {
                                 let start = from % TAPE;
                                 let end = (start + reached - from).min(TAPE);
-                                sink(Captured { samples: &tape[start..end], at: Instant::now() });
+                                let samples = if input.mute { &silence } else { &tape };
+                                sink(Captured {
+                                    samples: &samples[start..end],
+                                    at: Instant::now(),
+                                });
                                 from += end - start;
                             }
                         }
@@ -438,7 +447,7 @@ fn every_way_a_loopback_can_begin_reads_the_same_round_trip_or_is_refused_with_t
     // Nothing ever delivered: refused for that, once the slot has waited 5 s in the graph
     let never = looped_into(300, BLOCK, Behaves { starts_after: None, ..LOSSLESS });
     let error = never.err().expect("an input that never delivers is refused");
-    assert!(error.contains("the input never delivered enough for the slot to play it"), "{error}");
+    assert!(error.contains("the input delivered no sound"), "{error}");
     // A delivery a second after the first chirp that misses its pull by 16 frames, as the phase
     // of an input on its own clock can: the slot rides it out as a phase short, no stop, and it
     // measures, the delay's move under the spread check's bound
@@ -459,5 +468,68 @@ fn every_way_a_loopback_can_begin_reads_the_same_round_trip_or_is_refused_with_t
     // run says the input stopped, not that the rig is wrong
     let stops = Behaves { stops_after_a_chirp: Some(RATE as usize), ..LOSSLESS };
     let error = looped_into(300, BLOCK, stops).err().expect("an input that stops is refused");
-    assert!(error.contains("the capture slot judged its input stopped 1 times"), "{error}");
+    assert!(error.contains("the input stopped delivering sound 1 times"), "{error}");
+}
+
+/// `bench loopback` as a person runs it, through a fake cable `delay` frames long under an output
+/// granted `period` frames into an input that behaves as `input` says, writing its result to
+/// `write`.
+fn commanded(delay: usize, period: usize, input: Behaves, write: &Path) -> Result<bool, String> {
+    let sink = Arc::new(Mutex::new(None));
+    let (output_stats, input_stats) = (Arc::new(Stats::new()), Arc::new(Stats::new()));
+    let stats = Arc::clone(&output_stats);
+    let output = FakeLoop { delay, period, input, sink: Arc::clone(&sink), stats };
+    let args = LoopbackArgs {
+        loopback: Loopback { rig: Physical::Cable, level_db: -12.0 },
+        output: None,
+        input: None,
+        input_channel: 0,
+        period: period as u32,
+        baseline: None,
+        write: Some(write.to_owned()),
+    };
+    let opens = |period| -> Box<dyn Capture + Send> { Box::new(FakeInput { sink, period }) };
+    command(&args, Box::new(output), output_stats, opens, input_stats)
+}
+
+#[test]
+fn the_command_files_every_working_rig_and_refuses_each_broken_one_with_what_to_check() {
+    let file =
+        std::env::temp_dir().join(format!("aeon-bench-{}-loopback.json", std::process::id()));
+    let second = RATE as usize;
+    let works = [
+        ("a lossless loop", BLOCK, LOSSLESS),
+        ("a noisy loop", BLOCK, Behaves { hiss: true, ..LOSSLESS }),
+        (
+            "an input that opens late",
+            BLOCK,
+            Behaves { starts_after: Some(second * 6 / 5), ..LOSSLESS },
+        ),
+        (
+            "a phase short",
+            BLOCK,
+            Behaves { late_wake_after_a_chirp: Some((second, 16)), ..LOSSLESS },
+        ),
+        ("a 480-frame grant", 480, LOSSLESS),
+    ];
+    for (rig, period, input) in works {
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(commanded(300, period, input, &file), Ok(true), "{rig} works");
+        let card = Scorecard::read(&file).unwrap();
+        assert_eq!(card.bundles["loopback"].len(), 4, "{rig}: its four numbers are filed");
+    }
+    let broken = [
+        (Behaves { starts_after: None, ..LOSSLESS }, "check --input and --input-channel"),
+        (Behaves { mute: true, ..LOSSLESS }, "let this terminal use the microphone"),
+        (Behaves { stops_after_a_chirp: Some(second), ..LOSSLESS }, "check the cable or the mic's"),
+        (
+            Behaves { late_wake_after_a_chirp: Some((second, BLOCK)), ..LOSSLESS },
+            "rerun with nothing else playing or recording",
+        ),
+    ];
+    for (input, says) in broken {
+        let error = commanded(300, BLOCK, input, &file).expect_err("a broken rig is refused");
+        assert!(error.contains(says) && error.ends_with("The run measured nothing"), "{error}");
+    }
+    let _ = std::fs::remove_file(&file);
 }
