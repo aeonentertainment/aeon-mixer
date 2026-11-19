@@ -16,6 +16,7 @@ pub mod l16;
 pub mod opus;
 pub mod packet;
 pub mod push;
+pub mod slack_notes;
 pub mod source;
 pub mod stats;
 

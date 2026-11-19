@@ -74,8 +74,10 @@ fn a_longer_playout_delay_moves_that_number_and_no_other_beyond_tolerance() {
         failing(&movements),
         ["duet slot0.playoutDelayMs", "duet slot1.playoutDelayMs", "echo slot0.playoutDelayMs"]
     );
+    // Each stream's earliest packets wait what they did, 15 ms longer
     for movement in movements.iter().filter(|m| m.fails()) {
-        assert!(matches!(movement.change, Change::Moved { now: 30.0, .. }), "{movement:?}");
+        let Change::Moved { baseline, now, .. } = movement.change else { panic!("{movement:?}") };
+        assert!((now - baseline - 15.0).abs() < 0.011, "{movement:?}");
     }
 }
 

@@ -10,6 +10,7 @@
 //! stream. The slot takes packets from one address, its sender, until that address has been quiet
 //! a second or `reset` releases it (decision 0028).
 //! A buffer made with `chosen` lets each stream move its own delay, as `DelayChooser` decides.
+//! Every stream measures its delay, what its earliest packets wait, in its `SlackNotes`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use super::delay_chooser::{self, DelayChooser, Move};
 use super::fifo::Fifo;
 use super::opus::{MAX_FRAME, MIN_FRAME};
 use super::packet::Packet;
+use super::slack_notes::SlackNotes;
 use super::stats::{SharedStats, SlotStats};
 use crate::block::{BLOCK, RATE};
 
@@ -50,8 +52,10 @@ pub struct JitterBuffer {
     codec: Codec,
     /// The delay every stream opens at.
     opening: i64,
-    /// The delay the stream has now.
-    playout_delay: i64,
+    /// The slack the anchor was placed at: the opening delay until a move, the move's delay after
+    /// it. Skew correction holds the stream there and the latency counts it, so the guide clock and
+    /// the echo canceller follow the anchor. The delay reported is what the notes measure.
+    anchor_slack: i64,
     /// Whether a stream moves its delay, or holds the one the host pinned.
     chooses: bool,
     store: Vec<Option<Packet>>,
@@ -100,6 +104,8 @@ struct Stream {
     /// RFC 3550 section 6.4.1: the last packet's transit time and the smoothed jitter.
     transit: Option<i64>,
     jitter: f32,
+    /// The slack of its packets, the delay it reports and the chooser moves from.
+    notes: SlackNotes,
     chooser: Option<DelayChooser>,
     /// The same stream held at the opening delay, for `late_at_opening`; none when this one is
     /// held already.
@@ -143,7 +149,7 @@ impl JitterBuffer {
         Self {
             codec,
             opening,
-            playout_delay: opening,
+            anchor_slack: opening,
             chooses,
             store: vec![None; STORE],
             fifo: Fifo::new(FIFO),
@@ -169,11 +175,12 @@ impl JitterBuffer {
     }
 
     /// How long ago the singer sang what `pull` hands over, as far as this end can know: the
-    /// sender gathers a frame before sending it, and the anchor plays it a playout delay after it
-    /// arrives. The Wi-Fi and the phone's own capture are the host's `guideOffsetMs`.
+    /// sender gathers a frame before sending it, and the anchor plays it the anchor's slack after
+    /// it arrives. Only a move of the anchor's slack moves it, never what the notes measure. The
+    /// Wi-Fi and the phone's own capture are the host's `guideOffsetMs`.
     pub fn latency_frames(&self) -> u32 {
         let frame = self.stream.as_ref().map_or(DEFAULT_FRAME, |stream| stream.frame);
-        u32::try_from(self.playout_delay + frame as i64).unwrap_or(u32::MAX)
+        u32::try_from(self.anchor_slack + frame as i64).unwrap_or(u32::MAX)
     }
 
     /// The frames the skew corrections have moved the stream by, later when positive, which move
@@ -200,7 +207,7 @@ impl JitterBuffer {
     /// sender, whose next packet re-anchors.
     pub fn restart(&mut self) {
         self.stream = None;
-        self.playout_delay = self.opening;
+        self.anchor_slack = self.opening;
         self.fifo.clear();
     }
 
@@ -224,9 +231,7 @@ impl JitterBuffer {
         if ahead < 0 || (packet.timestamp.wrapping_sub(stream.next_ts) as i32) < 0 {
             self.stats.late += 1;
             let slack = stream.due(packet.timestamp) - self.now;
-            if let Some(chooser) = &mut stream.chooser {
-                chooser.observe(slack);
-            }
+            stream.notes.observe(slack);
             stream.observe_held(slack, &mut self.stats);
             return;
         }
@@ -245,8 +250,10 @@ impl JitterBuffer {
         let end = now + out.len() as i64;
         if let Some(stream) = &mut self.stream {
             self.spliced +=
-                stream.correct_skew(now, self.playout_delay, self.opening, &mut self.stats);
-            let wanted = stream.chooser.as_mut().and_then(|chooser| chooser.tick(now));
+                stream.correct_skew(now, self.anchor_slack, self.opening, &mut self.stats);
+            let closed = stream.notes.tick(now);
+            let wanted =
+                stream.chooser.as_mut().and_then(|chooser| chooser.tick(closed, &stream.notes));
             if let Some(moved) = wanted
                 && stream.move_anchor(
                     moved,
@@ -259,10 +266,10 @@ impl JitterBuffer {
                 )
             {
                 // The echo moved by what was dropped or delayed. The new delay also takes up the
-                // slack the stream had drifted into, which the echo canceller has followed
-                // already, so that part is no move of the echo
-                self.spliced += moved.by - (moved.delay - self.playout_delay);
-                self.playout_delay = moved.delay;
+                // wait the anchor's slack had not counted, a late first packet's and drift's,
+                // which the echo canceller has followed already, so that part is no move of it
+                self.spliced += moved.by - (moved.delay - self.anchor_slack);
+                self.anchor_slack = moved.delay;
                 self.stats.resyncs += 1;
             }
             fill(
@@ -298,7 +305,8 @@ impl JitterBuffer {
         self.end_what_went_quiet();
         self.stats.jitter_ms =
             self.stream.as_ref().map_or(0.0, |stream| stream.jitter * 1000.0 / RATE as f32);
-        self.stats.playout_delay_ms = frames_to_ms(self.playout_delay);
+        let delay = self.stream.as_ref().and_then(|stream| stream.notes.delay());
+        self.stats.playout_delay_ms = frames_to_ms(delay.unwrap_or(self.anchor_slack));
         self.shared.publish(&self.stats);
     }
 
@@ -336,8 +344,8 @@ impl JitterBuffer {
         self.anchored = true;
         self.streams = self.streams.wrapping_add(1);
         self.fifo.clear();
-        self.playout_delay = self.opening;
-        let plays_at = self.now + self.playout_delay;
+        self.anchor_slack = self.opening;
+        let plays_at = self.now + self.anchor_slack;
         let mut stream = Stream {
             ssrc: packet.ssrc,
             anchor_ts: packet.timestamp,
@@ -350,13 +358,14 @@ impl JitterBuffer {
             skew: SkewWindow::new(self.now + SKEW_WINDOW),
             transit: None,
             jitter: 0.0,
-            chooser: self.chooses.then(|| DelayChooser::new(self.now)),
+            notes: SlackNotes::new(self.now),
+            chooser: self.chooses.then(DelayChooser::default),
             held: self
                 .chooses
                 .then(|| Held { offset: 0, skew: SkewWindow::new(self.now + SKEW_WINDOW) }),
         };
         stream.observe(self.now, plays_at);
-        stream.observe_held(self.playout_delay, &mut self.stats);
+        stream.observe_held(self.anchor_slack, &mut self.stats);
         self.store[usize::from(packet.seq) % STORE] = Some(*packet);
         self.stream = Some(stream);
     }
@@ -495,9 +504,7 @@ impl Stream {
             self.jitter += (difference - self.jitter) / 16.0;
         }
         self.transit = Some(-slack);
-        if let Some(chooser) = &mut self.chooser {
-            chooser.observe(slack);
-        }
+        self.notes.observe(slack);
     }
 
     /// A packet's slack against the held stream's anchor: counted when the held stream would
@@ -558,6 +565,7 @@ impl Stream {
         if let Some(held) = &mut self.held {
             held.offset -= moved.by;
         }
+        self.notes.shift(moved.by);
         if let Some(chooser) = &mut self.chooser {
             chooser.made(moved);
         }
@@ -569,7 +577,7 @@ impl Stream {
     fn correct_skew(
         &mut self,
         now: i64,
-        playout_delay: i64,
+        anchor_slack: i64,
         opening: i64,
         stats: &mut SlotStats,
     ) -> i64 {
@@ -578,7 +586,7 @@ impl Stream {
         }
         let window = std::mem::replace(&mut self.skew, SkewWindow::new(now + SKEW_WINDOW));
         let fallen = self.chooser.as_ref().is_some_and(DelayChooser::has_fallen);
-        let by = window.correction(playout_delay, self.frame as i64, fallen);
+        let by = window.correction(anchor_slack, self.frame as i64, fallen);
         if let Some(held) = &mut self.held {
             let window = std::mem::replace(&mut held.skew, SkewWindow::new(now + SKEW_WINDOW));
             held.offset += window.correction(opening, self.frame as i64, false) - by;
@@ -588,8 +596,9 @@ impl Stream {
         }
         self.anchor_out += by;
         stats.resyncs += 1;
+        self.notes.shift(by);
         if let Some(chooser) = &mut self.chooser {
-            chooser.shift(by);
+            chooser.shifted();
         }
         by
     }
@@ -930,5 +939,95 @@ mod tests {
         let stats = shared.read();
         assert!(stats.jitter_ms > 1.0 && stats.jitter_ms < 10.0, "{stats:?}");
         assert_eq!(stats.pushed, arrivals.len() as u32);
+    }
+
+    /// The block a packet is drained in: the one after it arrives, as `pull_direct` feeds it.
+    fn drained(arrival: &Arrival) -> i64 {
+        (arrival.at / BLOCK as i64 + 1) * BLOCK as i64
+    }
+
+    /// The first packets of a stream held up `late` frames, as a link that starts slow holds them.
+    fn first_held(mut arrivals: Vec<Arrival>, late: i64) -> Vec<Arrival> {
+        let released = arrivals[0].at + late;
+        arrivals.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+        arrivals
+    }
+
+    /// A 20 ms stream whose first packet came 7 ms late is anchored that much later, so every
+    /// packet after it waits longer than the opening delay. Pinned or chosen, before any move, the
+    /// delay reported is what its earliest packets wait, read off what came out: where the signal
+    /// came out, less where the codec alone puts it, is when each packet's first sample played,
+    /// and the delay is the most any packet waited from its drain to then. A stream whose first
+    /// packet came on time reports the opening delay.
+    #[test]
+    fn the_delay_reported_is_what_the_earliest_packets_wait() {
+        let signal = source(5 * RATE as usize);
+        let frame = 960;
+        let codec = || Codec::opus().unwrap();
+        let mut sender = OpusSender::new(frame, 0xD1A7);
+        let sent = sender.send_all(&signal, 0);
+        let mut decoder = codec();
+        let mut decoded = vec![0.0; signal.len()];
+        for (k, arrival) in sent.iter().enumerate() {
+            decoder.decode(arrival.packet.payload(), &mut decoded[k * frame..(k + 1) * frame]);
+        }
+        let lookahead = sender.lookahead as i64;
+        let codec_delay = compare(&signal, frame, &decoded, lookahead, 64).lag;
+        for late in [0, 336] {
+            let arrivals = first_held(sent.clone(), late);
+            for mut jitter in [JitterBuffer::new(DELAY, codec()), JitterBuffer::chosen(codec())] {
+                let out = pull_direct(&mut jitter, &arrivals, 5 * SECOND);
+                let fit = compare(&signal, frame, &out, anchor_of(&arrivals) + lookahead, 64);
+                let played = fit.lag - codec_delay;
+                let waited = arrivals
+                    .iter()
+                    .enumerate()
+                    .map(|(k, arrival)| (k * frame) as i64 + played - drained(arrival))
+                    .max()
+                    .unwrap();
+                let stats = jitter.stats();
+                let reported = (stats.playout_delay_ms * RATE as f32 / 1000.0).round() as i64;
+                assert_eq!(reported, waited, "{late} late: {fit:?} {stats:?}");
+                assert_eq!((stats.resyncs, stats.late), (0, 0), "{late} late: {stats:?}");
+                if late == 0 {
+                    assert_eq!(stats.playout_delay_ms, 15.0, "{stats:?}");
+                } else {
+                    assert!(reported >= i64::from(DELAY) + late, "{stats:?}");
+                }
+            }
+        }
+    }
+
+    /// A sender a tenth of a percent fast whose first packets came 20 ms late: the skew correction
+    /// moves the anchor a frame earlier once a second until the earliest packets are back near the
+    /// opening delay, then once in five seconds for the drift. Each move is a splice, and the latency the guide clock and the echo
+    /// canceller read stays the anchor's slack and a frame through every one, while the delay
+    /// reported follows the earliest packets. Were the latency to move with the notes as well, the
+    /// canceller would take each correction twice.
+    #[test]
+    fn a_skew_correction_moves_the_echo_and_not_the_latency() {
+        let signal = quantized(&source(20 * RATE as usize));
+        let arrivals = first_held(L16Sender::new(240, 24).send_all(&signal, 0, 1.001), 960);
+        let mut jitter = JitterBuffer::new(DELAY, Codec::L16);
+        let mut block = [0.0f32; BLOCK];
+        let mut next = arrivals.iter().peekable();
+        let (mut latencies, mut delays) = (Vec::new(), Vec::new());
+        for pumped in (0..20 * SECOND).step_by(BLOCK) {
+            while let Some(arrival) = next.next_if(|a| a.at < pumped) {
+                jitter.push(&arrival.packet);
+            }
+            jitter.pull(&mut block);
+            if pumped > anchor_of(&arrivals) {
+                latencies.push(jitter.latency_frames());
+                delays.push(jitter.stats().playout_delay_ms);
+            }
+        }
+        let stats = jitter.stats();
+        assert!(stats.resyncs >= 5, "{stats:?}");
+        let spliced = -240 * i64::from(stats.resyncs);
+        assert_eq!(jitter.spliced_frames(), spliced, "each correction, a splice: {stats:?}");
+        assert!(latencies.iter().all(|latency| *latency == DELAY + 240), "{latencies:?}");
+        let (most, last) = (delays.iter().copied().fold(0.0, f32::max), delays[delays.len() - 1]);
+        assert!(most >= 35.0 && last < 25.0, "the delay reported moved: {most} {last}");
     }
 }

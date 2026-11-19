@@ -21,7 +21,7 @@ it live. Per recorded slot:
 | --------------------- | --------------------------------------------------------------------------------------------- |
 | `late`                | packets that arrived after their samples fell due                                             |
 | `concealed`           | frames the decoder filled in                                                                  |
-| `playoutDelayMs`      | the jitter buffer's delay at the end of the song                                              |
+| `playoutDelayMs`      | what the stream's earliest packets wait at the end of the song                                |
 | `correctorDelayMs`    | how far the corrector held the voice, the mean over the blocks it held any                    |
 | `pitchErrorCents`     | the median distance from the guide note of each reading with one, at least 0.9 sure and 82 Hz |
 | `correctedErrorCents` | the same median after correction: where the corrected voice sat                               |
