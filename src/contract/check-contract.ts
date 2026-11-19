@@ -30,7 +30,7 @@ export interface ContractReport {
 export async function checkContract<E extends ContractEngine>(
   subject: ContractSubject<E>,
   options: ContractOptions<E> = {},
-): Promise<ContractReport> {
+) {
   const report: ContractReport = { broken: [], unchecked: [] };
   for (const { promise, check } of PROMISES) {
     // oxlint-disable-next-line no-await-in-loop -- one promise at a time, each on engines of its own
