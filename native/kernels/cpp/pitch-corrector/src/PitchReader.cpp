@@ -18,7 +18,7 @@ constexpr std::array<double, 3> kWindowSeconds = {512.0 / 48000, 1024.0 / 48000,
 constexpr float kPeriodsInWindow = 2.2f;
 /** A reading this sure is a voice to correct: YIN's dip under its threshold. */
 constexpr float kVoicedConfidence = 0.9f;
-/** E2, the bottom of a bass's range. A lower voice would need jumps that break the 15 ms budget, so it passes uncorrected. */
+/** E2, the bottom of a bass's range. A lower voice would need jumps past the 13.5 ms ceiling, so it passes uncorrected. */
 constexpr float kLowestCorrectedHz = 82.0f;
 /** How long a voice survives without a sure reading, so one dropped reading mid-note does not let go. */
 constexpr double kUnvoicedHoldSeconds = 0.030;

@@ -12,9 +12,10 @@ namespace aeon::dsp {
  * the target, scaled by the strength and eased in over the retune time, becomes a transposition
  * that PitchShifter applies. Once NoteCentre hears the voice swing around a held note, the ease
  * slows to the centre's 120 ms, so the note is corrected and the vibrato is left alone. The output
- * trails the input by 1.2 ms plus at most 1.125 periods of the voice. At strength 0 the output is
- * the input itself with no delay, and turning the strength up from or down to 0 crossfades over
- * 20 ms; the reader runs either way.
+ * trails the input by at most one period of the voice and 0.25 ms, 1.3 ms when shifting six
+ * semitones up, and a rest moves it down. At strength 0 the output is the input itself with no
+ * delay, and turning the strength up from or down to 0 crossfades over 20 ms; the reader runs
+ * either way.
  *
  * A host calls `process` from its audio thread and `setTarget` between calls. Nothing
  * allocates after construction.
