@@ -3,8 +3,6 @@
 //! no device and no socket, and the same bundle scores to the same numbers every time.
 
 mod bundles;
-mod card;
-mod movement;
 mod numbers;
 
 #[cfg(test)]
@@ -14,6 +12,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use replay::bundle::report::{self, Options as Replay};
+use scorecard::{card, movement};
 
 use crate::card::Scorecard;
 use crate::movement::{Change, Movement};
