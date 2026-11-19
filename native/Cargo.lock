@@ -67,6 +67,7 @@ dependencies = [
  "devices",
  "engine",
  "replay",
+ "rtrb",
  "scorecard",
  "serde_json",
  "transport",

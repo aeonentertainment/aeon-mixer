@@ -22,11 +22,13 @@ three numbers and a verdict in words:
 | -------------------- | -------------------------------------------------------- |
 | `output.underruns`   | periods the output was not handed in time                |
 | `output.renderP99Ms` | the block render time 99 percent of blocks stayed within |
-| `output.renderMaxMs` | the slowest block's render, against the output's period  |
+| `output.renderMaxMs` | the slowest block's render, against the time a block has |
 
-A run kept up when nothing underran and every render beat its period. A run that cannot stand
-for the bundle's song, an engine fault, an output that went away, or a command ring that filled,
-is refused with its reason and measures nothing.
+A run kept up when nothing underran and every block rendered within the time a block has: the
+output's period when it is shorter than a block, else a block's own 2.67 ms, since a longer
+callback renders several blocks back to back. A run that cannot stand for the bundle's song is
+refused with its reason and measures nothing: an engine fault, an output that went away or
+failed, or a command that could not reach the engine in its block.
 
 `--write` saves the numbers as a scorecard file and `--baseline` compares a run with one, under
 the scorecard's rules: a person sets each tolerance. A bench figure belongs to its machine, so

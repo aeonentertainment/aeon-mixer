@@ -4,7 +4,7 @@
 //! clock got every block in time.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,10 +12,11 @@ use devices::Stats;
 use engine::block::{BLOCK, RATE};
 use engine::command::Event;
 use engine::driver::{Driver, Render};
-use replay::bundle::report;
 use replay::bundle::song::{Song, SongSlot};
+use replay::bundle::{Bundle, report};
+use rtrb::RingBuffer;
 use scorecard::card::Scorecard;
-use scorecard::movement::{Change, Movement};
+use scorecard::movement;
 use serde_json::{Value, json};
 
 use crate::cli::{Args, Clock};
@@ -36,8 +37,8 @@ pub fn play(
         return Err(format!("{} already exists; --out writes a new bundle", out.display()));
     }
     let stems_found = stems.is_some();
-    let Song { mut audio, mut player, mut events, mut retired, frames, slots, blocks, notes } =
-        Song::prepare(&bundle, &profile, stems)?;
+    let song = Song::prepare(&bundle, &profile, stems)?;
+    let blocks = song.blocks;
     if blocks == 0 {
         return Err("the bundle holds no song to play".into());
     }
@@ -46,35 +47,72 @@ pub fn play(
     println!(
         "played  {}: {} slots ({}), {seconds:.1} s",
         args.bundle.display(),
-        slots.len(),
+        song.slots.len(),
         kinds.join(", ")
     );
     if let (true, Some(dir)) = (stems_found, &args.replay.backing) {
         println!("        with its stems from {}", dir.display());
     }
-    for note in &notes {
+    for note in &song.notes {
         println!("        note: {note}");
     }
 
+    run(args, &bundle, song, baseline, driver, stats)
+}
+
+/// Why the render woke the control thread.
+enum Finished {
+    /// The song's last block has rendered.
+    Song,
+    /// A command could not reach the engine in its block, so the song from there on is not the
+    /// bundle's.
+    Diverged,
+}
+
+/// Retired graphs and guides the bench holds for the control thread to free: a song's worth and
+/// more, where the engine's own ring holds 16 and holds commands back once it is full.
+const GRAVE: usize = 4096;
+
+/// Plays `song`, prepared from `bundle`, on `driver`. The part of `play` a test can hand a song of
+/// its own making.
+pub fn run(
+    args: &Args,
+    bundle: &Bundle,
+    song: Song,
+    baseline: Option<Scorecard>,
+    driver: Box<dyn Driver + Send>,
+    stats: Arc<Stats>,
+) -> Result<bool, String> {
+    let Song { mut audio, mut player, mut events, mut retired, frames, slots, blocks, .. } = song;
     let times = Arc::new(RenderTimes::default());
-    let jammed = Arc::new(AtomicBool::new(false));
     let (finished, done) = mpsc::sync_channel(1);
+    let (mut grave, mut graves) = RingBuffer::new(GRAVE);
     let render: Render = Box::new({
-        let (times, jammed) = (Arc::clone(&times), Arc::clone(&jammed));
-        let mut rendered = 0;
+        let times = Arc::clone(&times);
+        let (mut rendered, mut stuck) = (0, None);
         move |out| {
             let began = Instant::now();
-            // A full command ring wakes the control thread at once, which ends the run
-            if !player.before_block() && !jammed.swap(true, Relaxed) {
-                let _ = finished.try_send(());
+            if !player.before_block() {
+                let _ = finished.try_send(Finished::Diverged);
             }
             audio.render(out);
+            // Each block, as `replay` empties the engine's retired ring each block, so the engine
+            // never holds a command back for want of room in it, however seldom the control thread
+            // wakes. What finds no room is kept, never freed here, and ends the run
+            while stuck.is_none()
+                && let Some(old) = retired.pop()
+            {
+                if let Err(rtrb::PushError::Full(old)) = grave.push(old) {
+                    stuck = Some(old);
+                    let _ = finished.try_send(Finished::Diverged);
+                }
+            }
             if rendered < blocks {
                 times.record(began.elapsed());
                 rendered += 1;
                 // Once, after the song's last block: nothing is left on the clock to make late
                 if rendered == blocks {
-                    let _ = finished.try_send(());
+                    let _ = finished.try_send(Finished::Song);
                 }
             }
         }
@@ -97,26 +135,26 @@ pub fn play(
     println!();
 
     let mut stats_lines = Vec::new();
-    let mut second = 0;
+    let (mut second, mut faulted) = (0, false);
     let stopped = loop {
-        let waited = done.recv_timeout(Duration::from_secs(1));
-        while retired.pop().is_some() {}
-        let mut faulted = false;
+        let woke = done.recv_timeout(Duration::from_secs(1));
+        while graves.pop().is_ok() {}
         while let Some(event) = events.pop() {
             faulted |= event == Event::Fault;
         }
         let report = stats.report();
-        match waited {
-            _ if jammed.load(Relaxed) => {
-                break Some(
-                    "the engine's command ring was full, so the song from there on would not have been \
-                 the bundle's",
-                );
-            }
-            Ok(()) => break None,
+        // Whatever went wrong before the song's end refuses the run, whichever wake sees it
+        match woke {
             _ if faulted => break Some("the engine faulted"),
             _ if report.lost => break Some("the output went away"),
             _ if report.failed => break Some("the output failed"),
+            Ok(Finished::Diverged) => {
+                break Some(
+                    "a command could not reach the engine in its block, so the song from there on \
+                 would not have been the bundle's",
+                );
+            }
+            Ok(Finished::Song) => break None,
             Err(RecvTimeoutError::Disconnected) => break Some("the output stopped"),
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -130,18 +168,18 @@ pub fn play(
     }
 
     let underruns = stats.report().underruns;
-    let period = Duration::from_secs_f64(f64::from(info.period_frames) / rate);
+    let budget = block_budget(info.period_frames);
     let (p99, longest) = (times.percentile(0.99), times.longest());
-    let kept_up = underruns == 0 && longest < period;
+    let kept_up = underruns == 0 && longest < budget;
     println!("\nmeasured");
     println!("  underruns    {underruns:>8}     periods the output was not handed in time");
-    println!("  render p99   {:>8.2} ms  of the {:.2} ms period", ms(p99), ms(period));
+    println!("  render p99   {:>8.2} ms  of the {:.2} ms a block has", ms(p99), ms(budget));
     println!("  render max   {:>8.2} ms", ms(longest));
-    let spare = 100.0 * (1.0 - longest.as_secs_f64() / period.as_secs_f64());
+    let spare = 100.0 * (1.0 - longest.as_secs_f64() / budget.as_secs_f64());
     let verdict = match () {
-        _ if kept_up => format!("kept up: every block rendered in time, the slowest with {spare:.0}% of its period to spare"),
+        _ if kept_up => format!("kept up: every block rendered in time, the slowest with {spare:.0}% of its budget to spare"),
         _ if underruns > 0 => format!("fell behind: the output went without {underruns} periods"),
-        _ => "fell behind: a render took longer than its period, which a real output hears as a dropout".into(),
+        _ => "fell behind: a block's render took longer than its budget, which a real output hears as a dropout".into(),
     };
     println!("verdict  {verdict}");
 
@@ -156,7 +194,10 @@ pub fn play(
         card.write(path)?;
         println!("wrote    this result to {}", path.display());
     }
-    let held = baseline.is_none_or(|baseline| compare(&card, &baseline));
+    let held = baseline.is_none_or(|baseline| {
+        println!("\nagainst the baseline");
+        movement::report(&card, &baseline)
+    });
     if let Some(out) = &args.out {
         let profile_file = args.replay.profile.clone().unwrap_or(args.bundle.join("profile.json"));
         let profile_text = std::fs::read_to_string(&profile_file)
@@ -168,7 +209,7 @@ pub fn play(
             "sampleRate": info.sample_rate,
         });
         let run = Run { us, output, profile: &profile_text, stats: &stats_lines };
-        run_bundle::write(out, &args.bundle, &bundle, &run)?;
+        run_bundle::write(out, &args.bundle, bundle, &run)?;
         println!("wrote    this run's bundle to {}, which `scorecard` scores", out.display());
     }
     Ok(kept_up && held)
@@ -210,25 +251,13 @@ fn stats_line(slots: &[SongSlot]) -> Value {
     json!({ "positionMs": null, "slots": slots })
 }
 
-/// Prints each number that moved against `baseline`, and whether every one held.
-fn compare(card: &Scorecard, baseline: &Scorecard) -> bool {
-    let movements = Movement::between(card, baseline);
-    println!(
-        "\nagainst the baseline{}",
-        if movements.is_empty() { ", no number moved" } else { "" }
-    );
-    for movement in &movements {
-        let held = if movement.fails() { "beyond its tolerance" } else { "within its tolerance" };
-        let number = &movement.number;
-        match movement.change {
-            Change::Moved { baseline, now, tolerance } => {
-                println!("  {number:<22} {now:.2}, was {baseline:.2}: {held} of {tolerance:.2}")
-            }
-            Change::Gone { baseline } => println!("  {number:<22} gone, was {baseline:.2}"),
-            Change::New { now } => println!("  {number:<22} {now:.2}, new"),
-        }
-    }
-    movements.iter().all(|movement| !movement.fails())
+/// The time one block's render has under an output granted `period_frames` at a callback: the
+/// period itself when it is shorter than a block, since a block must render inside one callback,
+/// and a block's own length when it is longer, since a callback then renders several back to
+/// back.
+pub fn block_budget(period_frames: u32) -> Duration {
+    let frames = period_frames.min(BLOCK as u32);
+    Duration::from_secs_f64(f64::from(frames) / f64::from(RATE))
 }
 
 fn ms(duration: Duration) -> f64 {
