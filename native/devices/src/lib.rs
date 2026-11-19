@@ -10,10 +10,6 @@
 
 #[cfg(any(test, all(feature = "hardware", target_os = "linux")))]
 mod alsa_transport;
-#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
-mod buffer_hold;
-#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
-mod buffer_holds;
 mod capture;
 mod capture_feed;
 mod capture_request;
@@ -21,19 +17,17 @@ mod capture_request;
 mod channel_count;
 #[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
 mod core_audio_transport;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod device_hold;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod device_holds;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod device_properties;
 #[cfg(any(test, all(feature = "hardware", windows)))]
 mod endpoint_transport;
 mod feed;
 mod follow;
-#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
-mod io_buffer;
-#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
-mod nominal_rate;
 mod output;
-#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
-mod rate_hold;
-#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
-mod rate_holds;
 mod report;
 mod request;
 mod sample;

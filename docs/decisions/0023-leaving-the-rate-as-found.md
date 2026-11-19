@@ -23,8 +23,9 @@ The last of this process's streams to let go of a device puts back the rate the 
   lands within the second it is given fails the start, and if it lands late it is put back too.
 - **Shared devices.** An output and a house mic can be one USB interface, one device. The process
   counts its streams on each device, so the input keeps 48 kHz while the output moves away, and
-  the last one out restores it. The count lives in `devices/src/rate_holds.rs`, behind a
-  `NominalRate` trait, and its tests run on a fake HAL that records every set.
+  the last one out restores it. The count lives in `devices/src/device_holds.rs`, one entry a
+  device for the rate and the IO buffer both, behind a `DeviceProperties` trait, and its tests run
+  on a fake HAL that records every set.
 - **How it puts it back.** The last stream out asks the HAL for the rate found and returns without
   waiting, because `close` drops the stream on Node's event loop. It asks whatever the device
   reads, so a 48 kHz that lands after the engine's one-second wait is undone too: the HAL applies
@@ -45,8 +46,9 @@ this process's streams to let go of a device puts back the size the first one fo
 way and at the same times as the rate, with one difference: it puts it back only while the
 device still reads the size the engine left. A size another app or a person set since is theirs.
 The driver has always read the size back straight after setting it and taken that as the
-period, so a put-back has nothing landing late to undo. The count
-lives in `devices/src/buffer_holds.rs`, behind an `IoBuffer` trait, tested on a fake HAL.
+period, so a put-back has nothing landing late to undo. One hold a stream covers both. The size
+is read and set once the rate has landed, and the hold's drop puts back the size, then the rate,
+so the size goes back at the rate it was found at.
 
 `AudioHardware.h` does not say whether the HAL keeps the size per process or per device. If per
 process, a killed process leaves nothing behind. If per device, it leaves the engine's size, and
