@@ -14,8 +14,12 @@ A slot's delay belongs to its stream, and the engine chooses it while the stream
   packets it catches and however short the frames are.
 - Once 20 notes leave at least a block of room, the delay falls, once. The anchor moves earlier
   until the latest of those packets would keep a millisecond plus a quarter of the spread over the
-  block. It never goes under 3.67 ms: a block a packet can wait to be drained, and a millisecond.
-- After the fall, three late notes out of 20 raise it to cover them, at most back to where it opened.
+  block.
+- After the fall, three late notes out of 20 raise it to cover them.
+- A delay is how long the earliest packets wait, and no move leaves it under 3.67 ms, a block a
+  packet can wait to be drained and a millisecond, nor over 15 ms, where it opened. So a stream
+  whose first packet came late falls at least to 15 ms, even when some of what the window saw is
+  then late, and never rises past it.
 - A move waits for 21 ms of the slot under -30 dBFS, and happens at the head of what waits to play,
   right after that quiet. Falling decodes ahead what is in hand and drops the head only when it is
   quiet too, so an onset already decoded is never cut and the decoder stays whole. Rising puts
@@ -200,6 +204,18 @@ something a breath already solves. If a slot is never quiet it stays where it op
 - If every packet arrives late for a second, the stream ends and opens again at 15 ms, as any gap does.
   At 3.67 ms a smaller step in the link can do that than at 15.
 - A song's first ten seconds or so, or longer if the singer never pauses, run at 15 ms.
+- A late first packet no longer buys a longer delay. The first packet anchors a stream, so when it
+  came late the earliest packets wait 15 ms plus that lateness until the first move, and the extra
+  wait covers stalls. The fall takes it off and no rise puts it back, since 15 ms is the ceiling a
+  host builds its latency budget on. On the offline driver, silent Opus over 12 s of a clean link
+  and then a 25 ms stall every 400 ms for 48 s, 20 ms frames whose first packet came 7 ms late lose
+  66 packets to lateness. A stream pinned at 15 ms loses 24, since its earliest packets wait about
+  22 ms, and the old rise, back to the anchor it opened at and so to 23 ms, lost 26. That is 40 more
+  concealed frames in 48 s, 1.4 percent of packets, against the 0.1 percent bar. At 4 ms late it is
+  67 against 36 pinned and 38 under the old rise. With a first packet on time the chosen delay loses
+  what the pinned stream does, 68 against 66. The fall pays too: a first packet 20 ms late with 12 ms
+  stalls in the first ten seconds falls to 15 ms and loses 11 packets in 22 s, where the old fall
+  stopped at 27 ms and lost none.
 
 ## What `measure-latency` says
 
