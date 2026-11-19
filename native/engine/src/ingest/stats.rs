@@ -1,7 +1,7 @@
 //! What a slot's ingest reports: counters the jitter buffer keeps on the audio thread and
 //! publishes after each block through atomics, so `stats()` on the control thread never locks.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SlotStats {
@@ -39,6 +39,11 @@ pub struct SharedStats {
     resyncs: AtomicU32,
     jitter_bits: AtomicU32,
     delay_bits: AtomicU32,
+    /// Set the first time a capture slot plays its input rather than the silence it plays while
+    /// it opens, primes and settles. It stays set.
+    played: AtomicBool,
+    /// How many times a capture slot has judged its input stopped.
+    stops: AtomicU32,
 }
 
 impl SharedStats {
@@ -51,6 +56,27 @@ impl SharedStats {
         self.resyncs.store(stats.resyncs, Ordering::Relaxed);
         self.jitter_bits.store(stats.jitter_ms.to_bits(), Ordering::Relaxed);
         self.delay_bits.store(stats.playout_delay_ms.to_bits(), Ordering::Relaxed);
+    }
+
+    /// A capture slot calls this where it plays its input. One store: no allocation, no lock.
+    pub fn set_played(&self) {
+        self.played.store(true, Ordering::Relaxed);
+    }
+
+    /// A capture slot calls this once for each stop it judges. One add: no allocation, no lock.
+    pub fn add_stop(&self) {
+        self.stops.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Whether the slot has played its input yet. Not in `stats()`: a tool that must not measure
+    /// the silence a capture slot opens with waits for it (design.md section 10).
+    pub fn played(&self) -> bool {
+        self.played.load(Ordering::Relaxed)
+    }
+
+    /// The stops the slot has judged, each as it judged it. Not in `stats()`.
+    pub fn stops(&self) -> u32 {
+        self.stops.load(Ordering::Relaxed)
     }
 
     pub fn read(&self) -> SlotStats {

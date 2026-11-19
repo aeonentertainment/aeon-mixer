@@ -1119,7 +1119,11 @@ should reach that slot.
   cannot fill plays what it holds and silence after. When full pulls come back within the blocks
   the granted callback takes at a wake, and never fewer than eight, the phase of two clocks or a late wake ran the ring short, and the target rises by all
   those pulls lacked and 16 frames, at most one input period over where it opened. A longer run is
-  an input that stopped, and raises it only by what its first pull lacked. A trough that stays a
+  an input that stopped, and raises it only by what its first pull lacked. The slot judges the stop
+  the pull its run outgrows those blocks, so an input that stops for good is judged too. It
+  publishes each stop, and the first time it plays its input rather than its opening's silence, on
+  the stats crossing it already shares with the control thread; neither is in `stats()`, and
+  `bench loopback` reads both (section 10). A trough that stays a
   whole window more than a period over the target is a stall's backlog, dropped at once to the
   target. A fill high for one wake is no backlog: an output that catches up after a late wake, as
   WASAPI shared and the timer clock do, pulls more than one callback's blocks at a wake, past the
@@ -1824,7 +1828,13 @@ module sections a piece of work owns: a new issue names the rows whose paths it 
 
 A measuring tool may add a read-only accessor to a kernel or engine type another workstream owns:
 one function that reports state, with no change to behaviour. That is how a tool reads state
-without owning the file, as `Slot::corrector_correcting` does for `measure-corrector`.
+without owning the file, as `Slot::corrector_correcting` does for `measure-corrector`. When the
+state is decided on the audio thread, inside a type the graph holds, an accessor cannot reach it
+once the type has moved there. The type may then publish it on the crossing it already has: a flag
+or a count, set where it already decides that state, with no change to what it plays or to what
+`stats()` reports. The capture voice publishes so on its `SharedStats` that it has played its input
+and each stop it judges, for `bench loopback`. A tool that worked such a judgement out again from
+samples or counters would drift from the type's own, so the type says it and the tool reads it.
 
 | #   | Workstream          | Owns                 |
 | --- | ------------------- | -------------------- |
