@@ -181,10 +181,10 @@ thread back too, so the follower starts the output it left with it.
 ## The numbers
 
 These are the parts of a gap, not a measurement; each move reports the gap it left, and #53's
-manual run per OS records them. A reported gap starts at the old stream's last callback, so for a
-loss or a stall it holds the second row: up to the 200 ms bound, and after doublings the 6.4 s a
-silent stream waits. For a default change the stream calls back until it is stopped, so the first
-row is not silence.
+manual run per OS records them. A reported gap starts at the earlier of the wake and the old
+stream's last callback, so for a loss or a stall it holds the second row too: the 200 ms bound,
+and after doublings the 6.4 s a silent stream waits, with the stop and the open on top. For a
+default change the stream calls back until it is stopped, so the gap starts at the wake.
 
 | Part                                  | Expected                                                                    | Bound                                               |
 | ------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------- |
