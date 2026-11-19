@@ -1265,8 +1265,10 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   `reading.*` to the `pitch` event, `targetMidi` from `note`'s `midi`, and carries none of the
   shift, the pull or the start yet; the scorecard reads them (8.9).
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
-  finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
-  growing, following it through a corrector's move and a moment unseen. Decision
+  finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic above
+  it and no fundamental under it keeps growing, following two tones from the four strongest narrow
+  peaks, through a corrector's move, a moment unseen and a singer's partial on its harmonic, and
+  reading growth only from levels a tone was seen alone at. Decision
   [0020](decisions/0020-echo-cancelling.md) has both. The port carries mdf.c's
   BSD licence in its file. A delay-locked loop in front of the filter follows an echo that slides
   against the master, as a mic on its own clock's does, reading the master between frames, and a
