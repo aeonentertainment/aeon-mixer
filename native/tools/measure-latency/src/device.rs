@@ -66,7 +66,11 @@ fn measure(args: &DeviceArgs) -> Result<(), String> {
             openings.push(open_and_read(args, *period, &programme, &signal)?);
         }
     }
-    print!("{}", report::device(args, &programme, &openings, &rows));
+    let by_period = report::distinct_periods(&openings)
+        .into_iter()
+        .map(|period| Ok((period, offline::under_callback(&rows, args.playout_frames, period)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    print!("{}", report::device(args, &programme, &openings, &by_period));
     Ok(())
 }
 

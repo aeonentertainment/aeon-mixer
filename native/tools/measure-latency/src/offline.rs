@@ -11,10 +11,34 @@ use crate::matched_filter::{MatchedFilter, first_arrival};
 use crate::programme::Programme;
 use crate::rig::{Delay, Rig};
 
-/// How long the stream's first packet waits for the next block to drain it, in frames. The anchor
-/// fixes that wait for the rest of the stream, so it is part of the delay, and where a stream
-/// begins is chance: one frame's wait and a whole block's are the two ends of what it can cost.
-const FIRST_PACKET_WAITS: [usize; 5] = [1, 32, 64, 96, BLOCK];
+/// Where the stream starts against the output's wakes, one run each. The stream's first packet
+/// waits for a wake to drain it; the anchor fixes that wait for the rest of the stream, so it is
+/// part of the delay, and where a stream begins is chance. So before each wake in their pattern,
+/// the first packet waits from one frame to the whole gap since the wake before, the two ends of
+/// what it can cost. Under a block's callback that is one wake a block, and waits of 1, 32, 64, 96
+/// and 128 frames. Under a longer one the wakes fall unevenly (`Ingest::wakes_at`), and a capture
+/// slot's least wait comes before the wake that follows the shortest gap.
+fn phases(ingest: Ingest) -> Vec<u64> {
+    let wake = ingest.callback().max(BLOCK);
+    let pattern = (1..)
+        .map(|n| n * wake)
+        .find(|frames| frames % BLOCK == 0)
+        .expect("some multiple is whole blocks");
+    let wakes: Vec<usize> =
+        (0..pattern).step_by(BLOCK).filter(|frame| ingest.wakes_at(*frame as u64)).collect();
+    let gather = ingest.gather_frames();
+    let mut before = pattern - wakes[wakes.len() - 1];
+    let mut phases = Vec::new();
+    for (k, at) in wakes.iter().enumerate() {
+        if k > 0 {
+            before = at - wakes[k - 1];
+        }
+        for wait in [1, before / 4, before / 2, 3 * before / 4, before] {
+            phases.push(((at + 2 * pattern - (gather + wait) % pattern) % pattern) as u64);
+        }
+    }
+    phases
+}
 
 /// The voices a corrected row sings, low, middle and high: A2, A3 and A4, each 40 cents sharp so
 /// the corrector keeps shifting it and its delay keeps moving.
@@ -77,7 +101,33 @@ pub fn measure_all(playout_frames: u32) -> Result<Vec<Row>, String> {
     corrected.chain(cleaned).chain(chooses).collect()
 }
 
-/// Sends the programme through `ingest` from each first-packet wait and reads where it came out.
+/// Every row as an output whose callback takes `callback` frames a wake holds it, for device mode.
+/// A capture row is measured again under that callback, with the input a host opens beside it:
+/// its ring holds the blocks a wake pulls after its first, and the input's longer period, at both
+/// ends of its range, and has no row under a callback a capture slot refuses. A longer callback
+/// drains every other path's packets less often, which adds up to its excess over a block to the
+/// latest frame of each.
+pub fn under_callback(
+    rows: &[Row],
+    playout_frames: u32,
+    callback: u32,
+) -> Result<Vec<Row>, String> {
+    let extra = f64::from(callback.saturating_sub(BLOCK as u32));
+    let capture = Ingest::Capture { callback };
+    let opens = capture.opens();
+    rows.iter()
+        .filter(|row| opens || !matches!(row.ingest, Ingest::Capture { .. }))
+        .map(|row| match (row.ingest, row.corrector) {
+            (Ingest::Capture { .. }, Some(correction)) => {
+                measure_corrected(capture, playout_frames, correction.hz)
+            }
+            (Ingest::Capture { .. }, None) => measure(capture, playout_frames, row.cleanup),
+            _ => Ok(Row { lag: (row.lag.0, row.lag.1 + extra), ..*row }),
+        })
+        .collect()
+}
+
+/// Sends the programme through `ingest` from each phase and reads where it came out.
 pub fn measure(ingest: Ingest, playout_frames: u32, cleanup: bool) -> Result<Row, String> {
     measure_with(ingest, Delay::Pinned(playout_frames), Programme::offline(), cleanup)
 }
@@ -99,23 +149,25 @@ fn measure_with(
     programme: Programme,
     cleanup: bool,
 ) -> Result<Row, String> {
+    let preroll = programme.preroll.max(ingest.settles_within());
+    let programme = Programme { preroll, ..programme };
     let mut lag = (f64::INFINITY, f64::NEG_INFINITY);
     let mut reported = (f64::INFINITY, f64::NEG_INFINITY);
     let mut last = None;
-    for wait in FIRST_PACKET_WAITS {
-        let run = run(ingest, delay, programme, cleanup, wait)?;
+    for phase in phases(ingest) {
+        let run = run(ingest, delay, programme, cleanup, phase)?;
         for crossing in &run.crossings {
             lag = (lag.0.min(crossing.lag), lag.1.max(crossing.lag));
             reported = (reported.0.min(crossing.corrector), reported.1.max(crossing.corrector));
         }
         last = Some(run);
     }
-    let Run { lookahead, slot_delay_ms, .. } = last.expect("there are waits");
+    let Run { lookahead, slot_delay_ms, .. } = last.expect("there are phases");
     let corrector = programme.phrases.map(|phrases| Correction { hz: phrases.hz, reported });
     Ok(Row { ingest, corrector, cleanup, delay, slot_delay_ms, lookahead, lag })
 }
 
-/// One stream through `ingest`, its first packet waiting `wait` frames for a block.
+/// One stream through `ingest`, started at one phase against the output's wakes.
 struct Run {
     crossings: Vec<Crossing>,
     lookahead: usize,
@@ -129,15 +181,15 @@ struct Crossing {
     corrector: f64,
 }
 
-/// Sends the programme through `ingest` once, from one first-packet wait. The corrector is engaged
-/// when the programme sings ahead of its chirps: a voice is what it corrects, and the chirp alone
-/// would set it shifting.
+/// Sends the programme through `ingest` once, starting `phase` frames past the first wake. The
+/// corrector is engaged when the programme sings ahead of its chirps: a voice is what it corrects,
+/// and the chirp alone would set it shifting.
 fn run(
     ingest: Ingest,
     delay: Delay,
     programme: Programme,
     cleanup: bool,
-    wait: usize,
+    phase: u64,
 ) -> Result<Run, String> {
     let signal = programme.signal();
     let effects = EffectParams {
@@ -149,7 +201,6 @@ fn run(
         cleanup: CleanupParams { enabled: cleanup },
         ..EffectParams::default()
     };
-    let phase = (2 * BLOCK - (ingest.gather_frames() + wait) % BLOCK) as u64 % BLOCK as u64;
     let mut rig =
         Rig::new(ingest, delay, &signal, phase).map_err(|error| format!("{ingest}: {error}"))?;
     rig.controls.params.update(|params| params.slots[0].effects = effects);
@@ -264,6 +315,62 @@ mod tests {
         }
     }
 
+    /// A 128-frame house mic on the output's clock has no jitter buffer: decision 0018 has its
+    /// sample out 3 to 5.67 ms after it entered the mic, the ring's target of a block and 16 frames
+    /// with up to the input's period over it, and the whole of that span is where a block's wait
+    /// can fall. The ring splices nothing on one clock, so the chirp leaves as raw PCM does, within
+    /// half a frame. The slot reports the middle of the span as its delay. A new buffer on this
+    /// path fails here.
+    #[test]
+    fn a_capture_slot_holds_a_sample_for_its_ring_and_nothing_more() {
+        let period = BLOCK as f64;
+        let target = period + 16.0;
+        let row = measure(Ingest::Capture { callback: BLOCK as u32 }, PLAYOUT, false).unwrap();
+        let (least, most) = row.lag;
+        assert!(least >= target - 0.5 && most <= target + period + 0.5, "lag {least}..{most}");
+        assert!(most - least > period - 2.0, "lag {least}..{most} frames");
+        let reported = f64::from(row.slot_delay_ms.unwrap()) * f64::from(RATE) / 1000.0;
+        assert!((reported - (target + period / 2.0)).abs() < 0.5, "reported {reported}");
+    }
+
+    /// Device mode's capture row at a 480-frame callback is the house mic a host opens there: a
+    /// 480-frame input (`input_period_for`), whose ring holds the blocks a wake pulls after its
+    /// first. Decision 0018 bounds its wait at 11 to 21 ms, what the slot reports, 16 ms, and half
+    /// its step either way. A stream whose first delivery just misses a wake waits the whole
+    /// bound's top, the target and the headroom; where the wakes fall leaves every other stream
+    /// inside it, and the earliest past the block-callback row's latest, so both ends move. Raw
+    /// PCM on one clock, so within half a frame, as above. At a block's callback the row is the
+    /// offline one, and under one a capture slot refuses there is none.
+    #[test]
+    fn a_capture_row_under_a_longer_callback_is_the_house_mic_a_host_opens_there() {
+        let rows = [measure(Ingest::Capture { callback: BLOCK as u32 }, PLAYOUT, false).unwrap()];
+        assert_eq!(under_callback(&rows, PLAYOUT, BLOCK as u32).unwrap()[0].lag, rows[0].lag);
+        assert!(under_callback(&rows, PLAYOUT, 4096).unwrap().is_empty());
+        let row = under_callback(&rows, PLAYOUT, 480).unwrap()[0];
+        assert_eq!(row.ingest.gather_frames(), 480);
+        let (least, most) = row.lag;
+        assert!((most - 1008.0).abs() <= 0.5, "lag {least}..{most} frames");
+        assert!(least >= 528.0 - 0.5 && least > rows[0].lag.1, "lag {least}..{most} frames");
+        let reported = f64::from(row.slot_delay_ms.unwrap()) * f64::from(RATE) / 1000.0;
+        assert!((reported - 768.0).abs() < 0.5, "reported {reported}");
+    }
+
+    /// #52's claim: a house mic captured on the machine reaches the master sooner than through
+    /// today's l16 sender, or from any phone, at the playout delay the host pins.
+    #[test]
+    fn a_house_mic_is_sooner_captured_than_sent_as_l16_or_from_a_phone() {
+        let capture = measure(Ingest::Capture { callback: BLOCK as u32 }, PLAYOUT, false).unwrap();
+        for ingest in Ingest::every().into_iter().filter(Ingest::has_playout_delay) {
+            let sent = measure(ingest, PLAYOUT, false).unwrap();
+            assert!(
+                capture.lag.1 < sent.lag.0,
+                "{ingest}: {:?} against {:?}",
+                sent.lag,
+                capture.lag
+            );
+        }
+    }
+
     /// A playout delay is what the row says it is, so the number moves frame for frame with it.
     #[test]
     fn the_lag_moves_with_the_playout_delay() {
@@ -315,15 +422,15 @@ mod tests {
             let reported = row.corrector.expect("a corrected row says so").reported;
             assert!(reported.1 - reported.0 > 48.0, "{ingest}: one height, {reported:?}");
             let pinned = Delay::Pinned(PLAYOUT);
-            for wait in FIRST_PACKET_WAITS {
-                let off = run(ingest, pinned, Programme::offline(), false, wait).unwrap();
-                let on = run(ingest, pinned, Programme::corrected(hz), false, wait).unwrap();
+            for phase in phases(ingest) {
+                let off = run(ingest, pinned, Programme::offline(), false, phase).unwrap();
+                let on = run(ingest, pinned, Programme::corrected(hz), false, phase).unwrap();
                 let path = off.crossings[0].lag;
                 for crossing in on.crossings {
                     let beyond = crossing.lag - path - crossing.corrector;
                     assert!(
                         beyond.abs() <= tolerance,
-                        "{ingest}, wait {wait}: {beyond} frames past what the corrector reported"
+                        "{ingest}, phase {phase}: {beyond} frames past what the corrector reported"
                     );
                 }
             }
