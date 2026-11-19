@@ -17,12 +17,19 @@ const CEILING_DB: f32 = -6.0;
 /// The ceiling itself lifts this fast, so a singer who moved their phone away gets their level
 /// back within a minute or two.
 const CEILING_RELEASE_DB_PER_SECOND: f32 = 0.1;
+/// The narrow peaks each analysis hands the tones it follows, loudest first, and how many tones
+/// it follows at once. With one peak a singer's louder partial hides a howl's sightings; with one
+/// tone, a singer's fundamental that stands alone holds it while a howl grows beneath. Four and
+/// two are the fewest that hold the guard's numbers; eight and four hold the same.
+const PEAKS: usize = 4;
+const TRACKS: usize = 2;
 /// Frames between analyses: 10.7 ms.
 const HOP: usize = 512;
 
 /// Ducks a slot whose loop through the speakers runs away. It detects a howl as notch-based
-/// suppressors do, a narrow tone with no harmonic that persists and keeps growing, and
-/// answers as a gain-reduction method does, by turning the whole slot down, which stabilises
+/// suppressors do, a narrow tone with no harmonic and no fundamental that persists and keeps
+/// growing, following the two loudest such tones at once so a singer's lone fundamental does not
+/// hide a howl under it, and answers as a gain-reduction method does, by turning the whole slot down, which stabilises
 /// any loop and adds no delay: the analysis looks at the signal on the side and the gain moves
 /// within the block it is decided in. Off, or never caught, it hands the voice over bit for bit.
 /// Built on the control thread; `process` allocates nothing.
@@ -31,7 +38,8 @@ pub struct HowlGuard {
     recent: Vec<f32>,
     written: usize,
     since_analysis: usize,
-    track: Option<Track>,
+    tracks: [Option<Track>; TRACKS],
+    peaks: [Peak; PEAKS],
     gain: f32,
     target: f32,
     /// The most the release lifts the gain to, under the gain the last howl was caught at.
@@ -50,7 +58,8 @@ impl HowlGuard {
             recent: vec![0.0; LENGTH],
             written: 0,
             since_analysis: 0,
-            track: None,
+            tracks: [None; TRACKS],
+            peaks: [Peak { bin: 0, at: 0.0, db: f32::MIN, alone: false }; PEAKS],
             gain: 1.0,
             target: 1.0,
             ceiling: 1.0,
@@ -72,7 +81,7 @@ impl HowlGuard {
     pub fn reset(&mut self) {
         self.recent.fill(0.0);
         self.since_analysis = 0;
-        self.track = None;
+        self.tracks = [None; TRACKS];
         self.gain = 1.0;
         self.target = 1.0;
         self.ceiling = 1.0;
@@ -90,8 +99,8 @@ impl HowlGuard {
             self.since_analysis -= HOP;
             let start = self.written % LENGTH;
             let recent = self.recent[start..].iter().chain(&self.recent[..start]).copied();
-            let peak = self.analyser.analyse(recent);
-            if self.follow(peak) {
+            let found = self.analyser.analyse(recent, &mut self.peaks);
+            if self.follow(found) {
                 self.catch();
             }
         }
@@ -99,21 +108,60 @@ impl HowlGuard {
         self.apply(block);
     }
 
-    fn follow(&mut self, peak: Option<Peak>) -> bool {
-        if let Some(track) = &mut self.track {
-            match peak {
-                // A new note starts its own track at once, not after the old one has gone unseen
-                Some(peak) if track.continues(&peak) && track.is_new_note(&peak) => {
-                    self.track = Some(Track::new(peak));
-                    return false;
+    /// Follows each tone to the nearest of the `found` peaks that continues it, and starts tones on
+    /// the loudest of the rest that stand alone.
+    /// True when a tone runs away while standing alone.
+    fn follow(&mut self, found: usize) -> bool {
+        let peaks = &self.peaks[..found];
+        let mut taken = [false; PEAKS];
+        let mut caught = false;
+        for slot in &mut self.tracks {
+            let Some(track) = slot else { continue };
+            let next = (0..found)
+                .filter(|&i| !taken[i] && track.continues(&peaks[i]))
+                .min_by_key(|&i| track.bin().abs_diff(peaks[i].bin));
+            match next.map(|i| (i, peaks[i])) {
+                // Something at its harmonics: still this tone if it has not moved, but how loud it
+                // is says nothing about a loop
+                Some((i, peak)) if !peak.alone && track.holds(&peak) => {
+                    taken[i] = true;
+                    track.keep(&peak);
                 }
-                Some(peak) if track.continues(&peak) => return track.extend(peak),
-                _ if track.miss() => return false,
-                _ => self.track = None,
+                Some((i, peak)) if peak.alone => {
+                    taken[i] = true;
+                    // A new note starts its own track at once, not after the old one has gone unseen
+                    if track.is_new_note(&peak) {
+                        *slot = Some(Track::new(peak));
+                    } else {
+                        caught |= track.extend(peak);
+                    }
+                }
+                _ if track.miss() => {}
+                _ => *slot = None,
             }
         }
-        self.track = peak.map(Track::new);
-        false
+        for (i, &peak) in peaks.iter().enumerate() {
+            if taken[i] || !peak.alone {
+                continue;
+            }
+            // An empty slot first, then the tone unseen longest: a singer who leaps leaves their
+            // old note unseen, and it is that, not a tone seen growing, that makes room. A tone
+            // seen this analysis gives way only to a louder peak, and only when every tone was seen
+            let unseen = |slot: &Option<Track>| slot.map_or(u32::MAX, |track| track.missed());
+            let level = |slot: &Option<Track>| slot.map_or(f32::MIN, |track| track.level());
+            let slot = match self.tracks.iter_mut().max_by_key(|slot| unseen(slot)) {
+                Some(slot) if unseen(slot) > 0 => Some(slot),
+                _ => self
+                    .tracks
+                    .iter_mut()
+                    .min_by(|a, b| level(a).total_cmp(&level(b)))
+                    .filter(|slot| level(slot) < peak.db),
+            };
+            if let Some(slot) = slot {
+                *slot = Some(Track::new(peak));
+            }
+        }
+        caught
     }
 
     fn catch(&mut self) {
@@ -123,7 +171,7 @@ impl HowlGuard {
         self.target = (howled_at * 10f32.powf(DUCK_DB / 20.0)).max(1e-3);
         self.hold_frames = self.hold_after_catch;
         // The next catch needs the loop to run away again from where the duck leaves it
-        self.track = None;
+        self.tracks = [None; TRACKS];
     }
 
     fn release(&mut self, frames: usize) {
