@@ -30,8 +30,9 @@ impl Reference {
     /// Every reference in the bundle at `dir`, by slot, and each other file in its `reference/`
     /// with why it was skipped; neither when it has no `reference/`. The folder is read once and
     /// every file is opened by the path it was found at: a slot's recording and description are
-    /// the `.wav` and `.json`, in any case, named by its plain number. A name that is not one is
-    /// refused, so no file is read as another's slot.
+    /// the `.wav` and `.json`, in any case, named by its plain number. A number written another
+    /// way (`01`, `+1`) is refused, so no file is read as another's slot; any other name is
+    /// skipped.
     pub fn find(dir: &Path) -> Result<(Vec<Self>, Vec<String>), String> {
         let folder = dir.join("reference");
         if !folder.is_dir() {
@@ -48,11 +49,20 @@ impl Reference {
         // Each stem's recordings and descriptions, as found
         let mut stems: BTreeMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = BTreeMap::new();
         for path in paths {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            // What a copy off a recorder's card leaves behind (`.DS_Store`, `._0.wav`) is nobody's
+            // file, so it is passed over without a line
+            if name.starts_with('.') {
+                continue;
+            }
             let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
             let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+            // A stem that is no number could never be read as a slot's: a note kept beside the
+            // reference is skipped and named, like any other file
+            let numbered = stem.parse::<usize>().is_ok();
             match extension.as_deref() {
-                Some("wav") => stems.entry(stem).or_default().0.push(path),
-                Some("json") => stems.entry(stem).or_default().1.push(path),
+                Some("wav") if numbered => stems.entry(stem).or_default().0.push(path),
+                Some("json") if numbered => stems.entry(stem).or_default().1.push(path),
                 _ => skipped.push(format!(
                     "{} was skipped: a reference is a .wav and a .json named by its slot",
                     shown(&path)

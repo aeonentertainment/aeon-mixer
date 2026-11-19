@@ -321,6 +321,22 @@ fn a_reference_not_named_by_its_slot_is_refused_by_its_own_name() {
     }
 }
 
+// A note kept beside the reference, and what macOS leaves when a recorder's card is copied
+#[test]
+fn a_note_or_a_hidden_file_beside_a_reference_does_not_stop_it_being_read() {
+    let dir =
+        references("beside", &["0.wav", "0.json", "mic.json", "take.wav", "._0.wav", ".DS_Store"]);
+    let (found, skipped) = Reference::find(&dir).unwrap();
+    assert_eq!(found.iter().map(|r| r.slot).collect::<Vec<_>>(), [0]);
+    assert_eq!(
+        skipped,
+        [
+            "reference/mic.json was skipped: a reference is a .wav and a .json named by its slot",
+            "reference/take.wav was skipped: a reference is a .wav and a .json named by its slot",
+        ]
+    );
+}
+
 #[test]
 fn files_that_are_not_references_are_named_and_never_called_no_reference() {
     let dir = references("skipped", &["notes.txt", "0.WAV", "1.JSON"]);
