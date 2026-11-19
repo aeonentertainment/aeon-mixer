@@ -43,7 +43,7 @@ impl Capture for CoreAudioCapture {
             Some(uid) => super::find_input(uid)?,
             None => super::default_input()?,
         };
-        let hold = HOLDS.hold(device, request.period_frames)?;
+        let hold = HOLDS.hold(device, request.period_frames, || {})?;
         let period = hold.frames;
 
         let streams = super::input_streams(device)?;

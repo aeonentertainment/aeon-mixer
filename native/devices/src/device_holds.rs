@@ -45,8 +45,14 @@ impl<P: DeviceProperties> DeviceHolds<P> {
     /// drops. Blocks while the rate lands, on the thread that starts the stream, with no lock held:
     /// a release on Node's event loop never waits behind it. The first stream on a device takes
     /// the rate and the size it reads as the ones to put back, so what a person chose between
-    /// songs is kept.
-    pub fn hold(&self, device: u32, frames: u32) -> Result<DeviceHold<'_, P>, DriverError> {
+    /// songs is kept. `rate_landed` runs once the device is at 48 kHz and before its buffer is set,
+    /// with no lock held, so a start that fails in between can say the rate landed.
+    pub fn hold(
+        &self,
+        device: u32,
+        frames: u32,
+        rate_landed: impl FnOnce(),
+    ) -> Result<DeviceHold<'_, P>, DriverError> {
         let rate = f64::from(RATE);
         let (at, asked) = {
             let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
@@ -96,6 +102,7 @@ impl<P: DeviceProperties> DeviceHolds<P> {
             Ok(false) => {}
             Err(error) => return Err(error),
         }
+        rate_landed();
         hold.frames = self.set_buffer(at, device, frames)?;
         Ok(hold)
     }
@@ -148,6 +155,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::steps::Steps;
 
     /// Devices by id with their rates and buffer sizes, and every property asked for in order. The
     /// first rate asked lands at once, never with `First::Never`, or only once its wait has given
@@ -305,7 +313,7 @@ mod tests {
     #[test]
     fn a_device_already_at_48_khz_is_never_set() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 48_000.0)]));
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         assert_eq!(holds.hal.rates_asked(), []);
     }
 
@@ -313,7 +321,7 @@ mod tests {
     #[test]
     fn the_rate_found_is_put_back_when_the_stream_lets_go() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 44_100.0)]));
-        let hold = holds.hold(MONITOR, PERIOD).unwrap();
+        let hold = holds.hold(MONITOR, PERIOD, || {}).unwrap();
         assert_eq!(holds.hal.rate_of(MONITOR), 48_000.0);
         drop(hold);
         assert_eq!(holds.hal.rates_asked(), [(MONITOR, 48_000.0), (MONITOR, 44_100.0)]);
@@ -325,7 +333,7 @@ mod tests {
     #[test]
     fn the_buffer_is_put_back_before_the_rate() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 44_100.0)]));
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         let asked = holds.hal.asked().into_iter().map(|(_, ask)| ask).collect::<Vec<_>>();
         let order =
             [Ask::Rate(48_000.0), Ask::Frames(PERIOD), Ask::Frames(512), Ask::Rate(44_100.0)];
@@ -336,7 +344,7 @@ mod tests {
     fn a_rate_that_never_lands_fails_the_hold_and_the_found_rate_is_asked_for_again() {
         let fake = Fake { first: First::Never, ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = DeviceHolds::new(fake);
-        assert!(holds.hold(MONITOR, PERIOD).is_err());
+        assert!(holds.hold(MONITOR, PERIOD, || {}).is_err());
         assert_eq!(
             holds.hal.asked(),
             [(MONITOR, Ask::Rate(48_000.0)), (MONITOR, Ask::Rate(44_100.0))]
@@ -348,7 +356,7 @@ mod tests {
     fn a_rate_that_lands_after_the_hold_failed_is_put_back() {
         let fake = Fake { first: First::Late, ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = DeviceHolds::new(fake);
-        assert!(holds.hold(MONITOR, PERIOD).is_err());
+        assert!(holds.hold(MONITOR, PERIOD, || {}).is_err());
         assert_eq!(holds.hal.rate_of(MONITOR), 44_100.0);
     }
 
@@ -358,9 +366,9 @@ mod tests {
     fn a_device_held_again_before_its_put_back_lands_is_asked_for_48_khz() {
         let fake = Fake { puts_wait: true, ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = DeviceHolds::new(fake);
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         assert_eq!(holds.hal.rate_of(MONITOR), 48_000.0, "the put back has not landed");
-        let again = holds.hold(MONITOR, PERIOD).unwrap();
+        let again = holds.hold(MONITOR, PERIOD, || {}).unwrap();
         let asked = [(MONITOR, 48_000.0), (MONITOR, 44_100.0), (MONITOR, 48_000.0)];
         assert_eq!(
             holds.hal.rates_asked(),
@@ -383,13 +391,13 @@ mod tests {
             landing: Duration::ZERO,
             ..DeviceHolds::new(Fake::new(&[(MONITOR, 44_100.0)]))
         };
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         holds.hal.land(MONITOR, 96_000.0).unwrap();
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         assert_eq!(holds.hal.rate_of(MONITOR), 96_000.0);
 
         holds.hal.land(MONITOR, 48_000.0).unwrap();
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         assert_eq!(
             holds.hal.rates_asked().last(),
             Some(&(MONITOR, 48_000.0)),
@@ -404,8 +412,8 @@ mod tests {
     fn a_put_back_still_on_its_way_long_after_is_asked_past() {
         let fake = Fake { puts_wait: true, ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = DeviceHolds { landing: Duration::ZERO, ..DeviceHolds::new(fake) };
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         let asked = &holds.hal.rates_asked()[..3];
         assert_eq!(asked, [(MONITOR, 48_000.0), (MONITOR, 44_100.0), (MONITOR, 48_000.0)]);
     }
@@ -413,7 +421,7 @@ mod tests {
     #[test]
     fn a_hold_that_cannot_read_the_device_holds_nothing() {
         let holds = DeviceHolds::new(Fake::new(&[]));
-        assert!(holds.hold(MONITOR, PERIOD).is_err());
+        assert!(holds.hold(MONITOR, PERIOD, || {}).is_err());
         assert!(holds.held.lock().unwrap().iter().all(|held| held.users == 0));
     }
 
@@ -427,9 +435,9 @@ mod tests {
         let fake =
             Fake { slow: Some(slow), ..Fake::new(&[(MONITOR, 44_100.0), (SPEAKERS, 44_100.0)]) };
         let holds = DeviceHolds::new(fake);
-        let mic = holds.hold(MONITOR, PERIOD).unwrap();
+        let mic = holds.hold(MONITOR, PERIOD, || {}).unwrap();
         thread::scope(|scope| {
-            let output = scope.spawn(|| holds.hold(SPEAKERS, PERIOD).map(drop));
+            let output = scope.spawn(|| holds.hold(SPEAKERS, PERIOD, || {}).map(drop));
             waits.recv().unwrap();
             let (released, release) = channel();
             scope.spawn(move || {
@@ -447,8 +455,8 @@ mod tests {
     #[test]
     fn a_device_two_streams_use_keeps_48_khz_and_the_period_until_both_let_go() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 44_100.0)]));
-        let output = holds.hold(MONITOR, PERIOD).unwrap();
-        let input = holds.hold(MONITOR, PERIOD).unwrap();
+        let output = holds.hold(MONITOR, PERIOD, || {}).unwrap();
+        let input = holds.hold(MONITOR, PERIOD, || {}).unwrap();
         drop(output);
         let now = (holds.hal.rate_of(MONITOR), holds.hal.size_of(MONITOR));
         assert_eq!(now, (48_000.0, PERIOD), "the input still runs on both");
@@ -459,8 +467,8 @@ mod tests {
     #[test]
     fn each_device_is_put_back_to_its_own_rate() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 44_100.0), (SPEAKERS, 96_000.0)]));
-        let monitor = holds.hold(MONITOR, PERIOD).unwrap();
-        let speakers = holds.hold(SPEAKERS, PERIOD).unwrap();
+        let monitor = holds.hold(MONITOR, PERIOD, || {}).unwrap();
+        let speakers = holds.hold(SPEAKERS, PERIOD, || {}).unwrap();
         drop(monitor);
         drop(speakers);
         assert_eq!((holds.hal.rate_of(MONITOR), holds.hal.rate_of(SPEAKERS)), (44_100.0, 96_000.0));
@@ -469,7 +477,7 @@ mod tests {
     #[test]
     fn the_size_found_is_put_back_when_the_stream_closes() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 48_000.0)]));
-        let hold = holds.hold(MONITOR, PERIOD).unwrap();
+        let hold = holds.hold(MONITOR, PERIOD, || {}).unwrap();
         assert_eq!((hold.frames, holds.hal.size_of(MONITOR)), (PERIOD, PERIOD));
         drop(hold);
         assert_eq!(holds.hal.size_of(MONITOR), 512);
@@ -480,8 +488,8 @@ mod tests {
     fn a_move_puts_back_the_output_it_leaves() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 48_000.0), (SPEAKERS, 48_000.0)]));
         holds.hal.set_elsewhere(SPEAKERS, 1024);
-        let monitor = holds.hold(MONITOR, PERIOD).unwrap();
-        let speakers = holds.hold(SPEAKERS, PERIOD).unwrap();
+        let monitor = holds.hold(MONITOR, PERIOD, || {}).unwrap();
+        let speakers = holds.hold(SPEAKERS, PERIOD, || {}).unwrap();
         drop(monitor);
         assert_eq!((holds.hal.size_of(MONITOR), holds.hal.size_of(SPEAKERS)), (512, PERIOD));
         drop(speakers);
@@ -492,12 +500,12 @@ mod tests {
     #[test]
     fn a_size_set_elsewhere_while_open_is_left_alone() {
         let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 48_000.0)]));
-        let hold = holds.hold(MONITOR, PERIOD).unwrap();
+        let hold = holds.hold(MONITOR, PERIOD, || {}).unwrap();
         holds.hal.set_elsewhere(MONITOR, 256);
         drop(hold);
         assert_eq!(holds.hal.size_of(MONITOR), 256);
 
-        drop(holds.hold(MONITOR, PERIOD).unwrap());
+        drop(holds.hold(MONITOR, PERIOD, || {}).unwrap());
         assert_eq!(holds.hal.size_of(MONITOR), 256);
     }
 
@@ -505,11 +513,61 @@ mod tests {
     fn a_size_the_device_refuses_fails_the_hold_and_puts_back_only_the_rate() {
         let fake = Fake { refuses: vec![MONITOR], ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = DeviceHolds::new(fake);
-        assert!(holds.hold(MONITOR, PERIOD).is_err());
+        assert!(holds.hold(MONITOR, PERIOD, || {}).is_err());
         let asked = [Ask::Rate(48_000.0), Ask::Frames(PERIOD), Ask::Rate(44_100.0)];
         assert_eq!(holds.hal.asked(), asked.map(|ask| (MONITOR, ask)));
         assert!(
             holds.held.lock().unwrap().iter().all(|held| held.users == 0 && held.buffer.is_none())
         );
+    }
+
+    /// `open` marks the rate landing through the hold and the buffer after it, so a start that
+    /// fails later, here on the stream's format, says where its time went.
+    #[test]
+    fn a_start_that_fails_after_the_hold_names_the_rate_then_the_buffer() {
+        let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 44_100.0)]));
+        let mut steps = Steps::new();
+        let hold = holds.hold(MONITOR, PERIOD, || steps.done("48 kHz held")).unwrap();
+        steps.done("IO buffer set");
+        let failed = steps.failed(DriverError::Backend("not f32 PCM".into()));
+        drop(hold);
+        let reason = failed.to_string();
+        let rate = reason.find(", after 48 kHz held at ").expect(&reason);
+        let buffer = reason.find(", IO buffer set at ").expect(&reason);
+        assert!(rate < buffer, "{reason}");
+    }
+
+    #[test]
+    fn a_start_that_fails_setting_the_buffer_says_the_rate_had_landed() {
+        let fake = Fake { refuses: vec![MONITOR], ..Fake::new(&[(MONITOR, 44_100.0)]) };
+        let holds = DeviceHolds::new(fake);
+        let mut steps = Steps::new();
+        let asked_when_landed = Mutex::new(Vec::new());
+        let error = holds
+            .hold(MONITOR, PERIOD, || {
+                *asked_when_landed.lock().unwrap() = holds.hal.asked();
+                steps.done("48 kHz held");
+            })
+            .map(drop)
+            .unwrap_err();
+        let landed = [(MONITOR, Ask::Rate(48_000.0))];
+        assert_eq!(
+            *asked_when_landed.lock().unwrap(),
+            landed,
+            "marked before the buffer was asked"
+        );
+        let reason = steps.failed(error).to_string();
+        assert!(reason.contains("the device refused the size"), "{reason}");
+        assert!(reason.contains(", after 48 kHz held at "), "{reason}");
+        assert!(!reason.contains("IO buffer set"), "{reason}");
+    }
+
+    #[test]
+    fn a_rate_that_never_lands_marks_nothing() {
+        let fake = Fake { first: First::Never, ..Fake::new(&[(MONITOR, 44_100.0)]) };
+        let holds = DeviceHolds::new(fake);
+        let mut landed = false;
+        assert!(holds.hold(MONITOR, PERIOD, || landed = true).is_err());
+        assert!(!landed);
     }
 }

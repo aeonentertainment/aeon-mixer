@@ -16,10 +16,10 @@ use super::callback::Callback;
 use super::hal_properties::HOLDS;
 use super::io::Io;
 use super::property::{get, string};
-use super::steps::Steps;
 use crate::feed::Feed;
 use crate::request::Request;
 use crate::stats::Stats;
+use crate::steps::Steps;
 
 /// The CoreAudio HAL with no AudioUnit between: an IOProc on the device, with the device's IO
 /// buffer set to the asked period until the stream stops. Other apps keep playing; the device runs
@@ -58,9 +58,9 @@ fn open(
     // The engine never resamples, so the device itself moves to 48 kHz if it is elsewhere, and
     // its IO buffer is the period: the frames each IOProc call renders. Both hold until the stream
     // stops or fails to start here
-    let hold = HOLDS.hold(device, request.period_frames)?;
+    let hold = HOLDS.hold(device, request.period_frames, || steps.done("48 kHz held"))?;
     let period = hold.frames;
-    steps.done("48 kHz and IO buffer held");
+    steps.done("IO buffer set");
 
     let stream = *super::output_streams(device)?.first().ok_or(DriverError::NoDevice)?;
     // SAFETY: a stream's virtual format is an AudioStreamBasicDescription.
