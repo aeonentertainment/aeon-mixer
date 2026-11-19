@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test, vi } from "vite-plus/test";
 import { ACK_TIMEOUT_MS } from "../src/acks.ts";
+import { FADE_BLOCKS, rendered, startLive } from "../src/contract/offline-clock.ts";
+import { wav } from "../src/contract/wav.ts";
 import { type Mixer, type MixerConfig, type OfflineEngine, openEngine } from "../src/index.ts";
 import type { NativeEvent } from "../src/native.ts";
 
@@ -29,8 +31,6 @@ vi.mock(import("../src/native.ts"), async (original) => {
 });
 
 const RATE = 48000;
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
 
 const dir = mkdtempSync(join(tmpdir(), "aeon-mixer-error-"));
 afterAll(() => {
@@ -42,22 +42,8 @@ writeFileSync(notAudio, "this is not audio");
 
 /** A second of silence as a mono 16-bit WAV at 48 kHz. */
 function silentStem() {
-  const data = Buffer.alloc(RATE * 2);
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + data.length, 4);
-  header.write("WAVEfmt ", 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(RATE, 24);
-  header.writeUInt32LE(RATE * 2, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(data.length, 40);
   const path = join(dir, "silent.wav");
-  writeFileSync(path, Buffer.concat([header, data]));
+  writeFileSync(path, wav(new Float32Array(RATE)));
   return path;
 }
 
@@ -80,20 +66,6 @@ function errorsOf(mixer: Mixer) {
   const errors: Error[] = [];
   mixer.on("error", (error) => errors.push(error));
   return errors;
-}
-
-function rendered(mixer: Mixer) {
-  return new Promise<void>((resolve) => {
-    mixer.on("renderProgress", (fraction) => {
-      if (fraction === 1) resolve();
-    });
-  });
-}
-
-async function startLive(engine: OfflineEngine, mixer: Mixer) {
-  const started = mixer.start();
-  engine.pump(FADE_BLOCKS);
-  return started;
 }
 
 /** Resolves once the engine has heard the next batch that carries an ack. */

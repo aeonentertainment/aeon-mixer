@@ -4,38 +4,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vite-plus/test";
-import { type Mixer, type OfflineEngine, openEngine } from "../src/index.ts";
-
-const BLOCK = 128;
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
-const SILENT_STATS = {
-  pushed: 0,
-  lost: 0,
-  late: 0,
-  lateAtOpening: 0,
-  concealed: 0,
-  resyncs: 0,
-  jitterMs: 0,
-  correctorDelayMs: 0,
-  correctorMaxDelayMs: 0,
-  echo: null,
-  playoutDelayMs: 0,
-  howlCatches: 0,
-  tone: null,
-};
-
-async function startLive(engine: OfflineEngine, mixer: Mixer) {
-  const started = mixer.start();
-  engine.pump(FADE_BLOCKS);
-  return started;
-}
-
-async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
-  const destroyed = mixer.destroy();
-  engine.pump(FADE_BLOCKS);
-  await destroyed;
-}
+import { BLOCK, startLive } from "../src/contract/offline-clock.ts";
+import { openEngine } from "../src/index.ts";
+import { destroyLive, SILENT_STATS } from "./offline.ts";
 
 /** Binds a second UDP socket to `port` the way a sender's neighbour would, and reports the error. */
 async function bindAgain(port: number) {

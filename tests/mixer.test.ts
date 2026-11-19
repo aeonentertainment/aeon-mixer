@@ -1,36 +1,16 @@
 import { expect, test, vi } from "vite-plus/test";
-import { type Mixer, type OfflineEngine, openEngine, type SlotEffect } from "../src/index.ts";
+import { BLOCK, FADE_BLOCKS, startLive } from "../src/contract/offline-clock.ts";
+import { type Mixer, openEngine, type SlotEffect } from "../src/index.ts";
+import { destroyLive, left, SILENT_STATS } from "./offline.ts";
 
-const BLOCK = 128;
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
 const CENTRE = Math.SQRT1_2;
-const SILENT_PUSH_STATS = {
-  pushed: 0,
-  lost: 0,
-  late: 0,
-  lateAtOpening: 0,
-  concealed: 0,
-  resyncs: 0,
-  jitterMs: 0,
-  correctorDelayMs: 0,
-  correctorMaxDelayMs: 0,
-  echo: null,
-  playoutDelayMs: 0,
-  howlCatches: 0,
-  tone: null,
-};
 
 /** Interleaved stereo at one level, which folds to that level. */
 function constant(level: number, blocks = 1) {
   return new Float32Array(2 * BLOCK * blocks).fill(level);
 }
 
-function left(interleaved: Float32Array): number[] {
-  return Array.from(interleaved.filter((_, i) => i % 2 === 0));
-}
-
-function right(interleaved: Float32Array): number[] {
+function right(interleaved: Float32Array) {
   return Array.from(interleaved.filter((_, i) => i % 2 === 1));
 }
 
@@ -45,19 +25,6 @@ function onceLevel(mixer: Mixer): Promise<[slot: number, rmsDb: number, peakDb: 
       resolve([slot, rmsDb, peakDb]);
     });
   });
-}
-
-/** Starts the mixer, pumping the offline clock through the swap fade so the acks arrive. */
-async function startLive(engine: OfflineEngine, mixer: Mixer) {
-  const started = mixer.start();
-  engine.pump(FADE_BLOCKS);
-  return started;
-}
-
-async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
-  const destroyed = mixer.destroy();
-  engine.pump(FADE_BLOCKS);
-  await destroyed;
 }
 
 test("a push slot plays what the host pushes, through its gain and the pan law", async () => {
@@ -81,7 +48,7 @@ test("a push slot plays what the host pushes, through its gain and the pan law",
   // A slot's ring holds 100 ms; the rest is the host's to hand in again, and the count says so
   expect(mixer.push(1, constant(1, 400))).toBe(4800);
   expect(mixer.stats()).toEqual({
-    slots: [SILENT_PUSH_STATS, SILENT_PUSH_STATS],
+    slots: [SILENT_STATS, SILENT_STATS],
     underruns: 0,
     rtpReturn: null,
   });
