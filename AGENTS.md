@@ -104,13 +104,22 @@ a decision record and the developer's agreement.
 - Timing claims need a number. A latency change ships with the measurement that justifies it,
   taken with `measure-latency` or `measure-sink`.
 - Never wait on sleeps or polling in tests. Await the event or promise that marks the milestone.
+- Before a PR opens, apply the `bug-review`, `shape-review` and `pr-review` skills to your own
+  diff, fix what they find, and apply them again to the fix, so the first review on CI finds
+  nothing.
 
 ## Pull requests
 
 - Never open a PR unless the developer asks.
-- One concern per PR. If the description needs "also", split it.
-- One thread is one PR. A thread starts in its own worktree from `main`, carries one issue to
-  one merged PR, and ends. More work is a new thread, so a review of either stays small.
+- One concern per PR, about 400 changed lines, able to merge alone. If the description needs
+  "also", split it. A branch never stacks on one that has not merged, except a contract and the
+  code that needs it.
+- One agent is one PR. An agent, a subagent of the session that runs the work and never a new
+  thread, starts in its own worktree from `main`, carries one issue to one merged PR, and ends,
+  so a review of either stays small. PRs land one at a time: the branch rule keeps each up to
+  date, so merging two at once only sends one back through CI.
+- A small thing found on the way is fixed where it is found, and named in the PR body and on
+  the issue. A new issue is for work that needs a slot of its own.
 - Titles are conventional commits in plain language: `fix(rtp): jitter buffer no longer drops
   late frames`.
 - Body: the problem in a sentence or two, how it was fixed, then a "Verified" paragraph naming
