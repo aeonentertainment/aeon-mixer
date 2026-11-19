@@ -128,21 +128,22 @@ Windows' own default-device heuristic ranks endpoints on the same enumerator, wi
 - Form factor comes first because a display hangs off `HDAUDIO` on most machines, through the GPU's
   or the chipset's codec.
 
-### Linux: the ALSA card's driver and the pcm's name
+### Linux: the ALSA card's driver and the pcm's id
 
 The Linux backend lists only `hw:` devices through ALSA (`alsa/mod.rs`), with no sound server, so
 PipeWire's and PulseAudio's `device.bus` and `device.form_factor` are never in reach. The card's
 driver string is: `snd_ctl_card_info_get_driver`, or the module behind
-`/sys/class/sound/cardN/device/driver`. Neither opens a pcm.
+`/sys/class/sound/cardN/device/driver`. So is each pcm's id, `snd_pcm_info_get_id` after
+`snd_ctl_pcm_info` on the same control device. Neither opens a pcm.
 
-| Card driver, or pcm                                 | Set in the kernel by                                                                                                                                                                                                                                                                                                                                                                          | `transport` |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| `Loopback`, `Dummy`, `PCM-TEST Driver`              | [`aloop.c:1991`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/drivers/aloop.c#L1991), [`dummy.c:1113`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/drivers/dummy.c#L1113), [`pcmtest.c:590`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/drivers/pcmtest.c#L590) | `virtual`   |
-| `USB-Audio`                                         | [`usb/card.c:773`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/usb/card.c#L773)                                                                                                                                                                                                                                                                     | `usb`       |
-| a pcm named `HDMI n`, or the card driver `vc4-hdmi` | [`hdmi.c:1859`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/hda/codecs/hdmi/hdmi.c#L1859), [`vc4_hdmi.c:2408`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/drivers/gpu/drm/vc4/vc4_hdmi.c#L2408)                                                                                                                | `display`   |
-| `HDA-Intel`, any other pcm                          | [`controllers/intel.c:2083`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/hda/controllers/intel.c#L2083)                                                                                                                                                                                                                                             | `builtIn`   |
-| any other driver                                    |                                                                                                                                                                                                                                                                                                                                                                                               | `other`     |
-| a card whose driver cannot be read                  |                                                                                                                                                                                                                                                                                                                                                                                               | `unknown`   |
+| Card driver, or pcm id                                          | Set in the kernel by                                                                                                                                                                                                                                                                                                                                                                                          | `transport` |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| `Loopback`, `Dummy`, `PCM-TEST Driver`                          | [`aloop.c:1991`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/drivers/aloop.c#L1991), [`dummy.c:1113`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/drivers/dummy.c#L1113), [`pcmtest.c:590`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/drivers/pcmtest.c#L590)                 | `virtual`   |
+| `USB-Audio`                                                     | [`usb/card.c:773`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/usb/card.c#L773)                                                                                                                                                                                                                                                                                     | `usb`       |
+| a pcm id `HDMI n` or `HDMIn (*)`, or the card driver `vc4-hdmi` | [`hdmi.c:1859`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/hda/codecs/hdmi/hdmi.c#L1859), [`soc-pcm.c:2924`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/soc/soc-pcm.c#L2924), [`vc4_hdmi.c:2408`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/drivers/gpu/drm/vc4/vc4_hdmi.c#L2408) | `display`   |
+| `HDA-Intel`, any other pcm                                      | [`controllers/intel.c:2083`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/hda/controllers/intel.c#L2083)                                                                                                                                                                                                                                                             | `builtIn`   |
+| any other driver                                                |                                                                                                                                                                                                                                                                                                                                                                                                               | `other`     |
+| a card whose driver cannot be read                              |                                                                                                                                                                                                                                                                                                                                                                                                               | `unknown`   |
 
 `HDA-Intel` is every HD-Audio controller, AMD's and NVIDIA's included, so a GPU's card is
 `HDA-Intel` with only `HDMI n` pcms, and the pcm rule reaches it first. Bluetooth never reaches
@@ -151,10 +152,25 @@ ALSA's `hw:` list (BlueZ hands it to a sound server or to BlueALSA's plugin pcm)
 kernel driver that makes a pcm card is hardware, the three above are the ones in `sound/drivers/`
 that are not, and a Raspberry Pi's headphone jack lands here.
 
+The rule reads the pcm's id, not its name, because of Intel's Sound Open Firmware (SOF) driver,
+which most Intel laptops of the last few years run. Its card is an ASoC card whose pcms come from
+the firmware's topology file, and that file names the HDMI and DisplayPort ones `HDMI1` to `HDMI4`
+([hdmi-generic.conf:156](https://github.com/thesofproject/sof/blob/6f356a4947c5d64731edbf713269001c1df0939d/tools/topology/topology2/platform/intel/hdmi-generic.conf#L156),
+made a pcm's stream name at
+[`soc-topology.c:1514`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/soc/soc-topology.c#L1514)).
+ASoC gives such a pcm the id `HDMI1 (*)` and no name at all, where HD-Audio sets both to `HDMI 0`
+([`controller.c:713`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/hda/common/controller.c#L713)
+and line 719). A rule on the name would list every SOF output as `other`, a monitor with no
+speakers among them. SOF's card driver is `sof-` and the board's card name, as `sof-hda-dsp`
+([`soc-card.c:257`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/soc/soc-card.c#L257),
+with the prefix from [`sof/pcm.c:861`](https://github.com/torvalds/linux/blob/97d73c8251226cf27cc6656b4c542869bb8c69fa/sound/soc/sof/pcm.c#L861)),
+a different string on each board, so the table names none of them. The laptop's own speakers on
+that card are `other`, which a fallback takes as it takes `builtIn`.
+
 ## What no OS can tell
 
 Whether a display has speakers. CoreAudio says `HDMI` or `DisplayPort`, Windows says
-`DigitalAudioDisplayDevice`, and ALSA names the pcm `HDMI n`, for a monitor with speakers and one
+`DigitalAudioDisplayDevice`, and ALSA's pcm id says `HDMI`, for a monitor with speakers and one
 with only a headphone jack alike: each OS lists a display's audio when the display says it takes
 audio, and none of the properties above says what is plugged in behind it. So `display` ranks after
 the wired hardware, and the field does not try to say more.
@@ -180,5 +196,7 @@ that ships it adds a row to that table.
   Teams Audio as `virtual`. #165 names the Zoom check.
 - On Windows with VB-CABLE or Voicemeeter, the cable is `virtual`, and a laptop's speakers are
   `builtIn` through `HDAUDIO` or `INTELAUDIO`.
+- On a Linux laptop running SOF, `aplay -l` shows the HDMI pcms as `HDMI1 (*)` and on, and
+  `outputDevices()` lists each as `display`. #256 names the check.
 - On a monitor with no speakers, the output is listed as `display`, and no other property sets it
   apart from one with speakers. If one does, `display` can be split then.
