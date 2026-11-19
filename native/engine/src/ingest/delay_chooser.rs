@@ -251,12 +251,11 @@ mod tests {
         {
             let sent = OpusSender::new(frame, 53).send_all(&signal, 0);
             let (calm, rough) = sent.split_at(sent.partition_point(|a| a.at < 12 * SECOND));
-            let mut arrivals = match calm_stall {
+            let calm = match calm_stall {
                 0 => calm.to_vec(),
                 stall => Stalls::new(stall, 8 * frame as i64).apply(calm, 8),
             };
-            let released = arrivals[0].at + first_late;
-            arrivals.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+            let mut arrivals = first_held(calm, first_late);
             arrivals.extend(Stalls::new(RATE as i64 / 40, 2 * SECOND / 5).apply(rough, 7));
             let mut rig = Rig::choosing(Codec::opus().unwrap());
             let mut delays = Vec::new();
@@ -378,9 +377,7 @@ mod tests {
             compare(&signal[tones..], 240, &rig.out, tones as i64 + 400, 1200).lag
         };
         let clean = L16Sender::new(240, 46).send_all(&signal, 0, 1.0);
-        let mut stalled = clean.clone();
-        let released = clean[0].at + 1440;
-        stalled.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+        let stalled = first_held(clean.clone(), 1440);
         assert!((lag(&stalled) - lag(&clean)).abs() < BLOCK as i64);
     }
 

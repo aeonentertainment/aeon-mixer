@@ -92,7 +92,8 @@ impl SlackNotes {
         self.taken().map(|note| note.worst).min()
     }
 
-    /// The most slack in the notes taken: what the earliest packets wait.
+    /// The most slack in the notes taken: what the earliest packets wait, the stream's delay.
+    /// `None` before a packet.
     pub fn best(&self) -> Option<i64> {
         self.taken().map(|note| note.best).max()
     }
@@ -102,14 +103,10 @@ impl SlackNotes {
         self.taken().filter(|note| note.worst < 0).count()
     }
 
-    /// The stream's delay: what its earliest packets wait, in the notes taken and the half second
-    /// being noted. `None` before a packet.
-    pub fn delay(&self) -> Option<i64> {
-        let current = (!self.current.is_empty()).then_some(self.current.best);
-        self.best().max(current)
-    }
-
+    /// The notes taken and the half second being noted. A choice is made only on the block that
+    /// closes a half second, when the one being noted is still empty, so the chooser reads ten
+    /// seconds of notes while the stat also reads the packets since.
     fn taken(&self) -> impl Iterator<Item = &Note> {
-        self.notes.iter().filter(|note| !note.is_empty())
+        self.notes.iter().chain([&self.current]).filter(|note| !note.is_empty())
     }
 }

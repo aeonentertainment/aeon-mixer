@@ -305,7 +305,7 @@ impl JitterBuffer {
         self.end_what_went_quiet();
         self.stats.jitter_ms =
             self.stream.as_ref().map_or(0.0, |stream| stream.jitter * 1000.0 / RATE as f32);
-        let delay = self.stream.as_ref().and_then(|stream| stream.notes.delay());
+        let delay = self.stream.as_ref().and_then(|stream| stream.notes.best());
         self.stats.playout_delay_ms = frames_to_ms(delay.unwrap_or(self.anchor_slack));
         self.shared.publish(&self.stats);
     }
@@ -941,18 +941,6 @@ mod tests {
         assert_eq!(stats.pushed, arrivals.len() as u32);
     }
 
-    /// The block a packet is drained in: the one after it arrives, as `pull_direct` feeds it.
-    fn drained(arrival: &Arrival) -> i64 {
-        (arrival.at / BLOCK as i64 + 1) * BLOCK as i64
-    }
-
-    /// The first packets of a stream held up `late` frames, as a link that starts slow holds them.
-    fn first_held(mut arrivals: Vec<Arrival>, late: i64) -> Vec<Arrival> {
-        let released = arrivals[0].at + late;
-        arrivals.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
-        arrivals
-    }
-
     /// A 20 ms stream whose first packet came 7 ms late is anchored that much later, so every
     /// packet after it waits longer than the opening delay. Pinned or chosen, before any move, the
     /// delay reported is what its earliest packets wait, read off what came out: where the signal
@@ -1016,7 +1004,7 @@ mod tests {
             while let Some(arrival) = next.next_if(|a| a.at < pumped) {
                 jitter.push(&arrival.packet);
             }
-            jitter.pull(&mut block);
+            assert_no_alloc::assert_no_alloc(|| jitter.pull(&mut block));
             if pumped > anchor_of(&arrivals) {
                 latencies.push(jitter.latency_frames());
                 delays.push(jitter.stats().playout_delay_ms);
