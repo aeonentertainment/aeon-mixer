@@ -65,14 +65,31 @@ hears a voice. The detector and the control path are untouched.
    jumps, under the usual crossfade, to a quarter period above the floor, once per rest. A rest is
    the one place a splice has no waveform to match, so the delay comes down for free, and the next
    line starts low with room for a voice shifted up to run before it repeats a period. The detector
-   also lets go of a voice that still sounds: one under 82 Hz, or one it doubts for 40 ms, under
-   breath or a loud room. A jump of an arbitrary length there splices the note out of phase, so the
-   move waits until the input at both ends of the jump is under -50 dBFS or no longer repeats the
-   voice's last period: the best match of 384 samples with those a period before, within an
-   eighth, under 0.25. A voice under breath as loud as itself matches at 0.36 and up, breath alone
-   at 0.15 at most. The level floor is there because Opus's residue in a rest, at -90 to -60 dBFS,
-   repeats a period too, and held the move until the next sound. While a voice still sounds, it
-   looks again every crossfade.
+   also lets go of a voice that still sounds: one under 82 Hz, or one it doubts for 40 ms under
+   breath or a room's backing, and it may have moved to another note by then. A jump of an
+   arbitrary length there splices the note out of phase, so the move happens only where both ends
+   of the jump are under -50 dBFS, too quiet for a splice to be heard, and looks again every
+   crossfade until they are.
+
+   Asking whether the input still repeats a period was tried first and does not hold. Searching
+   around the detector's last period misses a voice that moved a note under doubt: 138 of 366
+   cases in the sweep below cut a sounding voice. Searching the shifter's whole range by
+   correlation is fooled at short lags, where a low voice's smooth waveform matches itself: 24
+   failed. A YIN reading of the material at the splice failed 17, since a window long enough for
+   a low voice spans its vibrato. The level floor is what holds, and its price is the line start in
+   a room whose backing reaches the phone over -50 dBFS during the rest: there the move does not
+   happen, and the next line starts wherever the last note left the delay. After a 0.4 s rest,
+   bleed at -39 or -26 dBFS left an A2 line starting at 3.6 and 3.5 ms and an E4 line at 3.7 and
+   3.4 ms, against 1.0 and 1.4 ms in a silent rest; an A3 line started at 0.3 ms either way.
+
+   The sweep: notes from E2 to A#4, 40 cents off, leaping a second, a third, a fifth and an octave
+   each way, under breath at 0 and -6 dB against the voice and a backing's bleed at -12, -6 and 0
+   dB, through the real corrector. No rest move cuts a sounding voice in it. Period jumps still cut
+   one in 15 cases, 18 splices with the worst 0.44 of a period, all under bleed at -12 or 0 dB:
+   a jump taken on the detector's last period after the voice moved. `main`'s corrector cuts one in
+   11 of the same cases. A jump matches over a period of the voice or a crossfade, whichever is
+   longer, since a crossfade of a low voice under bleed matched an eighth of a period away; that
+   took the period jumps from 55 failing cases to 15.
 
 The fourth is the new idea. Decision 0009 tried draining to the floor itself and saw the sung p95
 rise, because a voice shifted up from the floor repeats a period at once. A quarter period of room
@@ -149,11 +166,12 @@ rows: 0.963 before. It is the only artefact measure here that reads the splices 
 - **Decisions 0010 and 0013** change the reading and the control signal, not the shifter. The
   reading projects the voice forward past `delaySamples()`, and a lower delay makes that
   projection shorter. `PitchCorrector` tells the shifter `reader.voiced()`. With them, and with
-  the rest move waiting while a voice still sounds, the shifter moves more, since correction acts
-  on more of each note and fewer rests move it down: on the golden vocal in the key of C, at the
-  first start offset, the sung p95 is 9.5 ms against 5.6 with this change alone, the largest delay
-  11.6 against 6.4, and a line starts at a median of 2.0 ms against 1.7. On vocadito a line starts
-  at 1.2 to 2.0 ms against 1.1 to 1.7. The held-tone rows and the delay at rest do not move.
+  the rest move waiting for the level floor, the shifter moves more, since correction acts on more
+  of each note and fewer rests move it down: on the golden vocal in the key of C, over four start
+  offsets, the sung p95 is 7.1 to 9.5 ms against 5.6 to 7.2 with this change alone and 8.6 to 10.9
+  before it, the largest delay 10.3 to 11.7, and a line starts at a median of 2.6 to 3.8 ms against
+  1.7 to 2.6. On vocadito a line starts at 1.3 to 2.0 ms against 1.1 to 1.7. The held-tone rows and
+  the delay at rest do not move.
 - **The octave for #48's higher and lower voices.** A floor that follows the ratio lets an octave
   up pay its own floor, 133 samples, only while it shifts an octave, and a voice and its correction
   would ride one sawtooth. Moving the octave in still needs the shift range opened to 18 semitones,
@@ -166,5 +184,7 @@ rows: 0.963 before. It is the only artefact measure here that reads the splices 
 - Mouth to speaker with correction on, which needs `measure-latency` on hardware (#116).
 - Whether a rest move is heard. It is a splice inside silence or unvoiced sound, a breath or a
   consonant's tail, where there is no pitch to break.
-- A voice whose period moved while the detector had let go is matched against the last period it
-  read, within an eighth. One that slid further than that could still be spliced.
+- A period jump after the voice moved a note under bleed, the 15 cases above. Reading the period
+  sounding at the splice, robustly for a low voice with vibrato, is the work left.
+- A rest that begins with the delay already under the quarter period settles there, and the
+  easing shift can still send the delay back up a period before the next line.

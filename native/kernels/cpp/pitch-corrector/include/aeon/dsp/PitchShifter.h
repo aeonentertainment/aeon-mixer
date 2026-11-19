@@ -16,8 +16,8 @@ namespace aeon::dsp {
  * of the voice: a jump ahead waits for a whole period of drift and no longer, unless the waveform
  * still matches better further on. A rest has no waveform to keep whole, so `setVoiced(false)`
  * lets the read point move down to a quarter period above the floor, where the next phrase starts
- * with room to shift up before it repeats a period. It moves only where the input does not repeat
- * the voice's period, since the detector also lets go of a voice it doubts or one under 82 Hz.
+ * with room to shift up before it repeats a period. It moves only where the input is under
+ * -50 dBFS, since the detector also lets go of a voice it doubts or one under 82 Hz.
  * Decision 0021 has the numbers.
  */
 class PitchShifter {
@@ -31,7 +31,7 @@ class PitchShifter {
   void setSemitones(float semitones);
   /** The voice's period from the detector, held to 82 Hz at the longest; a jump moves the read point by about this much. */
   void setPeriod(float samples);
-  /** Whether the detector hears a voice; once a rest begins and nothing periodic sounds, the read point moves down to near the floor. */
+  /** Whether the detector hears a voice; once a rest begins and the input is too quiet to hear, the read point moves down to near the floor. */
   void setVoiced(bool voiced);
   /** `in` and `out` hold `frames` samples each and must not overlap. */
   void process(const float *in, float *out, int frames);

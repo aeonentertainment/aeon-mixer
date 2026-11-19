@@ -20,13 +20,7 @@ constexpr double kStartingPeriodSeconds = 1.0 / 200;
 constexpr int kInterpolationReach = 3;
 /** Where a rest leaves the read point, in periods above the floor: low, with room for a voice shifted up to run a while before it repeats a period. */
 constexpr double kRestingPeriods = 0.25;
-/**
- * A stretch this alike to the one a period before is a voice that still sounds, which a rest move
- * would splice out of phase. A voice under breath as loud as itself matches at 0.36 and up; breath
- * alone reaches 0.15 and silence 0.
- */
-constexpr float kPeriodicMatch = 0.25f;
-/** Under -50 dBFS a voice is too quiet for a splice in it to be heard, and a codec's residue in a rest can repeat a period at -90. */
+/** Under -50 dBFS nothing is loud enough for a splice in it to be heard, so a rest move may land anywhere; above it the input may be a voice the detector doubts. */
 constexpr float kQuietestVoice = 0.00316f;
 
 int powerOfTwoAtLeast(double samples) {
@@ -55,7 +49,7 @@ struct PitchShifter::State {
   bool voiced = false;
   /** Whether this rest has already moved the read point down. */
   bool settled = false;
-  /** Samples until a rest that found a voice still sounding looks again. */
+  /** Samples until a rest that found the input still audible looks again. */
   int restCheckIn = 0;
 
   explicit State(double sampleRate)
@@ -106,28 +100,14 @@ struct PitchShifter::State {
     return cross / std::sqrt(energyFrom * energyTo + 1e-12f);
   }
 
-  /** How alike the stretch behind the read point and the stretch behind where a jump of `lag` would land. */
-  float correlation(int direction, long long lag) const {
-    return correlation((long long)(std::floor(read)), direction, lag, int(fadeIn.size()));
-  }
 
-  /**
-   * Whether the input around `point` is loud enough to hear and repeats a period of the voice earlier,
-   * as a sounding voice does whether or not the detector trusts it. Three crossfades long, so
-   * breath's chance matches stay far under the bar.
-   */
-  bool soundsAt(double point) const {
+  /** Whether the input just behind `point` is loud enough for a splice in it to be heard. */
+  bool audibleAt(double point) const {
     const auto from = (long long)(std::floor(point));
     const int length = 3 * int(fadeIn.size());
     float energy = 0;
     for (int k = 1; k <= length; ++k) energy += at(from - k) * at(from - k);
-    if (energy < float(length) * kQuietestVoice * kQuietestVoice) return false;
-    const int nominal = int(std::lround(period));
-    const int reach = std::max(2, nominal / 8);
-    for (int lag = nominal - reach; lag <= nominal + reach; ++lag) {
-      if (correlation(from, -1, lag, length) > kPeriodicMatch) return true;
-    }
-    return false;
+    return energy >= float(length) * kQuietestVoice * kQuietestVoice;
   }
 
   struct Jump {
@@ -139,14 +119,18 @@ struct PitchShifter::State {
   /**
    * The jump nearest one period that best continues the waveform, finer than a sample: the lag
    * within an eighth of a period either way whose stretch behind the landing point correlates best
-   * with the stretch behind the read point. A jump ahead may not land within `floor` of the newest
-   * sample, so it can only take the lags the delay already covers.
+   * with the stretch behind the read point, over a period of it or a crossfade, whichever is
+   * longer, since a crossfade of a low voice under a room's backing matches at the wrong lag. A
+   * jump ahead may not land within `floor` of the newest sample, so it can only take the lags the
+   * delay already covers.
    */
   Jump bestJump(int direction, double floor) const {
+    const auto from = (long long)(std::floor(read));
     const int nominal = int(std::lround(period));
     const int reach = std::max(2, nominal / 8);
+    const int length = std::max(int(fadeIn.size()), nominal);
+    const auto correlation = [&](int dir, long long lag) { return this->correlation(from, dir, lag, length); };
     const int furthest = std::min(nominal + reach, int(std::floor(longestPeriod)) + 1);
-    const auto from = (long long)(std::floor(read));
     int best = nominal;
     int last = nominal - reach;
     float bestScore = -2;
@@ -181,8 +165,8 @@ struct PitchShifter::State {
    * Jumps a period back when the read point closes on the floor, or ahead once it has fallen a
    * period behind and the waveform matches there. In a rest there is nothing to keep whole, so the
    * read point moves down to a quarter period above the floor, once. The detector also lets go of
-   * a voice it doubts or one under 82 Hz, which still sounds, so the move waits until neither end
-   * of its splice repeats the voice's period, looking again every crossfade while it does.
+   * a voice it doubts or one under 82 Hz, which still sounds at any period, so the move waits until
+   * both ends of its splice are too quiet to hear, looking again every crossfade until they are.
    */
   void keepInRange() {
     const double floor = floorFor(ratio);
@@ -190,7 +174,7 @@ struct PitchShifter::State {
     if (!voiced && !settled && --restCheckIn <= 0) {
       const double resting = floor + kRestingPeriods * period;
       const bool high = delay > resting + 1;
-      if (high && (soundsAt(read) || soundsAt(read + delay - resting))) {
+      if (high && (audibleAt(read) || audibleAt(read + delay - resting))) {
         restCheckIn = int(fadeIn.size());
       } else {
         settled = true;
