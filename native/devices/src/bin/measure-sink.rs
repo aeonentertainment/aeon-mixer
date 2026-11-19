@@ -1,6 +1,9 @@
 //! Opens an output, plays for a minute, and prints what the OS gave: the period, the latency it
 //! reports, the spacing of the device callbacks and the underruns. A person runs it on real
-//! hardware, and its output is the evidence in docs/decisions/0003-device-backends.md.
+//! hardware, and its output is the evidence in docs/decisions/0003-device-backends.md. On macOS
+//! it also prints what the HAL says of the device before the open, while open and after the close,
+//! or after an open that failed: the properties the engine sets and the ones that tell a wedged
+//! device from a healthy one (#232).
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -14,10 +17,11 @@ use engine::block::{RATE, Stereo};
 use engine::driver::{Driver, Render};
 
 const USAGE: &str = "\
-usage: measure-sink [--list] [--device ID] [--period FRAMES] [--seconds N] [--tone]
+usage: measure-sink [--list] [--state] [--device ID] [--period FRAMES] [--seconds N] [--tone]
                     [--shared | --exclusive]   (Windows only)
 
   --list        print the outputs, ids and transports, then exit
+  --state       macOS: print what the HAL says of the device, then exit without opening it
   --device ID   an id from --list; the default output otherwise
   --period N    the hardware period to ask for, in frames (default 128)
   --seconds N   how long to play (default 60)
@@ -27,6 +31,7 @@ usage: measure-sink [--list] [--device ID] [--period FRAMES] [--seconds N] [--to
 
 struct Args {
     list: bool,
+    state: bool,
     request: Request,
     seconds: u64,
     tone: bool,
@@ -55,13 +60,28 @@ fn main() -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
+    let device = args.request.device.as_deref();
+    if args.state {
+        return match state(device) {
+            Some(state) => {
+                println!("state      {state}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("measure-sink: --state reads the CoreAudio HAL, so macOS only");
+                ExitCode::from(2)
+            }
+        };
+    }
 
+    show("before", device);
     let stats = Arc::new(Stats::new());
     let starting = Instant::now();
     let running = match driver(&args, Arc::clone(&stats)).start(render(args.tone)) {
         Ok(running) => running,
         Err(error) => {
             eprintln!("measure-sink: could not open the output: {error}");
+            show("failed", device);
             return ExitCode::FAILURE;
         }
     };
@@ -71,8 +91,10 @@ fn main() -> ExitCode {
     thread::sleep(Duration::from_secs(args.seconds));
     let ran = started.elapsed();
     let report = stats.report();
+    show("open", device);
     let info = running.info;
     drop(running);
+    show("after", device);
 
     let frames = |frames: u32| {
         format!(
@@ -104,6 +126,7 @@ fn main() -> ExitCode {
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args {
         list: false,
+        state: false,
         request: Request::default(),
         seconds: 60,
         tone: false,
@@ -117,6 +140,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
         match arg.as_str() {
             "--list" => parsed.list = true,
+            "--state" => parsed.state = true,
             "--device" => parsed.request.device = Some(value()?),
             "--period" => parsed.request.period_frames = number(&arg, value()?)?,
             "--seconds" => parsed.seconds = number(&arg, value()?)?.into(),
@@ -139,6 +163,28 @@ fn driver(args: &Args, stats: Arc<Stats>) -> Box<dyn Driver> {
 #[cfg(not(windows))]
 fn driver(args: &Args, stats: Arc<Stats>) -> Box<dyn Driver> {
     devices::driver(args.request.clone(), stats)
+}
+
+/// Prints what the HAL says of the device the moment it is read, so a run that fails or is
+/// killed still shows every state it reached.
+fn show(when: &str, device: Option<&str>) {
+    if let Some(state) = state(device) {
+        println!("{when:<10} {state}");
+    }
+}
+
+/// What the HAL says of the device now, or none on an OS with no HAL to ask.
+#[cfg(target_os = "macos")]
+fn state(device: Option<&str>) -> Option<String> {
+    Some(
+        devices::DeviceState::read(device)
+            .map_or_else(|error| error.to_string(), |state| state.to_string()),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn state(_device: Option<&str>) -> Option<String> {
+    None
 }
 
 // Silence by default: the timing is the same and the room stays quiet.

@@ -10,6 +10,10 @@
 
 #[cfg(any(test, all(feature = "hardware", target_os = "linux")))]
 mod alsa_transport;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod buffer_hold;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod buffer_holds;
 mod capture;
 mod capture_feed;
 mod capture_request;
@@ -21,6 +25,8 @@ mod core_audio_transport;
 mod endpoint_transport;
 mod feed;
 mod follow;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod io_buffer;
 #[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
 mod nominal_rate;
 mod output;
@@ -67,7 +73,7 @@ mod os;
 #[cfg(all(feature = "hardware", target_os = "linux"))]
 pub use alsa::{AlsaCapture, AlsaDriver, inputs, outputs};
 #[cfg(all(feature = "hardware", target_os = "macos"))]
-pub use coreaudio::{CoreAudioCapture, CoreAudioDriver, inputs, outputs};
+pub use coreaudio::{CoreAudioCapture, CoreAudioDriver, DeviceState, inputs, outputs};
 #[cfg(feature = "hardware")]
 pub use os::Os;
 #[cfg(all(feature = "hardware", windows))]

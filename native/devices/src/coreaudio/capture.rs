@@ -45,7 +45,8 @@ impl Capture for CoreAudioCapture {
             None => super::default_input()?,
         };
         let rate = RATES.hold(device)?;
-        let period = set_period(device, request.period_frames)?;
+        let buffer = set_period(device, request.period_frames)?;
+        let period = buffer.frames;
 
         let streams = super::input_streams(device)?;
         let mut counts = Vec::with_capacity(streams.len());
@@ -87,6 +88,7 @@ impl Capture for CoreAudioCapture {
         let io = CaptureIo::start(device, callback)?;
         Ok(Capturing::new(info, move || {
             drop(io);
+            drop(buffer);
             drop(rate);
         }))
     }
