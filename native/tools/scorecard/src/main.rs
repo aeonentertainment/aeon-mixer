@@ -4,6 +4,7 @@
 
 mod bundles;
 mod numbers;
+mod paired;
 
 #[cfg(test)]
 mod tests;
@@ -63,7 +64,14 @@ fn score(options: &Options, baseline: Option<&Scorecard>) -> Result<Scorecard, S
         for note in &played.notes {
             println!("{name}: note: {note}");
         }
-        card.add(&name, numbers::of(&played), baseline);
+        let paired = paired::score(&name, &dir, options.replay.profile.as_deref())
+            .map_err(|e| format!("{name}: {e}"))?;
+        for line in &paired.lines {
+            println!("{line}");
+        }
+        let mut numbers = numbers::of(&played);
+        numbers.extend(paired.numbers);
+        card.add(&name, numbers, baseline);
     }
     Ok(card)
 }

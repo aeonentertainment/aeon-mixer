@@ -45,6 +45,30 @@ one guide note, with a pull either side: a voice that stops as its note ends let
 The shift and the pull are on the engine's reading and not yet on the binding's `pitch` event.
 The levels count every reading, silence too, as `replay`'s table does.
 
+## The paired rows
+
+A slot whose bundle holds `reference/<n>.wav` and `reference/<n>.json` (docs/design.md 8.11) is
+a paired take: the same singing recorded at once by the phone and by a reference vocal mic at
+the same distance. Its rows say how far from the mic the phone sounds, and how much the tone
+stage changes that (decision 0029). The scorecard replays the slot alone with no stems, once
+with its stage off and once as it ran, lines the mic's recording up with it by level, and reads
+each on the mic's moments of singing, s and room. So a pair is sung with reverb and voice off.
+
+| number                                                  | what it is, for `off`, `on` and, where it has one, `reference`                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `pairDistanceDb`                                        | how far the phone's tone sits from the mic's at the same loudness; 0 is the mic |
+| `pairLowDb`, `pairMidDb`, `pairPresenceDb`, `pairTopDb` | the same gap, signed: 100 to 400 Hz, 400 Hz to 2 kHz, 2 to 6 kHz, 6 to 12.5 kHz |
+| `sibilanceDb`                                           | power over 5 kHz in an s, against the singing                                   |
+| `plosivesPerMinute`                                     | bursts under 100 Hz that stand over the singing                                 |
+| `noiseFloorDb`                                          | the room between lines, against the singing                                     |
+
+It prints a table of them, mic, stage off and stage on, and how many dB closer the stage
+brought the phone. A bundle with no `reference/` scores as before and says its paired rows were
+not scored. The tests write synthetic pairs: a voice, and the same voice through known bands,
+or with its s, its pops or its room at known gains. The spectral rows read the bands within
+0.15 dB, sibilance and the room read their gains within 0.1, the pops cut by 12 dB count half,
+and the stage with the inverse bands brings the distance from 2.5 dB to under 0.1.
+
 ## Against a baseline
 
 A scorecard file holds each bundle's numbers, each with a tolerance:

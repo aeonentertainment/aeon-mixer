@@ -660,9 +660,11 @@ version = "0.0.0"
 dependencies = [
  "assert_no_alloc",
  "engine",
+ "realfft",
  "replay",
  "serde",
  "serde_json",
+ "transport",
 ]
 
 [[package]]
