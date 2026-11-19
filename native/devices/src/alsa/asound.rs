@@ -31,6 +31,11 @@ pub struct CardInfo {
     _opaque: [u8; 0],
 }
 
+#[repr(C)]
+pub struct PcmInfo {
+    _opaque: [u8; 0],
+}
+
 // From alsa/pcm.h
 pub const STREAM_PLAYBACK: c_int = 0;
 pub const STREAM_CAPTURE: c_int = 1;
@@ -116,6 +121,12 @@ asound! {
     fn snd_ctl_card_info_free(*mut CardInfo);
     fn snd_ctl_card_info(*mut Ctl, *mut CardInfo) -> c_int;
     fn snd_ctl_card_info_get_driver(*const CardInfo) -> *const c_char;
+    fn snd_pcm_info_malloc(*mut *mut PcmInfo) -> c_int;
+    fn snd_pcm_info_free(*mut PcmInfo);
+    fn snd_pcm_info_set_device(*mut PcmInfo, c_uint);
+    fn snd_pcm_info_set_stream(*mut PcmInfo, c_int);
+    fn snd_ctl_pcm_info(*mut Ctl, *mut PcmInfo) -> c_int;
+    fn snd_pcm_info_get_id(*const PcmInfo) -> *const c_char;
 }
 
 impl Asound {
