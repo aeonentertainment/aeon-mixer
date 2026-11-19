@@ -41,11 +41,15 @@ pub struct Paired {
 /// with no `reference/` scores none and says so.
 pub fn score(name: &str, dir: &Path, profile: Option<&Path>) -> Result<Paired, String> {
     let mut paired = Paired::default();
-    let references = Reference::find(dir)?;
+    let (references, skipped) = Reference::find(dir)?;
+    paired.lines.extend(skipped.iter().map(|skipped| format!("{name}: {skipped}")));
     if references.is_empty() {
-        paired.lines.push(format!(
-            "{name}: no reference mic in reference/, so the paired rows were not scored"
-        ));
+        let none = if skipped.is_empty() {
+            "no reference mic in reference/"
+        } else {
+            "no file in reference/ is a reference"
+        };
+        paired.lines.push(format!("{name}: {none}, so the paired rows were not scored"));
     }
     for reference in references {
         let slot = reference.slot;

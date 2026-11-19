@@ -24,34 +24,50 @@ struct About {
 }
 
 impl Reference {
-    /// Every reference in the bundle at `dir`, by slot; none when it has no `reference/`.
-    pub fn find(dir: &Path) -> Result<Vec<Self>, String> {
+    /// Every reference in the bundle at `dir`, by slot, and each other file in its `reference/`
+    /// with why it was skipped; neither when it has no `reference/`. A `.wav` named other than
+    /// by its slot's plain number is refused, so no file is read as another's slot.
+    pub fn find(dir: &Path) -> Result<(Vec<Self>, Vec<String>), String> {
         let folder = dir.join("reference");
         if !folder.is_dir() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let read = |e: std::io::Error| format!("reference/: {e}");
-        let mut found = Vec::new();
-        for entry in std::fs::read_dir(&folder).map_err(read)? {
-            let path = entry.map_err(read)?.path();
-            if path.extension().is_none_or(|extension| extension != "wav") {
-                continue;
+        let mut paths = std::fs::read_dir(&folder)
+            .map_err(read)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(read)?;
+        paths.sort();
+        let wav = |path: &Path| extension(path).as_deref() == Some("wav");
+        let (mut found, mut skipped) = (Vec::<Self>::new(), Vec::new());
+        for path in &paths {
+            let file = format!("reference/{}", path.file_name().unwrap_or_default().display());
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            if wav(path) {
+                let slot =
+                    stem.parse::<usize>().ok().filter(|slot| slot.to_string() == stem).ok_or_else(
+                        || format!("{file}: a reference is named by its slot, as 0.wav"),
+                    )?;
+                if found.iter().any(|reference| reference.slot == slot) {
+                    return Err(format!("{file}: a second reference for slot {slot}"));
+                }
+                found.push(Self::read(path, &file, slot)?);
+            } else if extension(path).as_deref() != Some("json") {
+                skipped.push(format!("{file} was skipped: a reference is <slot>.wav"));
+            } else if !paths.iter().any(|other| wav(other) && other.file_stem() == path.file_stem())
+            {
+                skipped.push(format!("{file} was skipped: it has no {stem}.wav beside it"));
             }
-            let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned());
-            let slot = stem.as_deref().and_then(|stem| stem.parse().ok()).ok_or_else(|| {
-                let file = path.file_name().unwrap_or_default().to_string_lossy();
-                format!("reference/{file}: a reference is named by its slot, as 0.wav")
-            })?;
-            found.push(Self::read(&folder, slot)?);
         }
-        found.sort_by_key(|reference| reference.slot);
-        Ok(found)
+        Ok((found, skipped))
     }
 
-    fn read(folder: &Path, slot: usize) -> Result<Self, String> {
-        let name = format!("reference/{slot}.json");
-        let text = std::fs::read_to_string(folder.join(format!("{slot}.json")))
-            .map_err(|e| format!("{name}: {e}"))?;
+    /// The reference at `path`, which a person names `file`, and the `.json` beside it.
+    fn read(path: &Path, file: &str, slot: usize) -> Result<Self, String> {
+        let about = path.with_extension("json");
+        let name = format!("reference/{}", about.file_name().unwrap_or_default().display());
+        let text = std::fs::read_to_string(&about).map_err(|e| format!("{name}: {e}"))?;
         let mut value: Value = serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))?;
         match value
             .as_object_mut()
@@ -65,12 +81,15 @@ impl Reference {
             None => return Err(format!("{name}: a reference needs a format")),
         }
         let about: About = serde_json::from_value(value).map_err(|e| format!("{name}: {e}"))?;
-        let wav = format!("reference/{slot}.wav");
-        let bytes =
-            std::fs::read(folder.join(format!("{slot}.wav"))).map_err(|e| format!("{wav}: {e}"))?;
-        let samples = float_wav(&bytes).map_err(|e| format!("{wav}: {e}"))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("{file}: {e}"))?;
+        let samples = float_wav(&bytes).map_err(|e| format!("{file}: {e}"))?;
         Ok(Self { slot, mic: about.mic, distance_cm: about.distance_cm, samples })
     }
+}
+
+/// A file's extension in lower case: a recorder may write `.WAV`.
+fn extension(path: &Path) -> Option<String> {
+    path.extension().map(|extension| extension.to_string_lossy().to_lowercase())
 }
 
 /// The samples of a mono, 48 kHz, 32-bit float WAV, plain or extensible. Anything else is refused

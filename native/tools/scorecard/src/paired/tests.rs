@@ -17,6 +17,7 @@ use transport::rtp::Header;
 
 use super::frame::BANDS;
 use super::gap::BANDS_READ;
+use super::reference::Reference;
 use super::score;
 
 const SECOND: usize = RATE as usize;
@@ -100,6 +101,21 @@ fn coloured(take: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// `samples` as a mono, 48 kHz, 32-bit float WAV, as a reference is exported.
+fn wav_bytes(samples: &[f32]) -> Vec<u8> {
+    let data = (samples.len() * 4) as u32;
+    let mut wav = b"RIFF".to_vec();
+    wav.extend((36 + data).to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    for field in [16u32, 3 | 1 << 16, RATE, RATE * 4, 4 | 32 << 16] {
+        wav.extend(field.to_le_bytes());
+    }
+    wav.extend(b"data");
+    wav.extend(data.to_le_bytes());
+    wav.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    wav
+}
+
 /// A bundle of one house mic whose slot received `phone`, with `effects` set on it, and
 /// `reference` as its reference mic, started `LEAD` before the song.
 fn bundle(name: &str, phone: &[f32], effects: Value, reference: &[f32]) -> PathBuf {
@@ -157,17 +173,7 @@ fn bundle(name: &str, phone: &[f32], effects: Value, reference: &[f32]) -> PathB
 
     let mut recorded = parts().room[..LEAD].to_vec();
     recorded.extend_from_slice(reference);
-    let mut wav = b"RIFF".to_vec();
-    let data = (recorded.len() * 4) as u32;
-    wav.extend((36 + data).to_le_bytes());
-    wav.extend(b"WAVEfmt ");
-    for field in [16u32, 3 | 1 << 16, RATE, RATE * 4, 4 | 32 << 16] {
-        wav.extend(field.to_le_bytes());
-    }
-    wav.extend(b"data");
-    wav.extend(data.to_le_bytes());
-    wav.extend(recorded.iter().flat_map(|s| s.to_le_bytes()));
-    std::fs::write(dir.join("reference/0.wav"), wav).unwrap();
+    std::fs::write(dir.join("reference/0.wav"), wav_bytes(&recorded)).unwrap();
     write(
         "reference/0.json",
         json!({ "format": 1, "mic": "a studio mic", "distanceCm": 10 }).to_string(),
@@ -266,4 +272,60 @@ fn a_reference_of_an_empty_room_scores_none_and_says_why() {
     let paired = score("pair", &dir, None).unwrap();
     assert!(paired.numbers.is_empty(), "{:#?}", paired.numbers);
     assert!(paired.lines[0].contains("does not line up"), "{:?}", paired.lines);
+}
+
+/// A folder holding `reference/` with `files`, each a reference's WAV or its `.json` by extension,
+/// or empty.
+fn references(name: &str, files: &[&str]) -> PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("aeon-scorecard-refs-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("reference")).unwrap();
+    for file in files {
+        let bytes = match Path::new(file).extension().and_then(|e| e.to_str()) {
+            Some("wav" | "WAV") => wav_bytes(&[0.0; 4]),
+            Some("json") => json!({ "format": 1, "mic": "a studio mic", "distanceCm": 10 })
+                .to_string()
+                .into_bytes(),
+            _ => Vec::new(),
+        };
+        std::fs::write(dir.join("reference").join(file), bytes).unwrap();
+    }
+    dir
+}
+
+// A handheld recorder writes `.WAV`; the reference is read from the file that was matched
+#[test]
+fn a_reference_keeps_the_case_its_recorder_gave_it() {
+    let (found, skipped) = Reference::find(&references("case", &["0.WAV", "0.json"])).unwrap();
+    assert_eq!(found.iter().map(|r| r.slot).collect::<Vec<_>>(), [0]);
+    assert_eq!(skipped, Vec::<String>::new());
+}
+
+// `01.wav` and `+1.wav` parse as slot 1, so either would be read as another file's slot
+#[test]
+fn a_reference_not_named_by_its_slot_is_refused_by_its_own_name() {
+    for file in ["01", "+1"] {
+        let dir =
+            references(file, &[&format!("{file}.wav"), &format!("{file}.json"), "1.wav", "1.json"]);
+        let Err(refused) = Reference::find(&dir) else { panic!("{file}.wav was read") };
+        assert_eq!(
+            refused,
+            format!("reference/{file}.wav: a reference is named by its slot, as 0.wav")
+        );
+    }
+}
+
+#[test]
+fn files_that_are_not_references_are_named_and_never_called_no_reference() {
+    let dir = references("skipped", &["notes.txt", "1.json"]);
+    let paired = score("pair", &dir, None).unwrap();
+    assert_eq!(
+        paired.lines,
+        [
+            "pair: reference/1.json was skipped: it has no 1.wav beside it",
+            "pair: reference/notes.txt was skipped: a reference is <slot>.wav",
+            "pair: no file in reference/ is a reference, so the paired rows were not scored",
+        ]
+    );
 }
