@@ -103,6 +103,8 @@ a decision record and the developer's agreement.
 - Timing claims need a number. A latency change ships with the measurement that justifies it,
   taken with `measure-latency` or `measure-sink`.
 - Never wait on sleeps or polling in tests. Await the event or promise that marks the milestone.
+  A datagram the network thread reads has none, so the contract suite's sender promises pump the
+  clock until `stats()` moves: docs/design.md section 9.
 - Before a PR opens, read the `bug-review`, `shape-review` and `pr-review` skills and follow each
   against your own diff (`git diff origin/main...HEAD`, since there is no PR number yet). Fix
   what they find and go through them again on the fix, so the first review on CI finds nothing.

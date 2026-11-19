@@ -39,21 +39,26 @@ pub fn offline(rows: &[Row]) -> String {
     }
     let _ = writeln!(
         out,
-        "\nAll in ms, a range where it depends on where in a block the stream began. No device, no \
-         socket, no network, on the offline driver. **Sender gathers**: the frame or chunk a \
+        "\nAll in ms, a range where it depends on where in a block the stream began. No device, \
+         no socket, no network, on the offline driver. **Sender gathers**: the frame or chunk a \
          sender fills before any of it can leave. **Sender encoder**: Opus's lookahead, which the \
          phone pays. **Slot's delay**: what the slot reports, pinned by the host or chosen by the \
-         slot. A chosen row is what a slot comes to with no jitter to cover, the least it can hold \
-         on any network. **Corrector**: on, a voice 40 cents sharp sings phrases of 0.2 to 0.475 \
-         s, each followed by a rest and a 50 ms sweep from 2 to 7.5 kHz, and the slot corrects it \
-         to the nearest semitone at once with no guide. What it reports is the delay the corrector \
-         held as each sweep went through, which engine holds includes. The rest before each sweep \
-         moves that delay down to a quarter period of the voice above the shifter's floor, so the \
-         span comes from the voice's period and is what a line's start meets; a budget counts \
-         `correctorMaxDelayMs`, {ceiling:.1} ms. **Engine holds**: from the packet's arrival to the master's output: the \
-         wait for the next block, the slot's delay on the jitter-buffered paths, decode, slot and \
-         master. **Total**: a sample entering the sender to its leaving the master; it excludes \
-         the mouth to the phone's encoder, the network, and everything after the master.",
+         slot. A chosen row is what a slot comes to with no jitter to cover, the least it can \
+         hold on any network. A ring row is a capture slot's own: the wait it holds a sample for, \
+         its input's period included, and no jitter buffer. **Corrector**: on, a voice 40 cents \
+         sharp sings phrases of 0.2 to 0.475 s, each followed by a rest and a 50 ms sweep from 2 \
+         to 7.5 kHz, and the slot corrects it to the nearest semitone at once with no guide. What \
+         it reports is the delay the corrector held as each sweep went through, which engine \
+         holds includes. The rest before each sweep moves that delay down to a quarter period of \
+         the voice above the shifter's floor, so the span comes from the voice's period and is \
+         what a line's start meets; a budget counts `correctorMaxDelayMs`, {ceiling:.1} ms. \
+         **Engine holds**: from the packet's arrival to the master's output: the wait for the \
+         next block, the slot's delay on the jitter-buffered paths, decode, slot and master. \
+         **Total**: a sample entering the sender to its leaving the master; it excludes the mouth \
+         to the phone's encoder, the network, and everything after the master. **Capture**: a \
+         house mic on the output's clock, whose sender is its input: it gathers a period before \
+         the OS wakes anyone, engine holds runs from that wake, and total excludes what the \
+         input's hardware and driver hold.",
         ceiling = ms(f64::from(Corrector::MAX_LATENCY_FRAMES)),
     );
     out
@@ -63,6 +68,7 @@ pub fn offline(rows: &[Row]) -> String {
 fn slot_delay(row: &Row) -> String {
     match (row.slot_delay_ms, row.delay) {
         (None, _) => "none".into(),
+        (Some(ms), _) if !row.ingest.has_playout_delay() => format!("ring {ms:.2}"),
         (Some(ms), Delay::Pinned(_)) => format!("pinned {ms:.2}"),
         (Some(ms), Delay::Chosen) => format!("chosen {ms:.2}"),
     }
@@ -85,11 +91,13 @@ pub fn range((least, most): (f64, f64)) -> String {
 }
 
 /// The device tables: one row per opening, then every path with the output's figure added on.
+/// `by_period` holds the offline rows under each output period the openings were granted
+/// (`offline::under_callback`).
 pub fn device(
     args: &DeviceArgs,
     programme: &Programme,
     openings: &[Opening],
-    rows: &[Row],
+    by_period: &[(u32, Vec<Row>)],
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "### measure-latency device, commit {}", machine::commit());
@@ -119,7 +127,8 @@ pub fn device(
         "\n| path | slot's delay | corrector | cleanup | offline total | output at most | mic path at most |\n\
          | --- | --- | --- | --- | ---: | ---: | ---: |"
     );
-    for period in distinct_periods(openings) {
+    for (period, rows) in by_period {
+        let period = *period;
         let readings: Vec<f64> = openings
             .iter()
             .filter(|opening| opening.output_period == period)
@@ -130,11 +139,8 @@ pub fn device(
             continue;
         }
         let output = median(&readings);
-        // A longer callback than the block drains packets less often, which the offline run, whose
-        // callback is one block, cannot see
-        let extra = f64::from(period.saturating_sub(engine::block::BLOCK as u32));
         for row in rows {
-            let (least, most) = (ms(row.lag.0), ms(row.lag.1 + extra));
+            let (least, most) = (ms(row.lag.0), ms(row.lag.1));
             let _ = writeln!(
                 out,
                 "| {}, period {period} | {} | {} | {} | {:.2} to {:.2} | {output:.2} | {:.2} to {:.2} |",
@@ -165,7 +171,10 @@ blank when it reports none. **OS says output**: `StreamInfo`, the figure decisio
 house-mic path's own cost. **Moved**: most to least across the chirps of that opening; over 0.75 means no number. **Render spread**: how far block \
 renders stand from their mean, most to least, so a long callback's bursts show. **Mic path \
 at most**: the offline total plus the output: a sample entering the sender to its leaving the \
-speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer. \
+speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer. A \
+capture row's offline total is measured under the row's period, with the input a host opens beside \
+that callback, and is absent under a period a capture slot refuses; every other row's adds the \
+period's excess over a block to its latest frame, for packets drained less often. \
 **Corrector**: as in the offline table. An on row's offline total holds the delay the corrector \
 reported for its sweeps there; the output's figure is taken with the corrector off, since it \
 holds nothing past the master.";
@@ -210,7 +219,8 @@ fn distinct<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<&'a String> {
     seen
 }
 
-fn distinct_periods(openings: &[Opening]) -> Vec<u32> {
+/// The output periods the openings were granted, each once.
+pub fn distinct_periods(openings: &[Opening]) -> Vec<u32> {
     let mut periods: Vec<u32> = openings.iter().map(|opening| opening.output_period).collect();
     periods.sort_unstable();
     periods.dedup();

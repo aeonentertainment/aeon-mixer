@@ -1,8 +1,8 @@
 # 0029: The tone stage holds no sample, and caps the delay its filters cost
 
-**Status:** accepted, 2026-11-15, ahead of the code for #205. Nothing here has been heard, and
-no phone has been through it. The delays are computed from the filters' own formulas at 48 kHz.
-The code that follows measures them.
+**Status:** accepted, 2026-11-15, for #205. Nothing here has been heard, and no phone has been
+through it. The delays were computed from the filters' own formulas at 48 kHz, and #216 measured
+each on the engine within 3 % of its figure, and the stage's cost at 0.12 to 0.34 % of a core.
 
 ## Decision
 
@@ -72,7 +72,7 @@ What it refuses, said plainly: **the warmth of a close cardioid mic.** A 6 dB lo
 leaves a low voice's fundamental 0.53 ms late and a 4 dB one 0.35 ms. It also refuses a 6 dB cut
 of Q 1 at 300 Hz, 0.35 ms late on its lower skirt, and any narrow lift under 500 Hz: 3 dB of Q 2
 at 400 Hz is 0.56 ms. Raising the cap is a
-new cost on the mic path under never-compromise 1. It takes a listen on the bench's pairs that
+new cost on the mic path under never-compromise 1. It takes a listen on paired takes that
 says the low end is worth it, and the developer's agreement. Until then it stays out.
 
 ## Where it sits
@@ -132,12 +132,12 @@ rule for which wins, and nobody has asked for it. A variant can be added without
 host.
 
 **What it aims at** is one curve, an engine constant: the average spectrum of singing through
-the bench's reference mic, as each band's level against the mean. A target per host would make
+the reference mic, as each band's level against the mean. A target per host would make
 "a good vocal mic" mean something else in every host, and the scorecard judges against one mic.
-The numbers come from the reference side of the bench's pairs (#197) and are written here when
-they exist. Until then the match has nothing to aim at and does not ship: `ToneBands` has no
-`Match` variant, the stage takes no reading of the voice, and `setSlotEffects` refuses
-`bands: "match"` by name.
+The numbers come from the reference recordings of the paired takes (`reference/`, design section
+8.11) and are written here when they exist. Until then the match has nothing to aim at and does
+not ship: `ToneBands` has no `Match` variant, the stage takes no reading of the voice, and
+`setSlotEffects` refuses `bands: "match"` by name.
 
 **It cannot tell a phone from a singer.** A dark voice and a dull phone average the same. That
 is why it is three broad filters with 6 dB of range and not a full equaliser, and why a profile
@@ -223,24 +223,39 @@ profile a song ran under and what the stage did with it.
 
 ## How it is judged
 
-By a **paired recording**: one take captured at once by a phone, through its slot, and by a
-reference vocal mic at the same distance from the mouth, on the bench (#197). How the reference
-is stored beside the bundle is that work's to settle. The scorecard (#196) lines the two up and
-gains these rows, each for the phone with the stage off, with it on, and for the reference:
+By a **paired recording**: one take captured at once by a phone through its slot and by a
+reference vocal mic at the same distance from the mouth, the reference stored inside the take's
+bundle under `reference/` (design section 8.11). The scorecard replays the take with the stage
+off and as it ran, lines the reference up with it, and scores five rows, each for the phone with
+the stage off, with it on, and where it has one, for the reference. Section 8.9 has how each is
+read.
 
-| Row             | What it measures                                                                                   | The stage wins when                    |
-| --------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `pair_distance` | RMS of the gap between the two long-term spectra, third octaves 100 Hz to 12.5 kHz, levels matched | it falls on every test phone           |
-| `pair_bands`    | the same gap, signed, in four bands: 100 to 400 Hz, 400 Hz to 2 kHz, 2 to 6 kHz, 6 to 12.5 kHz     | no band moves away from the reference  |
-| `sibilance`     | level over 5 kHz in unvoiced frames against the voiced level                                       | the phone moves toward the reference's |
-| `plosives`      | bursts under 100 Hz that stand over the voiced level, a minute                                     | the phone moves toward the reference's |
-| `noise_floor`   | level between lines against the voiced level                                                       | it rises by no more than `airDb`       |
-| `tone_late`     | the stage's group delay at its settings, worst frequency from 80 Hz                                | it is within the cap                   |
-| `tone_readings` | `Pitch` and `Level` events with the stage on against off                                           | they are identical                     |
+| Row                                                     | What it measures                                                                                   | The stage wins when                    |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `pairDistanceDb`                                        | RMS of the gap between the two long-term spectra, third octaves 100 Hz to 12.5 kHz, levels matched | it falls on every test phone           |
+| `pairLowDb`, `pairMidDb`, `pairPresenceDb`, `pairTopDb` | the same gap, signed, in four bands: 100 to 400 Hz, 400 Hz to 2 kHz, 2 to 6 kHz, 6 to 12.5 kHz     | no band moves away from the reference  |
+| `sibilanceDb`                                           | level over 5 kHz in unvoiced frames against the voiced level                                       | the phone moves toward the reference's |
+| `plosivesPerMinute`                                     | bursts under 100 Hz that stand over the voiced level, a minute                                     | the phone moves toward the reference's |
+| `noiseFloorDb`                                          | level between lines against the voiced level                                                       | it rises by no more than `airDb`       |
 
 Only voiced frames count in the spectra, so the room between lines is not scored as tone. Every
 other row a scorecard already has must hold still. A blind listen on every test phone is the
 last word, and it is one of the hands-on runs in #116.
+
+Two things the stage must also keep hold by construction, so they are not rows:
+
+- **Its delay is within the cap.** `ToneParams::check` refuses bands and air that leave anything
+  from 80 Hz over 0.2 ms late, and `setSlotEffects` throws on what it refuses, so no song runs a
+  stage past the cap and a row would read the cap back. The guard and the de-esser add at most
+  what the table at the top gives, and only while they cut. The engine's tests
+  `tones_through_bands_and_air_at_the_cap_are_within_it` and
+  `each_delay_the_record_computed_is_what_the_engine_measures` measure all of it with tones.
+- **Its readings are the singing's.** It runs after the corrector and the meter, and
+  `every_reading_is_the_same_with_the_stage_on` asserts that every `Pitch` and `Level` event is
+  identical with the stage on and off.
+
+Rejected: `tone_late` and `tone_readings` as scorecard rows, which this record first named. They
+would replay every bundle a second time to read numbers that cannot move.
 
 ## What stays out
 
@@ -256,12 +271,9 @@ last word, and it is one of the hands-on runs in #116.
 ## Not measured
 
 - Whether any of it sounds good. Nothing has been heard.
-- Every delay above on the engine. The code measures tones through the stage against the cap.
 - How much of a phone's difference from a vocal mic is tone at all, and how much is the room and
   the phone's own processing. The pairs say.
 - The match's target, and whether the match is stable in a real room.
-- CPU. Eight biquads and three side-chain followers per slot should be small beside the voice
-  stage's 0.8 % of a core. The code quotes it.
 
 ## Sources
 

@@ -102,6 +102,17 @@ await engine.close();
   device engine and none on the timer and offline clocks, which play on no output.
 - **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
   renders only when its caller runs `engine.pump(blocks)`. The tests run on it.
+- **The contract suite** checks the promises a host relies on, on offline engines, and returns
+  each one broken in a sentence. Run it against the package, and against any stand-in your tests
+  drive in its place, so the stand-in cannot drift from what the engine does:
+
+  ```ts
+  import * as mixer from "@aeonentertainment/mixer";
+  import { checkContract } from "@aeonentertainment/mixer/contract";
+
+  const { broken, unchecked } = await checkContract(mixer);
+  // [] when every promise holds; a stand-in that can move its output passes `{ moveOutput }`
+  ```
 
 [docs/design.md](docs/design.md) section 7.2 has the full API. The reasons are in
 [docs/decisions](docs/decisions).

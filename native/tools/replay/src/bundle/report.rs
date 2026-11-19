@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use engine::backing::StemSources;
 use engine::block::RATE;
 use serde_json::json;
 
@@ -23,6 +24,17 @@ pub struct Options {
 
 /// The bundle in `dir`, played under the profile and with the stems `options` name.
 pub fn play(dir: &Path, options: &Options) -> Result<(Bundle, Played), String> {
+    let (bundle, profile, stems) = load(dir, options)?;
+    let played = song::play(&bundle, &profile, stems)?;
+    Ok((bundle, played))
+}
+
+/// The bundle in `dir`, the profile it plays under and the stems it plays with, as `options` name
+/// them, for whatever clock plays it.
+pub fn load(
+    dir: &Path,
+    options: &Options,
+) -> Result<(Bundle, Profile, Option<StemSources>), String> {
     let bundle = Bundle::read(dir)?;
     let profile = match &options.profile {
         Some(path) => {
@@ -36,8 +48,7 @@ pub fn play(dir: &Path, options: &Options) -> Result<(Bundle, Played), String> {
         (Some(stems_dir), Some(backing)) => Some(stems::find(stems_dir, backing)?),
         _ => None,
     };
-    let played = song::play(&bundle, &profile, stems)?;
-    Ok((bundle, played))
+    Ok((bundle, profile, stems))
 }
 
 /// Replays the bundle in `dir`, printing it as JSON when `json`, and writing its mix into `wav`

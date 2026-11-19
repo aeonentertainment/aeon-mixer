@@ -3,8 +3,10 @@
 
 mod calls;
 mod clock;
+mod desk;
 pub mod line;
 pub mod manifest;
+pub mod player;
 pub mod profile;
 pub mod report;
 mod silence;

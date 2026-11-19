@@ -7,7 +7,9 @@ use engine::driver::Render;
 use engine::graph::Graph;
 use engine::ingest::packet::RING_CAPACITY;
 use engine::ingest::push::{DEFAULT_CAPACITY_FRAMES, push_voice_with_depth};
-use engine::ingest::{Codec, JitterBuffer, PacketSource, SharedStats, packet_ring};
+use engine::ingest::{
+    Codec, JitterBuffer, PacketSource, SharedStats, capture_voice, input_period_for, packet_ring,
+};
 use engine::slot::Slot;
 use engine::slot::corrector_delay::CorrectorDelay;
 use engine::slot::source::Source;
@@ -26,10 +28,10 @@ pub enum Delay {
     Chosen,
 }
 
-/// The real mic path around one slot: its ingest, jitter buffer and decoder, the slot's chain and
-/// the master, on a real `AudioThread`. The slot is panned hard left at unit gain, so the left
-/// channel is the slot's mono output. `render` feeds the slot and renders, so whichever clock
-/// calls it, the offline driver or a device, is the clock the whole path runs on.
+/// The real mic path around one slot: its ingest, jitter buffer and decoder or capture ring, the
+/// slot's chain and the master, on a real `AudioThread`. The slot is panned hard left at unit gain,
+/// so the left channel is the slot's mono output. `render` feeds the slot and renders, so whichever
+/// clock calls it, the offline driver or a device, is the clock the whole path runs on.
 pub struct Rig {
     pub render: Render,
     /// The control thread's ends, kept alive as long as the render is.
@@ -43,13 +45,10 @@ pub struct Rig {
 }
 
 impl Rig {
-    /// `signal` starts `phase` frames past a block boundary, as a stream starts wherever it likes.
-    pub fn new(
-        ingest: Ingest,
-        delay: Delay,
-        signal: &[f32],
-        phase: u64,
-    ) -> Result<Self, opus::Error> {
+    /// `signal` starts `phase` frames past the output's first wake, as a stream starts wherever it
+    /// likes. What has arrived reaches the slot as each of the output's wakes begins, and the wake
+    /// pulls the blocks its callback needs back to back.
+    pub fn new(ingest: Ingest, delay: Delay, signal: &[f32], phase: u64) -> Result<Self, String> {
         let (source, mut feed, lookahead, stats) = wire(ingest, delay, signal, phase)?;
         let slot = Slot::new(source);
         let corrector = slot.corrector_delay();
@@ -63,7 +62,9 @@ impl Rig {
         controls.params.update(|params| params.slots[0].pan = -1.0);
         let mut now = 0u64;
         let render: Render = Box::new(move |out: Stereo<'_>| {
-            feed.before_block(now);
+            if ingest.wakes_at(now) {
+                feed.before_block(now);
+            }
             now += BLOCK as u64;
             audio.render(out);
         });
@@ -74,7 +75,7 @@ impl Rig {
 /// A slot's source, what feeds it, the encoder's lookahead and the slot's counters.
 type Wired = (Box<dyn Source>, Feed, usize, Option<Arc<SharedStats>>);
 
-fn wire(ingest: Ingest, delay: Delay, signal: &[f32], phase: u64) -> Result<Wired, opus::Error> {
+fn wire(ingest: Ingest, delay: Delay, signal: &[f32], phase: u64) -> Result<Wired, String> {
     let packet_source = |codec: Codec, packets| {
         let (producer, consumer) = packet_ring(RING_CAPACITY);
         let jitter = match delay {
@@ -86,15 +87,17 @@ fn wire(ingest: Ingest, delay: Delay, signal: &[f32], phase: u64) -> Result<Wire
         let feed = Feed::Packets { producer, packets, next: 0 };
         (Box::new(source) as Box<dyn Source>, feed, stats)
     };
+    let opus = |error: opus::Error| error.to_string();
     Ok(match ingest {
         Ingest::Rtp { frame, encoder } => {
-            let (packets, lookahead) = packets::opus(signal, frame, encoder, phase)?;
-            let (source, feed, stats) = packet_source(Codec::opus()?, packets);
+            let (packets, lookahead) =
+                packets::opus(signal, frame, encoder, phase).map_err(opus)?;
+            let (source, feed, stats) = packet_source(Codec::opus().map_err(opus)?, packets);
             (source, feed, lookahead, Some(stats))
         }
         Ingest::L16 { frame } => {
             let (source, feed, stats) =
-                packet_source(Codec::L16, packets::l16(signal, frame, phase)?);
+                packet_source(Codec::L16, packets::l16(signal, frame, phase).map_err(opus)?);
             (source, feed, 0, Some(stats))
         }
         Ingest::Push { chunk } => {
@@ -102,6 +105,16 @@ fn wire(ingest: Ingest, delay: Delay, signal: &[f32], phase: u64) -> Result<Wire
             let stereo = signal.iter().flat_map(|sample| [*sample, *sample]).collect();
             let feed = Feed::Push { producer, stereo, chunk, from: phase, next: 0 };
             (Box::new(voice), feed, 0, None)
+        }
+        Ingest::Capture { callback } => {
+            let period = input_period_for(callback);
+            let (producer, voice) = capture_voice();
+            let voice = voice.for_input(period, 0, callback)?;
+            let stats = voice.shared_stats();
+            let period = period as usize;
+            let feed =
+                Feed::Capture { producer, mono: signal.to_vec(), period, from: phase, next: 0 };
+            (Box::new(voice), feed, 0, Some(stats))
         }
     })
 }
