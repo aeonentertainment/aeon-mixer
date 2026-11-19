@@ -1787,7 +1787,7 @@ Each is deliberate and here so no one reverts it by accident.
   the settings and research in decision 0014. They come through the corrector's shifter, which
   reads its delay line at the product of the correction and the octave, so a voice with
   correction costs the corrector's one delay and `correctorDelayMs` reports it. Through the voice
-  stage's own shifter they would cost a second delay, up to 31.5 ms at 82 Hz with correction on.
+  stage's own shifter they would cost a second delay, up to 30 ms at 82 Hz with correction on.
   The pitch knob joins the contract with that work, and where it lives (with the corrector's
   knobs, or only with a guide) is that work's to decide. It starts once the corrector's shifter
   has settled, since it changes the same kernel, and is about four pull requests: the contract
