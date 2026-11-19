@@ -14,62 +14,41 @@ pub struct Pair {
 }
 
 impl Pair {
-    /// Each row by its name in the scorecard, as `slot0.pairDistanceDb.off`.
+    /// Each row a scorecard number per take, as `slot0.pairDistanceDb.off`.
     pub fn numbers(&self, slot: usize) -> BTreeMap<String, f64> {
         let mut numbers = BTreeMap::new();
-        let mut put = |row: &str, take: &str, value: f64| {
-            numbers.insert(format!("slot{slot}.{row}.{take}"), (value * 100.0).round() / 100.0);
-        };
-        for (take, heard) in self.takes() {
-            if take != "reference" {
-                let gap = Gap::between(heard, &self.mic);
-                put("pairDistanceDb", take, gap.distance_db);
-                for ((row, _, _), value) in BANDS_READ.iter().zip(gap.bands_db) {
-                    put(row, take, value);
+        for (name, _, cells) in self.rows() {
+            for (take, cell) in ["reference", "off", "on"].into_iter().zip(cells) {
+                if let Some(value) = cell {
+                    numbers.insert(
+                        format!("slot{slot}.{name}.{take}"),
+                        (value * 100.0).round() / 100.0,
+                    );
                 }
             }
-            if let Some(sibilance) = heard.sibilance_db {
-                put("sibilanceDb", take, sibilance);
-            }
-            put("plosivesPerMinute", take, heard.plosives_per_minute);
-            put("noiseFloorDb", take, heard.noise_floor_db);
         }
         numbers
     }
 
     /// The rows as a table, mic, stage off and stage on, closed by what the stage did, in words.
     pub fn table(&self) -> Vec<String> {
-        let heard = [Some(&self.mic), Some(&self.off), self.on.as_ref()];
-        let gaps = [None, Some(&self.off), self.on.as_ref()]
-            .map(|phone| phone.map(|phone| Gap::between(phone, &self.mic)));
-        let gap = |pick: &dyn Fn(&Gap) -> f64| gaps.each_ref().map(|gap| gap.as_ref().map(pick));
-        let take = |pick: &dyn Fn(&Heard) -> Option<f64>| heard.map(|take| take.and_then(pick));
-        let mut rows = vec![("distance from the mic, dB".to_owned(), gap(&|g| g.distance_db))];
-        for (band, (_, words, _)) in BANDS_READ.iter().enumerate() {
-            rows.push((format!("{words}, dB"), gap(&|g| g.bands_db[band])));
-        }
-        rows.push(("s over 5 kHz against singing, dB".into(), take(&|h| h.sibilance_db)));
-        rows.push(("pops under 100 Hz a minute".into(), take(&|h| Some(h.plosives_per_minute))));
-        rows.push(("room against singing, dB".into(), take(&|h| Some(h.noise_floor_db))));
+        let rows = self.rows();
+        let (off, on) = (rows[0].2[1].unwrap_or_default(), rows[0].2[2]);
         let cell =
             |value: Option<f64>| value.map_or(format!("{:>11}", "-"), |v| format!("{v:>11.2}"));
         let mut lines =
             vec![format!("  {:<34}{:>11}{:>11}{:>11}", "", "mic", "stage off", "stage on")];
         lines.extend(
             rows.into_iter()
-                .map(|(label, cells)| format!("  {label:<34}{}", cells.map(cell).concat())),
+                .map(|(_, words, cells)| format!("  {words:<34}{}", cells.map(cell).concat())),
         );
-        let off = gaps[1].as_ref().map_or(0.0, |gap| gap.distance_db);
         let sounds = format!("  With the stage off this phone sounds {off:.2} dB from the mic");
-        lines.push(match &gaps[2] {
-            Some(on) if on.distance_db <= off => {
-                format!("{sounds}, and the stage brings it {:.2} dB closer.", off - on.distance_db)
+        lines.push(match on {
+            Some(on) if on <= off => {
+                format!("{sounds}, and the stage brings it {:.2} dB closer.", off - on)
             }
             Some(on) => {
-                format!(
-                    "{sounds}, and the stage takes it {:.2} dB further away.",
-                    on.distance_db - off
-                )
+                format!("{sounds}, and the stage takes it {:.2} dB further away.", on - off)
             }
             None => format!(
                 "{sounds}. The stage was never on in this take, so it has no stage-on column."
@@ -83,9 +62,38 @@ impl Pair {
         lines
     }
 
-    fn takes(&self) -> impl Iterator<Item = (&'static str, &Heard)> {
-        [("reference", Some(&self.mic)), ("off", Some(&self.off)), ("on", self.on.as_ref())]
-            .into_iter()
-            .filter_map(|(take, heard)| Some((take, heard?)))
+    /// Each row: its number's name, its words in the table, and its value for the mic, the stage
+    /// off and the stage on, where it has one. The gaps have none for the mic, nor a stage that
+    /// was never on.
+    fn rows(&self) -> Vec<(&'static str, String, [Option<f64>; 3])> {
+        let heard = [Some(&self.mic), Some(&self.off), self.on.as_ref()];
+        let gaps = [None, Some(&self.off), self.on.as_ref()]
+            .map(|phone| phone.map(|phone| Gap::between(phone, &self.mic)));
+        let gap = |pick: &dyn Fn(&Gap) -> f64| gaps.each_ref().map(|gap| gap.as_ref().map(pick));
+        let take = |pick: &dyn Fn(&Heard) -> Option<f64>| heard.map(|take| take.and_then(pick));
+        let mut rows = vec![(
+            "pairDistanceDb",
+            "distance from the mic, dB".to_owned(),
+            gap(&|g| g.distance_db),
+        )];
+        for (band, (name, words, _)) in BANDS_READ.iter().enumerate() {
+            rows.push((*name, format!("{words}, dB"), gap(&|g| g.bands_db[band])));
+        }
+        rows.push((
+            "sibilanceDb",
+            "s over 5 kHz against singing, dB".into(),
+            take(&|h| h.sibilance_db),
+        ));
+        rows.push((
+            "plosivesPerMinute",
+            "pops under 100 Hz a minute".into(),
+            take(&|h| Some(h.plosives_per_minute)),
+        ));
+        rows.push((
+            "noiseFloorDb",
+            "room against singing, dB".into(),
+            take(&|h| Some(h.noise_floor_db)),
+        ));
+        rows
     }
 }
