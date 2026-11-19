@@ -88,19 +88,5 @@ fn writes_the_scorecard_fixture() {
     song.line(json!({ "type": "setSlot", "index": 1, "settings": { "pan": 0.3 } }));
     song.params(|p| p.slots[1].pan = 0.3);
     song.play_to((PHRASES as u64 * 2 + 1) * SECOND / 2);
-    let (dir, _) = song.end();
-
-    let bundle = fixtures.join("bundles/duet");
-    let _ = std::fs::remove_dir_all(&bundle);
-    std::fs::create_dir_all(bundle.join("slots")).unwrap();
-    for name in [
-        "manifest.json",
-        "profile.json",
-        "events.jsonl",
-        "stats.jsonl",
-        "slots/0.pcap",
-        "slots/1.pcap",
-    ] {
-        std::fs::copy(dir.join(name), bundle.join(name)).unwrap();
-    }
+    song.save(&fixtures.join("bundles/duet"));
 }

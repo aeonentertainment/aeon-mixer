@@ -2,18 +2,18 @@
 //! thread, which the events thread watches for its progress, and the stems it yields, which
 //! `Mixer::install_backing` moves into the graph before `start` swaps it in.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use engine::backing::{Backing, RenderJob, StemFiles};
+use engine::backing::{Backing, RenderJob, StemSource, StemSources};
 use engine::params::StemGains;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
+/// Each stem is its path, or the whole encoded file in memory.
 #[napi(object)]
 pub struct BackingInput {
-    pub instrumental: String,
-    pub guide: Option<String>,
+    pub instrumental: Either<String, Uint8Array>,
+    pub guide: Option<Either<String, Uint8Array>>,
     /// The armed key, rendered before start.
     pub semitones: i32,
     /// The armed speed factor, rendered before start.
@@ -61,11 +61,11 @@ impl BackingRender {
                 input.speed
             )));
         }
-        let files = StemFiles {
-            instrumental: PathBuf::from(input.instrumental),
-            guide: input.guide.map(PathBuf::from),
+        let sources = StemSources {
+            instrumental: source(input.instrumental),
+            guide: input.guide.map(source),
         };
-        let job = Arc::new(Mutex::new(Some(RenderJob::start(files, semitones, speed))));
+        let job = Arc::new(Mutex::new(Some(RenderJob::start(sources, semitones, speed))));
         Ok(Self { id, job, armed_semitones: semitones, failed: None })
     }
 
@@ -94,6 +94,15 @@ impl BackingRender {
                 Err(Error::from_reason(reason))
             }
         }
+    }
+}
+
+/// Bytes are copied here, on the control thread, so the worker never reads a buffer JavaScript
+/// can still write; the worker frees the copy once it has decoded it.
+fn source(input: Either<String, Uint8Array>) -> StemSource {
+    match input {
+        Either::A(path) => StemSource::File(path.into()),
+        Either::B(bytes) => StemSource::Bytes(bytes.to_vec()),
     }
 }
 

@@ -70,11 +70,17 @@ impl Playhead {
         self.latency = frames;
     }
 
-    /// Whether the next block moves the heard position on: playing, or fading out to a seek or a
-    /// pause, and past the live key's latency, under which `position` holds at 0.
+    /// Whether the next block moves the heard position on: reading, and past the live key's
+    /// latency, under which `position` holds at 0.
     pub fn is_advancing(&self) -> bool {
+        self.is_reading() && self.frame >= self.latency
+    }
+
+    /// Whether the next block reads the stems and moves the frame on: playing, or fading out to a
+    /// seek or a pause. A block that is not rendered delays the song from here, even under the
+    /// live key's latency.
+    pub fn is_reading(&self) -> bool {
         matches!(self.motion, Motion::Playing | Motion::Leaving { .. })
-            && self.frame >= self.latency
     }
 
     /// Whether the playhead holds still on pause, where the live key still drains its tail.
@@ -161,7 +167,9 @@ impl Playhead {
         fades: &mut [f32; BLOCK],
         events: &mut EventProducer,
     ) -> Option<u64> {
-        let (Motion::Playing | Motion::Leaving { .. }) = self.motion else { return None };
+        if !self.is_reading() {
+            return None;
+        }
         let start = self.frame;
         for (frame, fade) in (start..).zip(fades.iter_mut()) {
             *fade = self.level.next() * self.stop_level(frame);

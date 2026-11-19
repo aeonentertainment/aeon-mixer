@@ -109,12 +109,17 @@ What the engine reports so the rest of the device can follow:
 - `start()` resolves with `startedAt`, the wall-clock moment the listener hears backing frame
   zero; `backingOffsetMs`, the engine's own output latency, from a backing frame rendered to
   that frame leaving the speaker; and `speedFactor`.
-- A move to another output (section 5) holds the playhead for the gap and changes the output
-  latency. `outputChanged` carries the new `latencyMs` and the gap, so a host that keeps a lyric
-  clock from `startedAt` moves it by both, or re-anchors it on the next `position` event. The guide
-  clock moves by the new latency itself: from the first block after the new stream's `start`
-  returns, every pitch reading and every note edge the corrector follows is on the new output's
-  clock.
+- A move to another output (section 5) changes the output latency, and holds a playing backing
+  for the gap. `outputChanged` carries the new `latencyMs`, the gap, and `heldMs`, how long the
+  move held the playhead: the gap when the backing was playing or fading out to a pause or a seek
+  as the old stream stopped, 0 when it was paused, not started, ended or absent. The gap starts
+  no later than the old stream's last callback, so after a stall it counts the stall (section 8.3).
+  A host that keeps a lyric clock from `startedAt` moves it by `heldMs` and the change in
+  latency, or re-anchors it on the next `position` event. A pause or resume still in flight at
+  the move counts on the side of it where the audio thread took it, so the host keeps no paused
+  state of its own to tell whether a gap counts. The guide clock moves by the new latency itself:
+  from the first block after the new stream's `start` returns, every pitch reading and every note
+  edge the corrector follows is on the new output's clock.
 - Every ack carries the backing position at the block the command landed. `seek`, `resume` and
   `start` return it. A `position` event also fires once a second.
 - When a live key shifter is engaged, its latency is subtracted from the reported position, so
@@ -348,8 +353,10 @@ pub struct Running { pub info: StreamInfo, /* stop() on drop */ }
 pub struct TimerDriver;
 /// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
 /// test's render. `moved` is called between streams, never on the audio thread: the next block
-/// starts every slot's stream again and fades in over 5 ms.
-pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self); fn callback_frames(&self) -> Arc<AtomicU32>; fn output_latency_frames(&self) -> Arc<AtomicU32>; }   // where the follower writes each stream's StreamInfo.period_frames and StreamInfo.output_latency_frames as its start returns
+/// starts every slot's stream again and fades in over 5 ms. It returns whether the live graph's
+/// backing was playing or fading out to a pause or a seek as the stream stopped, so the gap held
+/// its playhead.
+pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self) -> bool; fn callback_frames(&self) -> Arc<AtomicU32>; fn output_latency_frames(&self) -> Arc<AtomicU32>; }   // where the follower writes each stream's StreamInfo.period_frames and StreamInfo.output_latency_frames as its start returns
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
 pub struct OfflineDriver;
@@ -395,7 +402,7 @@ pub enum Event {
     Ack { id: u32, position_frames: u64 },
     Level { slot: u8, rms_db: f32, peak_db: f32 },
     MasterLevel { rms_db: f32, peak_db: f32 },
-    Pitch { slot: u8, position_ms: f64, hz: f32, confidence: f32, target_midi: Option<i16>, error_semitones: f32 },
+    Pitch { slot: u8, reading: Reading },   // the corrector's reading as it made it
     Position { frames: u64 },
     BackingEnded,
     Underrun,
@@ -413,6 +420,8 @@ impl Graph {
 // engine/src/slot/
 pub struct Guide { pub notes: Vec<Note>, pub key_mask: u16 }   // built on the control thread, followed on the audio thread
 pub struct Note { pub midi: u8, pub start_frame: u64, pub end_frame: u64 }
+pub struct Reading { pub position_ms: f64, pub hz: f32, pub confidence: f32, pub note: Option<TargetNote>, pub error_semitones: f32, pub shift_semitones: f32, pub pulling: bool }   // effects/: one every 10 ms, 8.6
+pub struct TargetNote { pub midi: i16, pub start_frame: u64 }   // effects/: the guide note pulled toward, after the key shift; a reading's and a `Target`'s
 pub struct CorrectorDelay;  // published once a block; Slot::corrector_delay() hands the control thread its Arc
 pub struct EchoReport;      // findings() -> Option<EchoFindings>, howl_catches(); published once a block; Slot::echo_report() hands the control thread its Arc
 pub struct ToneReport;      // findings() -> Option<ToneFindings>: the match's band gains and counted singing, the de-esser's cut, the guard's catches; published once a block; Slot::tone_report() hands the control thread its Arc
@@ -448,7 +457,7 @@ pub struct RenderJob;      // control thread starts it on the worker thread; yie
 pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the first change
 
 // kernels/src/
-pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples()
+pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples(), shift_semitones()
 pub struct Stretch;         // new(channels, rate, preset), set_transpose_semitones(f32), process(planar in, planar out), latency_frames()
 pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
 pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
@@ -568,8 +577,13 @@ export interface Engine {
   reactions: { play(pcm: Float32Array, channels: 1 | 2): boolean };
   on(event: "fault", listener: (error: Error) => void): () => void;
   /** Whenever `output` changes: after every move, the fallback from a refused output included,
-   * with `gapMs` how long the room heard nothing; with `gapMs` 0 when a refusal clears alone. */
-  on(event: "outputChanged", listener: (output: OutputInfo, gapMs: number) => void): () => void;
+   * with `gapMs` how long the room heard nothing and `heldMs` how long that held the backing's
+   * playhead, `gapMs` when it was playing or fading out to a pause or a seek and 0 when not
+   * (section 3); both 0 when a refusal clears alone. */
+  on(
+    event: "outputChanged",
+    listener: (output: OutputInfo, gapMs: number, heldMs: number) => void,
+  ): () => void;
   /** The mix after the clipper, reactions included, between songs too. */
   on(event: "masterLevel", listener: (rmsDb: number, peakDb: number) => void): () => void;
   /** Offline engines only: render blocks and return them as interleaved stereo. */
@@ -582,10 +596,19 @@ export type SlotConfig =
   | { kind: Exclude<IngestKind, "capture"> }
   | { kind: "capture"; device?: string; channel?: number };
 
+/**
+ * A stem is the encoded file at `path`, or the whole encoded file in `bytes`, decoded the same way
+ * (8.5). `createMixer` reads `bytes` until it settles, so the host leaves them unchanged until then.
+ * Either keeps every capability: seek, key and speed work on the decoded stem, never on the file.
+ */
+export type BackingStem =
+  | { kind: StemKind; path: string; bytes?: never }
+  | { kind: StemKind; bytes: Uint8Array; path?: never };
+
 export interface MixerConfig {
   slots: ReadonlyArray<SlotConfig>;
   backing?: {
-    stems: ReadonlyArray<{ kind: StemKind; path: string }>;
+    stems: ReadonlyArray<BackingStem>;
     key: number; // semitones, rendered before start
     speed: number; // factor, rendered before start
     stemGains?: Partial<Record<StemKind, number>>; // a stem left out takes the profile's
@@ -827,7 +850,7 @@ own, so no OS listener and no Node call ever starts or stops a device.
 pub struct Follower;       // start(request, impl Movable, impl System, Arc<Stats>) -> Result<Self, StartError>; current(); drop stops it
 pub enum StartError { Unavailable { output: Option<Output>, error: DriverError }, Backend(DriverError) }
 pub struct Current;        // the follower's Playing, shared: get() on any thread but the audio thread
-pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration, pub refused: Option<Refused> }
+pub struct Playing { pub info: StreamInfo, pub output: Output, pub moves: u32, pub gap: Duration, pub held: Duration, pub refused: Option<Refused> }   // held: the gap when `moved` said it held a playhead, else zero
 pub struct Refused { pub output: Output, pub error: String }   // the output the rule picks that would not start
 pub trait System: Send + 'static {   // the OS behind the follower; a test passes a fake one
     fn outputs(&self) -> Result<Vec<Output>, DriverError>;
@@ -848,10 +871,22 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   reopens it. A reopen that stays silent doubles the wait for the next, up to 6.4 s, until a
   callback comes. A stall never faults the engine.
 - A move stops the old stream, so the `Movable` comes back, calls `moved`, and starts the new
-  stream with it on the same `Stats`. As every stream's `start` returns, the first one's too, the
+  stream with it on the same `Stats`. What `moved` returns sets the move's `held`: the gap when
+  it held a playhead, zero when not. As every stream's `start` returns, the first one's too, the
   follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell and its
-  `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
-  to the new stream running.
+  `StreamInfo.output_latency_frames` into its `output_latency_frames` cell.
+- The gap runs from the earlier of the wake and the old stream's last callback to the new stream
+  running. The engine renders nothing after that callback, so the room hears silence from there
+  and the playhead stands still. For a default change the two are within a period of each other.
+  For a stall the callback comes first by the stall's 200 ms or more, and for a loss by however
+  late the OS reports it. A callback counts only from the old stream's start, which ended the
+  last move's gap, so a stream that never called back counts from its start and no stretch of
+  silence lands in two gaps. Nothing else bounds it: a stream with no callback rendered nothing,
+  so a move after a 6.4 s stall reports 6.4 s and more, because the room heard that much
+  silence. Every backend the follower runs marks its callbacks with `Stats::callback`, so
+  `Stats::last_callback` and the wake are read from one clock, `std::time::Instant`, the one the
+  stall wait reads. Whether a gap counts time the machine slept is that clock's call on each OS.
+  The second the follower waits for an output before it gives up still counts from the wake.
 - A move whose output will not start starts the output it left again, if the OS still lists it,
   and failing that the default, which only a pinned engine has not tried yet, and sets
   `Playing.refused`. No output is tried twice in one attempt. The fallback counts as a move:
@@ -874,8 +909,8 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   leaves no stream and no watch, and drops the `Movable`. The binding throws `Unavailable` as
   `OutputUnavailableError`.
 - The binding reads `Current` for `engine.output`, `refused` included. Its events thread sends
-  `outputChanged` whenever `moves` goes up, and with a gap of 0 when `refused` clears with no
-  move. A refusal is only ever set by the fallback's move.
+  `outputChanged` whenever `moves` goes up, with the move's gap and `held`, and with both 0 when
+  `refused` clears with no move. A refusal is only ever set by the fallback's move.
 - The watches: CoreAudio listens on the system object for the default output and the device list,
   with `kAudioHardwarePropertyRunLoop` set to null so the HAL calls it on its own thread. WASAPI
   registers an `IMMNotificationClient` from a COM thread of its own. ALSA has nothing to listen
@@ -948,15 +983,19 @@ should reach that slot.
   15 ms. Every half second the buffer notes the slack of the half second's latest and earliest
   packets against their due times. Once 20 notes, ten seconds, leave at least a block of room,
   the anchor moves earlier, once, until the latest of them would have a millisecond and a quarter
-  of the spread over the block to spare, and never under 3.67 ms: a block a packet can wait to be
-  drained, and a millisecond. After that fall, three late notes out of the last 20 move it later
-  to cover them, at most back to where it opened. A move waits for the slot to be under -30 dBFS
-  for 21 ms, happens at the head of what waits to play, drops only samples that are quiet too, and
-  counts as a resync. The echo moves by what the move drops or delays, but the new delay also
-  takes up the slack the stream had drifted into, so the part of the new delay the echo did not
-  move by is a splice in the source's `delay()`, and the latency and splices together move by
-  what the echo did. A delay means how long the stream's earliest packets wait, and
-  `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
+  of the spread over the block to spare. After that fall, three late notes out of the last 20 move
+  it later to cover them. No move leaves a delay under 3.67 ms, a block a packet can wait to be
+  drained and a millisecond, nor over 15 ms, the delay it opened at, with no exception: a fall goes
+  at least to 15 ms even when some of what it saw is then late, and a rise stops there. Before its
+  first move a stream's earliest packets can wait longer, since its first packet anchors it: 15 ms
+  plus how late that packet came, and up to a block for the drain. A pinned stream keeps that for
+  good; a chosen one gives it up at the fall. A move waits for the slot
+  to be under -30 dBFS for 21 ms, happens at the head of what waits to play, drops only samples
+  that are quiet too, and counts as a resync. The echo moves by what the move drops or delays, but
+  the new delay also takes up the slack the stream had drifted into, so the part of the new delay
+  the echo did not move by is a splice in the source's `delay()`, and the latency and splices
+  together move by what the echo did. A delay means how long the stream's earliest packets wait,
+  and `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
   reasons and the numbers.
 - Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
   last second's packets arrived against their due times. A step is a frame, or as many whole
@@ -1103,8 +1142,8 @@ than the frame it missed; a stream that pauses for two seconds resumes without a
 pause under a second with its sequence numbers contiguous loses nothing and every packet after it
 plays at the stream's delay; a slot left to choose falls to the floor on a clean link on every
 frame size, stays exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a
-quiet moment, and loses at most 0.1 percent more of its packets to lateness than the same song at
-the opening delay.
+quiet moment, and, when its first packet came on time, loses at most 0.1 percent more of its
+packets to lateness than the same song at the opening delay.
 
 ### 8.5 Backing: `engine/src/backing/`
 
@@ -1116,6 +1155,16 @@ Stems in memory, one playhead, gains, fades, the live key, and the render job.
   aligned, trimming the stretcher's lead and flushing its tail. `createMixer` resolves when the
   graph is built; the backing goes in with `Graph::set_backing` as soon as the render finishes,
   so a render that fails raises `error` then, and `start` waits for a render still running.
+- A stem given as `bytes` is the same file held in memory, in any format Symphonia probes from its
+  content. The binding copies the bytes once, on the control thread as the render job starts, and
+  the worker reads its copy as it would a file and frees it the moment that stem is decoded. So
+  while the render runs the engine holds the encoded stem beside the decoded one, and once it is
+  done a song costs its decoded stems, as with a path; the host's own buffer is the host's. The
+  engine copies rather than borrows because the worker reads the stem off the control thread, and
+  a buffer the host can still write is not safe to read there. No file is opened, read or written
+  for a stem given as bytes. A stem that will not decode fails the render naming its path, or
+  for bytes its kind: `the instrumental stem's bytes: <reason>`. An empty buffer is refused at
+  `createMixer`.
 - The playhead advances a block per render while playing, holds on pause, jumps on seek with
   its fades, and stops at `stopAt` with its fade. Both raise `BackingEnded` once. A seek or
   pause acks when it takes effect, once its fade out is done, so the ack carries the frame it
@@ -1148,6 +1197,18 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   then carry no target and no error, since nothing pulls.
 - A reading carries the note the follower set for the run it closes and the kernel's error at
   that reading, so the target and the error a host shows are the ones the shifter acts on.
+- A reading also carries `shift_semitones`, the transposition the voice at its centre came out
+  of the shifter with, and `pulling`, whether the kernel was pulling as it read: a voice it
+  hears, a class to pull it to, and a strength over 0. The corrected voice sat
+  `error_semitones - shift_semitones` from its class. The follower keeps the shift of its last
+  32 runs by the input sample each began on, and looks up the reading's centre plus the
+  shifter's delay, where that sample left. It costs a store a run and a scan of 32 a reading, in
+  a fixed array. The note it pulls toward is one `note: Option<TargetNote>`, its `midi` and its
+  `start_frame` on the guide's clock together, since a pitch alone cannot tell two notes in a row
+  on one pitch apart, and a pitch with no start cannot be written. The slot pushes the reading
+  whole as `Event::Pitch { slot, reading }`, so a new field is written once. The binding maps
+  `reading.*` to the `pitch` event, `targetMidi` from `note`'s `midi`, and carries none of the
+  shift, the pull or the start yet; the scorecard reads them (8.9).
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
   growing, following it through a corrector's move and a moment unseen. Decision
@@ -1337,13 +1398,19 @@ Given a session bundle's directory in place of a file, it replays the whole song
 `native/tools/scorecard` opens no device or socket. It replays each session bundle it is given,
 or each in a directory of them, as `replay` does, under `--profile` and with `--backing` as there,
 and turns each song into numbers. Every number is read from what the replay's engine reported, as
-`stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see. It
+`stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see, except
+the two that read a reading's shift, pull and note start, which the binding does not carry yet
+(8.6). It
 reads each slot's `stats()` after every block. Per recorded slot: `late`, `concealed` and
 `playoutDelayMs` as the song ended; `correctorDelayMs`, the mean of `correctorDelayMs` over the
 blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in cents over the
 `pitch` readings with a `targetMidi`, a `confidence` of at least 0.9 and an `hz` of at least 82,
 the corrector's own bar, so a reading between notes, with no guide or with correction off counts
-for nothing; `echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
+for nothing; `correctedErrorCents`, the same median of `|errorSemitones - shift_semitones|`, where
+the corrected voice sat; `letGoes`, each gap in `pulling` with a pulled reading either side, within
+a run of readings on one guide note, told apart by its `start_frame`, so a voice that stops as its
+note ends lets go of nothing, even when the next note is on the same pitch;
+`echoRemovedDb` and `bleedDb`, the medians of `echo.removedDb` and `echo.bleedDb`
 over the blocks where `echo` was not null; `howlCatches`, every rise in it over the song, so a
 reset that starts it from 0 again loses none; and `levelTopTenthDb` and `levelMedianDb`, the
 90th percentile and the median of every `rmsDb` the slot's `level` reported in the song, as
@@ -1358,15 +1425,16 @@ master has the two levels, from
 - **Against a baseline**, an earlier scorecard, it prints every number that differs and fails
   when one moved further than its tolerance or is gone. A number the baseline lacks is new and
   fails nothing.
-- **The fixture.** Its tests score a short duet written on the offline driver, with no real
-  voice in it, against a committed baseline, so a change that moves one of its numbers past its
-  tolerance fails `cargo test`.
-- **Not yet.** The corrected voice's pitch and how often correction lets go of a note: `pitch`
-  reads the voice before correction, and whether the corrector is pulling is the slot's own
-  state, which no control-thread reader has once the graph is on the audio thread. Each needs the
-  slot to publish one more value. Of the tone stage's rows (decision 0029), the five that compare
-  a phone with a reference mic need that recording stored beside a bundle, and `tone_late` and
-  `tone_readings` come with the stage.
+- **The fixtures.** Its tests score bundles written on the offline driver, with no real voice in
+  them, against a committed baseline, so a change that moves one of their numbers past its
+  tolerance fails `cargo test`: a short duet for the mic path and the corrector, and a house mic
+  in a room for the echo canceller. The canceller's is a house mic's because a phone's Opus
+  fills noise in where the backing's waveform was, which leaves the canceller little to take
+  out and its numbers moving with the delay.
+- **Not yet.** A fixture that holds `howlCatches` still: over a singer the guard catches the
+  synthetic voice at some delays and not others (#245). Of the tone stage's rows (decision
+  0029), the five that compare a phone with a reference mic need that recording stored beside a
+  bundle, and `tone_late` and `tone_readings` come with the stage.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
@@ -1414,7 +1482,11 @@ released sender meets, as 7.2 does.
   whether it is recorded; and the backing: each stem's kind and SHA-256, with key, speed, stem
   gains and `stopAtMs`. A stem is named
   by its hash and never copied, since a song is large and may not be the host's to copy. No path
-  on the host's disk and no device id is written.
+  on the host's disk and no device id is written. A stem given as `bytes` is hashed from them, in
+  slices that yield the control thread between them as a path is read as a stream, so it has the
+  hash its file would. `replay --backing` finds it by that hash as any file of the same bytes, and
+  a bytes stem changes nothing in `replay`: a host that holds a song only in memory has no file to
+  give a replay, which then plays the mic path alone.
 - **`events.jsonl`** holds, each with its arguments: `setSlot`, `setSlotEffects`, `setSlotGuide`
   with the whole guide, `resetSlot`, `start`, `seek`, `pause`, `resume`, `setBackingKey`,
   `setStemGain`, and the engine's `outputChanged`, `error`, `backingEnded` and `ack`. The mixer
@@ -1596,6 +1668,10 @@ Each is deliberate and here so no one reverts it by accident.
   shows the linear filter leaves too much.
 - The offline stretcher: signalsmith at a quality setting first, an A/B against Rubber Band on
   three tracks before paying for a licence.
+- A stem the host feeds as a stream, so a song can start before all of it has arrived. It could
+  not pre-render a key or speed or seek ahead of what has arrived, so the backing would report
+  what it lacks, and the host would offer only the rest. A whole buffer is enough until a catalog
+  needs a song to start sooner.
 - Stem storage on a LAN box: planar f32 is about 23 MB per stem minute; int16 storage or
   streaming decode if a box cannot hold two stems.
 - Whether a capture profile may warm a phone's low end past the tone stage's cap: a 6 dB low shelf

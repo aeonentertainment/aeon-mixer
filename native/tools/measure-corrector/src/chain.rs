@@ -112,8 +112,12 @@ pub fn run(setup: Setup) -> Take {
         take.right.extend(stereo.iter().map(|[_, right]| *right));
         take.delays.push(delay.load(Ordering::Relaxed));
         while let Some(event) = drain.pop() {
-            if let Event::Pitch { slot: 0, position_ms, hz, confidence, .. } = event {
-                take.readings.push(Point { ms: position_ms, hz, confidence });
+            if let Event::Pitch { slot: 0, reading } = event {
+                take.readings.push(Point {
+                    ms: reading.position_ms,
+                    hz: reading.hz,
+                    confidence: reading.confidence,
+                });
                 take.engaged.push(correcting.load(Ordering::Relaxed));
             }
         }

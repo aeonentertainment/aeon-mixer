@@ -10,6 +10,8 @@ pub mod driver;
 pub mod graph;
 pub mod ingest;
 pub mod master;
+#[cfg(test)]
+mod move_hold_tests;
 pub mod params;
 pub mod reactions;
 pub mod return_ring;

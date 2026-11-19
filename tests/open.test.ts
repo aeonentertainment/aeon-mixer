@@ -5,14 +5,15 @@ import { OutputUnavailableError, openEngine, outputDevices } from "../src/index.
 const TIMER_TOLERANCE_MS = 200;
 const REFUSE_AFTER_MS = 3000;
 
-// The addon's test OS lists one output, the default, whose start never returns. No real device is
-// opened: the follower refuses the start at its bound and the host hears OutputUnavailableError.
+// The addon's test OS lists outputs whose start never returns, the built-in one the default. No real
+// device is opened: the follower refuses the start at its bound and the host hears
+// OutputUnavailableError.
 test("an open whose start hangs leaves the event loop running, then is refused after 3 s", async () => {
   process.env.AEON_MIXER_TEST_OS = "hangs";
   try {
     // An addon without the test OS lists the real outputs here, and must not go on to open one
-    const hanging = { id: "test-hangs", name: "Hanging output" };
-    expect(await outputDevices()).toEqual([{ ...hanging, isDefault: true }]);
+    const hanging = { id: "test-builtIn", name: "Test builtIn" };
+    expect((await outputDevices()).find((output) => output.isDefault)).toMatchObject(hanging);
 
     let last = performance.now();
     let longestWait = 0;

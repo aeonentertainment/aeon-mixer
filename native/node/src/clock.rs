@@ -90,10 +90,20 @@ pub struct OutputEntry {
     pub id: String,
     pub name: String,
     pub is_default: bool,
+    // A literal union, so `src/` checks it against its own `Transport` at build time
+    #[napi(
+        ts_type = "'builtIn' | 'usb' | 'bluetooth' | 'display' | 'network' | 'aggregate' | 'virtual' | 'other' | 'unknown'"
+    )]
+    pub transport: String,
 }
 
 impl From<devices::Output> for OutputEntry {
     fn from(output: devices::Output) -> Self {
-        Self { id: output.id, name: output.name, is_default: output.is_default }
+        Self {
+            transport: output.transport.name().into(),
+            id: output.id,
+            name: output.name,
+            is_default: output.is_default,
+        }
     }
 }

@@ -1,6 +1,7 @@
-# 0023: A device's rate is put back as the engine found it
+# 0023: A device's rate and IO buffer are put back as the engine found them
 
 **Status:** accepted, 2026-11-13. Hygiene found while chasing aeon-karaoke#510; not its fix.
+The IO buffer joined it on 2026-11-18, while chasing #232.
 
 ## The problem
 
@@ -36,6 +37,22 @@ The last of this process's streams to let go of a device puts back the rate the 
   put-back is taken as that put-back still landing, and keeps the rate found. If a person changed
   the rate mid-song, the song was already playing at the wrong speed.
 - **What it cannot.** A process that is killed or crashes leaves 48 kHz, as before.
+
+## The IO buffer
+
+The driver sets `kAudioDevicePropertyBufferFrameSize` to the period on every open. The last of
+this process's streams to let go of a device puts back the size the first one found, the same
+way and at the same times as the rate, with one difference: it puts it back only while the
+device still reads the size the engine left. A size another app or a person set since is theirs.
+The driver has always read the size back straight after setting it and taken that as the
+period, so a put-back has nothing landing late to undo. The count
+lives in `devices/src/buffer_holds.rs`, behind an `IoBuffer` trait, tested on a fake HAL.
+
+`AudioHardware.h` does not say whether the HAL keeps the size per process or per device. If per
+process, a killed process leaves nothing behind. If per device, it leaves the engine's size, and
+the next start reads that as the size found and keeps it: nothing tells a leftover of ours from a
+size someone chose, and guessing would undo theirs. `measure-sink --state`, run in a fresh
+process after a run, tells the two apart on a real device; #232 has the steps.
 
 ## The costs
 
@@ -73,13 +90,15 @@ landing.
 
 ## The other properties the CoreAudio backend sets
 
-| Property                                            | Where                    | Restored | Why                                                                                                                                                                                                                                                                 |
-| --------------------------------------------------- | ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kAudioDevicePropertyNominalSampleRate`             | output and input devices | yes      | the device's, for every app, past the process                                                                                                                                                                                                                       |
-| `kAudioDevicePropertyBufferFrameSize`               | output and input devices | no       | the asked period, clamped to `kAudioDevicePropertyBufferFrameSizeRange`, so it is never out of the device's range. AUHAL apps get 512 frames by default (Apple's TN2321). `AudioHardware.h` does not say whether it outlives the process; #510's repro separates it |
-| `kAudioHardwarePropertyRunLoop`                     | the system object        | no       | this process's notification thread, gone with it                                                                                                                                                                                                                    |
-| listeners on the default output and the device list | the system object        | yes      | `Watch` removes both when the follower drops, a failed open included                                                                                                                                                                                                |
-| the IOProc                                          | output and input devices | yes      | `Io` and `CaptureIo` stop and destroy it on drop, which a failed `AudioDeviceStart` reaches too                                                                                                                                                                     |
+| Property                                            | Where                    | Restored | Why                                                                                                                                                                       |
+| --------------------------------------------------- | ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kAudioDevicePropertyNominalSampleRate`             | output and input devices | yes      | the device's, for every app, past the process                                                                                                                             |
+| `kAudioDevicePropertyBufferFrameSize`               | output and input devices | yes      | the asked period, clamped to `kAudioDevicePropertyBufferFrameSizeRange`; put back only while the device reads ours. AUHAL apps get 512 frames by default (Apple's TN2321) |
+| `kAudioDevicePropertyHogMode`                       | never set                | n/a      | the HAL takes it for the first process to start IO on a non-mixable stream, and the engine never sets a stream format                                                     |
+| stream virtual and physical formats                 | never set                | n/a      | read to check for f32; the HAL converts                                                                                                                                   |
+| `kAudioHardwarePropertyRunLoop`                     | the system object        | no       | this process's notification thread, gone with it                                                                                                                          |
+| listeners on the default output and the device list | the system object        | yes      | `Watch` removes both when the follower drops, a failed open included                                                                                                      |
+| the IOProc                                          | output and input devices | yes      | `Io` and `CaptureIo` stop and destroy it on drop, which a failed `AudioDeviceStart` reaches too                                                                           |
 
 Sources: [Apple's TN2321](https://developer.apple.com/library/archive/technotes/tn2321/_index.html)
 on the IO buffer, `AudioHardware.h` and `AudioHardwareBase.h` in the macOS SDK, cpal's

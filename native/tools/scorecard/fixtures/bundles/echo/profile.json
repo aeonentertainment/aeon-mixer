@@ -1,0 +1,15 @@
+{
+  "backing": { "stemGains": { "guideVocals": 0, "instrumental": 1 } },
+  "ingest": { "playoutDelayMs": 15 },
+  "output": { "periodFrames": 128 },
+  "slot": {
+    "effects": {
+      "pitch-correction": { "retuneMs": 40, "strength": 0.6 },
+      "reverb": { "mix": 0.25, "roomSize": 0.5 },
+      "voice": { "formantSemitones": 0 }
+    },
+    "gain": 1,
+    "pan": 0
+  },
+  "version": 1
+}

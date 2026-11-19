@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { type BackingConfig, backingSettings } from "../backing.ts";
 import type { SettingsProfile } from "../profile/settings-profile.ts";
-import type { MixerConfig } from "../types.ts";
+import type { BackingStem, MixerConfig } from "../types.ts";
 import type { BundleBacking } from "./bundle-manifest.ts";
 
 /** What a mixer needs to start its bundle: where, and the backing as its manifest names it. */
@@ -32,7 +33,7 @@ export async function bundleRequest(
     dir,
     backing: {
       stems: await Promise.all(
-        backing.stems.map(async ({ kind, path }) => ({ kind, sha256: await sha256(path) })),
+        backing.stems.map(async (stem) => ({ kind: stem.kind, sha256: await sha256(stem) })),
       ),
       key: backing.key,
       speed: backing.speed,
@@ -42,9 +43,23 @@ export async function bundleRequest(
   };
 }
 
-/** Read as a stream, so a song's worth of stem never holds the control thread. */
-async function sha256(path: string) {
+/** 1 MiB hashes in under half a millisecond, so the control thread answers between slices. */
+const SLICE_BYTES = 1 << 20;
+
+/**
+ * A path read as a stream and bytes hashed a slice a turn, so a song's worth of stem never holds
+ * the control thread. The same file by either has the same hash.
+ */
+async function sha256({ path, bytes }: BackingStem) {
   const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  if (bytes === undefined) {
+    for await (const chunk of createReadStream(path)) hash.update(chunk);
+  } else {
+    for (let at = 0; at < bytes.length; at += SLICE_BYTES) {
+      // oxlint-disable-next-line no-await-in-loop -- each slice waits for the next turn on purpose
+      if (at > 0) await nextTurn();
+      hash.update(bytes.subarray(at, at + SLICE_BYTES));
+    }
+  }
   return hash.digest("hex");
 }

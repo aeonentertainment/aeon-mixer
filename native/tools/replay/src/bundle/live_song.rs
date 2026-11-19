@@ -15,20 +15,20 @@ use std::time::{Duration, Instant};
 
 use assert_no_alloc::assert_no_alloc;
 use engine::audio_thread::{AudioThread, Controls};
-use engine::backing::{Backing, RenderJob, StemFiles};
+use engine::backing::{Backing, RenderJob, StemSources};
 use engine::block::{BLOCK, RATE};
 use engine::command::Command;
 use engine::driver::OfflineDriver;
 use engine::graph::Graph;
-use engine::ingest::packet::RING_CAPACITY;
-use engine::ingest::{Codec, JitterBuffer, PacketProducer, PacketSource, packet_ring};
+use engine::ingest::PacketProducer;
 use engine::params::{Params, StemGains};
 use engine::slot::Slot;
 use serde_json::{Value, json};
 use transport::receive::packet_from;
 use transport::record::{Recording, Tap, WallClock};
 
-use super::silence::Silence;
+use super::profile::PlayoutDelay;
+use super::song::open;
 use super::stems::sha256;
 use crate::round_trip::Sent;
 
@@ -91,25 +91,21 @@ impl LiveSong {
         let mut tapped = Vec::new();
         let mut slots = Vec::new();
         for (index, kind) in kinds.iter().enumerate() {
-            if *kind == "rtp" {
-                let (producer, consumer) = packet_ring(RING_CAPACITY);
-                let jitter = JitterBuffer::new(15 * RATE / 1000, Codec::opus().unwrap());
-                slots.push(Slot::new(Box::new(PacketSource::new(consumer, jitter))));
-                rings.push(Some(producer));
+            let (ingest, source) = open(kind, PlayoutDelay::Pinned(15.0)).unwrap();
+            slots.push(Slot::new(source));
+            let producer = ingest.packets.map(|(producer, _)| producer);
+            tapped.push(producer.is_some().then_some(recordings.len()));
+            if producer.is_some() {
                 let path = dir.join("slots").join(format!("{index}.pcap"));
                 let (recording, mut tap) = Recording::create(&path, 40_000, clock).unwrap();
                 tap.hide_senders();
-                tapped.push(Some(recordings.len()));
                 recordings.push((recording, tap));
-            } else {
-                slots.push(Slot::new(Box::new(Silence)));
-                rings.push(None);
-                tapped.push(None);
             }
+            rings.push(producer);
         }
         let mut graph = Box::new(Graph::new(slots));
         let backing = instrumental.map(|path| {
-            let files = StemFiles { instrumental: path.to_owned(), guide: None };
+            let files = StemSources { instrumental: path.to_owned().into(), guide: None };
             graph.set_backing(Backing::new(RenderJob::start(files, 0, 1.0).finish().unwrap(), 0));
             json!({
                 "stems": [{ "kind": "instrumental", "sha256": sha256(path).unwrap() }],
@@ -147,9 +143,10 @@ impl LiveSong {
         let slots: Vec<Value> = kinds
             .iter()
             .enumerate()
-            .map(
-                |(index, kind)| json!({ "index": index, "kind": kind, "recorded": *kind == "rtp" }),
-            )
+            .zip(&song.tapped)
+            .map(|((index, kind), tapped)| {
+                json!({ "index": index, "kind": kind, "recorded": tapped.is_some() })
+            })
             .collect();
         let manifest = json!({
             "format": 1,
@@ -237,6 +234,21 @@ impl LiveSong {
                 let line = json!({ "frame": frame, "us": us, "positionMs": null, "slots": [] });
                 writeln!(self.stats, "{line}").unwrap();
             }
+        }
+    }
+
+    /// Ends the song and writes its bundle to `to` as a committed fixture: every file but the
+    /// host's, with each recorded slot's pcap.
+    pub fn save(self, to: &Path) {
+        let (dir, _) = self.end();
+        let _ = std::fs::remove_dir_all(to);
+        std::fs::create_dir_all(to.join("slots")).unwrap();
+        for name in ["manifest.json", "profile.json", "events.jsonl", "stats.jsonl"] {
+            std::fs::copy(dir.join(name), to.join(name)).unwrap();
+        }
+        for pcap in std::fs::read_dir(dir.join("slots")).unwrap() {
+            let pcap = pcap.unwrap().path();
+            std::fs::copy(&pcap, to.join("slots").join(pcap.file_name().unwrap())).unwrap();
         }
     }
 

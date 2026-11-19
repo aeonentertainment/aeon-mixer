@@ -9,6 +9,7 @@ use engine::ingest::packet::RING_CAPACITY;
 use engine::ingest::push::{DEFAULT_CAPACITY_FRAMES, push_voice_with_depth};
 use engine::ingest::{Codec, JitterBuffer, PacketSource, SharedStats, packet_ring};
 use engine::slot::Slot;
+use engine::slot::corrector_delay::CorrectorDelay;
 use engine::slot::source::Source;
 
 use crate::feed::Feed;
@@ -37,6 +38,8 @@ pub struct Rig {
     pub lookahead: usize,
     /// The counters of a jitter-buffered slot, for the delay it reports.
     pub stats: Option<Arc<SharedStats>>,
+    /// How far the slot's corrector holds the voice, as `stats()` reads it.
+    pub corrector: Arc<CorrectorDelay>,
 }
 
 impl Rig {
@@ -48,7 +51,9 @@ impl Rig {
         phase: u64,
     ) -> Result<Self, opus::Error> {
         let (source, mut feed, lookahead, stats) = wire(ingest, delay, signal, phase)?;
-        let graph = Box::new(Graph::new(vec![Slot::new(source)]));
+        let slot = Slot::new(source);
+        let corrector = slot.corrector_delay();
+        let graph = Box::new(Graph::new(vec![slot]));
         let (mut audio, mut controls) = AudioThread::new();
         controls
             .commands
@@ -62,7 +67,7 @@ impl Rig {
             now += BLOCK as u64;
             audio.render(out);
         });
-        Ok(Self { render, controls, lookahead, stats })
+        Ok(Self { render, controls, lookahead, stats, corrector })
     }
 }
 

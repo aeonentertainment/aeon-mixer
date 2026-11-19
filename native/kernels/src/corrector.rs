@@ -94,6 +94,12 @@ impl PitchCorrector {
         // SAFETY: `raw` is live for as long as `self`
         unsafe { ffi::aeon_corrector_latency_samples(self.raw.as_ptr()) as usize }
     }
+
+    /// The transposition the newest output got, in semitones; 0 while bypassed.
+    pub fn shift_semitones(&self) -> f32 {
+        // SAFETY: `raw` is live for as long as `self`
+        unsafe { ffi::aeon_corrector_shift_semitones(self.raw.as_ptr()) }
+    }
 }
 
 impl Drop for PitchCorrector {

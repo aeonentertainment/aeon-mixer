@@ -3,12 +3,12 @@
 
 use std::path::Path;
 
-use engine::backing::{Planar, RenderJob, StemFiles};
+use engine::backing::{Planar, RenderJob, StemSources};
 use engine::block::RATE;
 
 /// A file as stereo at 48 kHz, through the worker the backing path uses.
 pub fn decode_stereo(path: &Path) -> Result<Planar, String> {
-    let files = StemFiles { instrumental: path.to_owned(), guide: None };
+    let files = StemSources { instrumental: path.to_owned().into(), guide: None };
     let stems = RenderJob::start(files, 0, 1.0).finish().map_err(|e| e.to_string())?;
     Ok(stems.instrumental)
 }

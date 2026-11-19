@@ -17,10 +17,12 @@ pub fn outputs() -> Result<Vec<OutputEntry>> {
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
-/// Every input the OS offers, the default marked: the devices a `capture` slot may name.
+/// Every input the OS offers, the default marked: the devices a `capture` slot may name. The test
+/// OS's when it stands in.
 #[napi]
 pub fn inputs() -> Result<Vec<OutputEntry>> {
-    devices::inputs()
+    TestOs::from_env()
+        .map_or_else(devices::inputs, |test_os| Ok(test_os.devices()))
         .map(|inputs| inputs.into_iter().map(OutputEntry::from).collect())
         .map_err(|error| Error::from_reason(error.to_string()))
 }

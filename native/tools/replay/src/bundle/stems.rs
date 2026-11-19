@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use engine::backing::StemFiles;
+use engine::backing::StemSources;
 use sha2::{Digest, Sha256};
 
 use super::manifest::{ManifestBacking, StemKind};
 
 /// The files in `dir` whose hashes the manifest names.
-pub fn find(dir: &Path, backing: &ManifestBacking) -> Result<StemFiles, String> {
+pub fn find(dir: &Path, backing: &ManifestBacking) -> Result<StemSources, String> {
     let read = |e: std::io::Error| format!("{}: {e}", dir.display());
     let mut by_hash = HashMap::new();
     for entry in std::fs::read_dir(dir).map_err(read)? {
@@ -31,7 +31,10 @@ pub fn find(dir: &Path, backing: &ManifestBacking) -> Result<StemFiles, String> 
     };
     let instrumental =
         stem(StemKind::Instrumental)?.ok_or("the manifest names no instrumental stem")?;
-    Ok(StemFiles { instrumental, guide: stem(StemKind::GuideVocals)? })
+    Ok(StemSources {
+        instrumental: instrumental.into(),
+        guide: stem(StemKind::GuideVocals)?.map(Into::into),
+    })
 }
 
 pub fn sha256(path: &Path) -> Result<String, String> {
