@@ -3,23 +3,20 @@ use std::sync::Arc;
 use engine::block::RATE;
 use engine::driver::{Driver, DriverError, Render, Running, StreamInfo};
 use objc2_core_audio::{
-    AudioObjectID, kAudioDevicePropertyBufferFrameSizeRange, kAudioDevicePropertyLatency,
-    kAudioDevicePropertySafetyOffset, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyScopeOutput, kAudioStreamPropertyLatency,
-    kAudioStreamPropertyVirtualFormat,
+    AudioObjectID, kAudioDevicePropertyLatency, kAudioDevicePropertySafetyOffset,
+    kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeOutput,
+    kAudioStreamPropertyLatency, kAudioStreamPropertyVirtualFormat,
 };
 use objc2_core_audio_types::{
-    AudioStreamBasicDescription, AudioValueRange, kAudioFormatFlagIsFloat,
-    kAudioFormatFlagIsNonInterleaved, kAudioFormatLinearPCM,
+    AudioStreamBasicDescription, kAudioFormatFlagIsFloat, kAudioFormatFlagIsNonInterleaved,
+    kAudioFormatLinearPCM,
 };
 
 use super::callback::Callback;
-use super::hal_buffer::{BUFFERS, HalBuffer};
-use super::hal_rate::RATES;
+use super::hal_properties::HOLDS;
 use super::io::Io;
 use super::property::{get, string};
 use super::steps::Steps;
-use crate::buffer_hold::BufferHold;
 use crate::feed::Feed;
 use crate::request::Request;
 use crate::stats::Stats;
@@ -58,13 +55,12 @@ fn open(
         Some(uid) => super::find(uid)?,
         None => super::default_device()?,
     };
-    // The engine never resamples, so the device itself moves to 48 kHz if it is elsewhere,
-    // until the stream stops or fails to start here
-    let rate = RATES.hold(device)?;
-    steps.done("48 kHz held");
-    let buffer = set_period(device, request.period_frames)?;
-    let period = buffer.frames;
-    steps.done("IO buffer set");
+    // The engine never resamples, so the device itself moves to 48 kHz if it is elsewhere, and
+    // its IO buffer is the period: the frames each IOProc call renders. Both hold until the stream
+    // stops or fails to start here
+    let hold = HOLDS.hold(device, request.period_frames)?;
+    let period = hold.frames;
+    steps.done("48 kHz and IO buffer held");
 
     let stream = *super::output_streams(device)?.first().ok_or(DriverError::NoDevice)?;
     // SAFETY: a stream's virtual format is an AudioStreamBasicDescription.
@@ -99,22 +95,8 @@ fn open(
     let io = Io::start(device, Callback::new(feed, stats))?;
     Ok(Running::new(info, move || {
         drop(io);
-        drop(buffer);
-        drop(rate);
+        drop(hold);
     }))
-}
-
-// The IO buffer is the period: the frames each IOProc call renders, until the hold drops and the
-// size found is put back.
-pub(super) fn set_period(
-    device: AudioObjectID,
-    asked: u32,
-) -> Result<BufferHold<'static, HalBuffer>, DriverError> {
-    // SAFETY: the buffer size range is an AudioValueRange.
-    let range: AudioValueRange = unsafe {
-        get(device, kAudioDevicePropertyBufferFrameSizeRange, kAudioObjectPropertyScopeGlobal)?
-    };
-    BUFFERS.hold(device, f64::from(asked).clamp(range.mMinimum, range.mMaximum) as u32)
 }
 
 // What the HAL says lies between the IO buffer and the speaker: the device's latency, its safety
