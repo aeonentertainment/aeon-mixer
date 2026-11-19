@@ -440,6 +440,25 @@ test("recordSlot throws on a mixer with a bundle, whose slots already record", a
   await engine.close();
 });
 
+test("a stem handed in as bytes is named by the hash its file has, hashed past one slice", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  // Twelve seconds of 16-bit mono is over 1 MiB, so the hash takes more than one slice
+  const file = stem("as-bytes.wav", 12);
+  const path = join(dir, "from-bytes");
+  const mixer = await engine.createMixer({
+    slots: [],
+    backing: { stems: [{ kind: "instrumental", bytes: readFileSync(file) }], key: 0, speed: 1 },
+    bundle: { dir: path },
+  });
+  await rendered(mixer);
+  await mixer.destroy();
+  await engine.close();
+
+  expect(readJson(join(path, "manifest.json"))).toMatchObject({
+    backing: { stems: [{ kind: "instrumental", sha256: sha256(file) }] },
+  });
+});
+
 test("a stem that will not decode leaves an error line that names it by kind, never by its path", async () => {
   const engine = await openEngine({ output: { offline: true } });
   const noise = join(dir, "noise.wav");

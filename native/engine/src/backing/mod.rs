@@ -11,6 +11,7 @@ mod playhead;
 mod prerender;
 mod ramp;
 mod render_job;
+mod stem_source;
 mod stems;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -23,7 +24,8 @@ pub use planar::Planar;
 pub use playhead::{Playhead, SEEK_FADE_FRAMES};
 use prerender::prerender;
 use ramp::Ramp;
-pub use render_job::{RenderJob, StemFiles};
+pub use render_job::{RenderJob, StemSources};
+pub use stem_source::StemSource;
 pub use stems::Stems;
 pub use transport::Transport;
 
@@ -103,6 +105,11 @@ impl Backing {
         self.playhead.is_advancing()
     }
 
+    /// Whether this block reads the stems, so a block not rendered delays the song.
+    pub fn is_reading(&self) -> bool {
+        self.playhead.is_reading()
+    }
+
     /// The backing frame the room hears now, which every ack carries.
     pub fn position_frames(&self) -> u64 {
         self.playhead.position()
@@ -150,7 +157,7 @@ mod tests {
     use crate::command::{Command, Event, event_ring};
     use crate::driver::OfflineDriver;
     use crate::graph::Graph;
-    use test_support::{SECOND, cents_between, harmonic_tone, median_pitch, rms_at};
+    use test_support::{SECOND, cents_between, harmonic_tone, median_pitch, rms_at, sine, wav};
 
     /// A graph holding only `backing`, swapped into an offline engine and started on its first
     /// block, so output frame `n` is backing frame `n`.
@@ -202,6 +209,34 @@ mod tests {
 
     fn assert_close(actual: f32, expected: f32, tolerance: f32, what: &str) {
         assert!((actual - expected).abs() <= tolerance, "{what}: {actual} vs {expected}");
+    }
+
+    #[test]
+    fn a_stem_from_bytes_plays_the_samples_its_file_does() {
+        // 44.1 kHz, so the bytes take the resampler too, and at an armed key, so the stretcher
+        let instrumental = wav(44_100, &[sine(441.0, 44_100, 44_100)]);
+        let guide = wav(48_000, &[sine(300.0, 48_000, SECOND), sine(450.0, 48_000, SECOND)]);
+        let dir = std::env::temp_dir().join(format!("aeon-bytes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (instrumental_file, guide_file) = (dir.join("instrumental.wav"), dir.join("guide.wav"));
+        std::fs::write(&instrumental_file, &instrumental).unwrap();
+        std::fs::write(&guide_file, &guide).unwrap();
+        let play = |sources| {
+            let stems = RenderJob::start(sources, 2, 1.0).finish().unwrap();
+            Rig::new(Backing::new(stems, 2)).pump(2 * SECOND)
+        };
+        let by_path = play(StemSources {
+            instrumental: instrumental_file.into(),
+            guide: Some(guide_file.into()),
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
+        let by_bytes = play(StemSources {
+            instrumental: StemSource::Bytes(instrumental),
+            guide: Some(StemSource::Bytes(guide)),
+        });
+
+        assert!(by_path[0].iter().any(|sample| sample.abs() > 0.1), "the stems play");
+        assert_eq!(by_path, by_bytes);
     }
 
     #[test]

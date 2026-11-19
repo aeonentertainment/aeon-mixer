@@ -118,9 +118,10 @@ export declare class Mixer {
   release(): void
 }
 
+/** Each stem is its path, or the whole encoded file in memory. */
 export interface BackingInput {
-  instrumental: string
-  guide?: string
+  instrumental: string | Uint8Array
+  guide?: string | Uint8Array
   /** The armed key, rendered before start. */
   semitones: number
   /** The armed speed factor, rendered before start. */
@@ -180,7 +181,10 @@ export interface GuideInput {
   keyMask: number
 }
 
-/** Every input the OS offers, the default marked: the devices a `capture` slot may name. */
+/**
+ * Every input the OS offers, the default marked: the devices a `capture` slot may name. The test
+ * OS's when it stands in.
+ */
 export declare function inputs(): Array<OutputEntry>
 
 export type NativeEvent =
@@ -195,7 +199,7 @@ export type NativeEvent =
   | { kind: 'retired' }
   | { kind: 'renderProgress'; job: number; fraction: number }
   | { kind: 'renderFinished'; job: number }
-  | { kind: 'outputChanged'; output: OutputInfo; gapMs: number }
+  | { kind: 'outputChanged'; output: OutputInfo; gapMs: number; heldMs: number }
 
 export interface NoteInput {
   midi: number
@@ -224,6 +228,7 @@ export interface OutputEntry {
   id: string
   name: string
   isDefault: boolean
+  transport: 'builtIn' | 'usb' | 'bluetooth' | 'display' | 'network' | 'aggregate' | 'virtual' | 'other' | 'unknown'
 }
 
 export interface OutputInfo {

@@ -17,7 +17,7 @@ export type BundleEvent =
   /** A command's ack, as it arrives: the backing position at the block it took effect. */
   | { type: "ack"; call: CommandCall["type"]; positionMs: number }
   | { type: "setStemGain"; kind: StemKind; gain: number }
-  | { type: "outputChanged"; output: BundleOutput; gapMs: number }
+  | { type: "outputChanged"; output: BundleOutput; gapMs: number; heldMs: number }
   /** The stems are in the graph: their length in frames, at the armed speed. */
   | { type: "backingRendered"; frames: number }
   | { type: "backingEnded" }

@@ -50,7 +50,7 @@ impl Biquad {
         Self::normalised([side, 1.0 - cos, side], [1.0 + alpha, -2.0 * cos, 1.0 - alpha])
     }
 
-    /// A Butterworth high-pass, for a detector.
+    /// A Butterworth high-pass: cleanup's on the voice, and what a detector listens through.
     pub fn high_pass(hz: f64) -> Self {
         let (sin, cos) = (TAU * hz / f64::from(RATE)).sin_cos();
         let alpha = sin * FRAC_1_SQRT_2;

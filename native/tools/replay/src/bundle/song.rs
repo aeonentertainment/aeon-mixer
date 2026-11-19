@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use assert_no_alloc::assert_no_alloc;
 use engine::audio_thread::{AudioThread, Controls};
-use engine::backing::{Backing, RenderJob, StemFiles};
+use engine::backing::{Backing, RenderJob, StemSources};
 use engine::block::BLOCK;
 use engine::command::{Command, Event as EngineEvent};
 use engine::driver::OfflineDriver;
@@ -73,8 +73,8 @@ struct Reports {
 }
 
 /// One slot's ingest, the control thread's end of it.
-struct Ingest {
-    packets: Option<(PacketProducer, Arc<SharedStats>)>,
+pub(super) struct Ingest {
+    pub(super) packets: Option<(PacketProducer, Arc<SharedStats>)>,
     ring_full: usize,
 }
 
@@ -82,7 +82,7 @@ struct Ingest {
 pub fn play(
     bundle: &Bundle,
     profile: &Profile,
-    stems: Option<StemFiles>,
+    stems: Option<StemSources>,
 ) -> Result<Played, String> {
     let manifest = &bundle.manifest;
     let mut ingests = Vec::new();
@@ -192,22 +192,9 @@ pub fn play(
                     }
                 }
                 EngineEvent::MasterLevel { rms_db, .. } => master_db.push(rms_db),
-                EngineEvent::Pitch {
-                    slot,
-                    position_ms,
-                    hz,
-                    confidence,
-                    target_midi,
-                    error_semitones,
-                } => {
+                EngineEvent::Pitch { slot, reading } => {
                     if let Some(slot) = played.get_mut(usize::from(slot)) {
-                        slot.readings.push(Reading {
-                            position_ms,
-                            hz,
-                            confidence,
-                            target_midi,
-                            error_semitones,
-                        });
+                        slot.readings.push(reading);
                     }
                 }
                 _ => {}
@@ -232,8 +219,8 @@ pub fn play(
 }
 
 /// A slot's source as `node/src/ingest.rs` opens it, with no socket: the replay is its network
-/// thread.
-fn open(kind: &str, delay: PlayoutDelay) -> Result<(Ingest, Box<dyn Source>), String> {
+/// thread, and so is a live song writing a bundle.
+pub(super) fn open(kind: &str, delay: PlayoutDelay) -> Result<(Ingest, Box<dyn Source>), String> {
     let codec = match kind {
         "rtp" => Codec::opus().map_err(|e| e.to_string())?,
         "l16" => Codec::L16,

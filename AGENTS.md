@@ -82,9 +82,11 @@ a decision record and the developer's agreement.
   tests load the addon it builds. With a global `vp`, `vp install` and `vp run build:native` do the
   same. pnpm, a Rust toolchain and cmake are the things to install yourself: `opusic-sys`
   builds libopus from source with cmake.
-- `rustup update stable` when an addon you built fails to load. `native/rust-toolchain.toml`
-  follows `stable`, and an old one breaks the release strip: Rust 1.92's strip leaves an addon
-  that dyld on macOS 27 refuses (`mis-aligned LINKEDIT string pool`). 1.100 builds one that loads.
+- `rustup update stable` when cargo says the addon needs a newer Rust. `native/rust-toolchain.toml`
+  follows `stable`, and the addon crate's `rust-version` is 1.98: up to 1.97, the `rust-objcopy`
+  that strips the release build leaves an addon that dyld on macOS 27 refuses
+  (`mis-aligned LINKEDIT string pool`). Cargo refuses any build that includes the addon below
+  1.98, on every platform, so `cargo test` in `native/` needs it too.
 - `vp check` formats, lints and type-checks the TypeScript. `vp test` runs its suite.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` in
   `native/` do the same for Rust.

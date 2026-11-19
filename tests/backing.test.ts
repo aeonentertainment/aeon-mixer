@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { types } from "node:util";
+import { runInNewContext } from "node:vm";
 import { afterAll, expect, test } from "vite-plus/test";
 import {
   defaultProfile,
@@ -29,6 +31,14 @@ afterAll(() => {
 
 /** Writes `samples` as a mono 16-bit WAV at 48 kHz and returns its path. */
 function stem(samples: Float32Array) {
+  written += 1;
+  const path = join(dir, `stem-${written}.wav`);
+  writeFileSync(path, wav(samples));
+  return path;
+}
+
+/** `samples` as the bytes of a mono 16-bit WAV at 48 kHz. */
+function wav(samples: Float32Array) {
   const data = Buffer.alloc(samples.length * 2);
   samples.forEach((sample, i) => {
     data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, sample)) * 32767), 2 * i);
@@ -46,10 +56,7 @@ function stem(samples: Float32Array) {
   header.writeUInt16LE(16, 34);
   header.write("data", 36);
   header.writeUInt32LE(data.length, 40);
-  written += 1;
-  const path = join(dir, `stem-${written}.wav`);
-  writeFileSync(path, Buffer.concat([header, data]));
-  return path;
+  return Buffer.concat([header, data]);
 }
 
 function constant(level: number, seconds: number) {
@@ -406,6 +413,76 @@ test("a render that fails rejects start with the engine's message", async () => 
   await expect(mixer.start()).rejects.toThrow(/missing\.wav/);
   await mixer.destroy();
   await engine.close();
+});
+
+function bytesOnly(bytes: Uint8Array): BackingConfig {
+  return { stems: [{ kind: "instrumental", bytes }], key: 0, speed: 1, stemGains: unity };
+}
+
+/** What an offline engine plays for two seconds of `config`'s backing from its start. */
+async function playedBy(config: BackingConfig) {
+  const engine = await openEngine({ output: { offline: true } });
+  const mixer = await engine.createMixer({ slots: [], backing: config });
+  await rendered(mixer);
+  await startLive(engine, mixer);
+  const heard = engine.pump(2 * SECOND_BLOCKS);
+  await destroyLive(engine, mixer);
+  await engine.close();
+  return heard;
+}
+
+test("a stem handed in as bytes plays the samples its file does, at an armed key", async () => {
+  const instrumental = wav(harmonicTone(220, 3));
+  const guide = wav(sine(330, 2));
+  const settings = { key: 2, speed: 1, stemGains: unity };
+  const path = join(dir, "song.wav");
+  writeFileSync(path, instrumental);
+  const byPath = await playedBy({
+    stems: [
+      { kind: "instrumental", path },
+      { kind: "guideVocals", path: stem(sine(330, 2)) },
+    ],
+    ...settings,
+  });
+  // The bytes were never on disk: this mixer has no file to open
+  const byBytes = await playedBy({
+    stems: [
+      { kind: "instrumental", bytes: new Uint8Array(instrumental) },
+      { kind: "guideVocals", bytes: guide },
+    ],
+    ...settings,
+  });
+
+  expect(byPath.some((sample) => Math.abs(sample) > 0.1)).toBe(true);
+  expect(byBytes).toEqual(byPath);
+});
+
+test("a bad buffer is refused naming its stem: empty at createMixer, undecodable at start", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  const create = (stems: BackingConfig["stems"]) =>
+    engine.createMixer({ slots: [], backing: { stems, key: 0, speed: 1, stemGains: unity } });
+  await expect(create([{ kind: "instrumental", bytes: new Uint8Array() }])).rejects.toThrow(
+    /instrumental stem's bytes are empty/,
+  );
+  const both = { kind: "instrumental", path: stem(sine(440, 1)), bytes: wav(sine(440, 1)) };
+  // @ts-expect-error a stem is a path or bytes, never both
+  await expect(create([both])).rejects.toThrow(/a path and bytes/);
+
+  const mixer = await create([
+    { kind: "instrumental", bytes: wav(sine(440, 1)) },
+    { kind: "guideVocals", bytes: Buffer.from("not a song") },
+  ]);
+  await expect(mixer.start()).rejects.toThrow(/^the guideVocals stem's bytes: /);
+  await mixer.destroy();
+  await engine.close();
+});
+
+test("bytes in another realm's Uint8Array play as this realm's do", async () => {
+  const bytes = wav(sine(440, 1));
+  // A test runner's `vm` context: its Uint8Array is not this realm's
+  const foreign: unknown = runInNewContext("Uint8Array.from(bytes)", { bytes });
+  if (!types.isUint8Array(foreign) || foreign instanceof Uint8Array) throw new Error("not foreign");
+  expect(await playedBy(bytesOnly(foreign))).toEqual(await playedBy(bytesOnly(bytes)));
 });
 
 test("closing the engine while a render runs rejects the start waiting on it", async () => {

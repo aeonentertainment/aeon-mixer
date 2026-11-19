@@ -85,8 +85,11 @@ await engine.close();
   from `outputDevices()`. When the default changes, or the output goes away, the song
   moves to the new output after a short gap, a pinned engine moving back when its output
   returns. `engine.output` names the output playing and its latency, and `outputChanged` fires
-  after each move with both and the gap. When the new output will not start, the song goes back
-  to the output it left, or failing that to the default, as a move with its own gap.
+  after each move with both, the gap, and how long the gap held the backing: the gap while it
+  plays, 0 while it is paused. Both count from the last audio the old output asked for, so an
+  output that stalled first counts the stall. A lyric clock moves by that hold and the change in
+  latency. When the new output will not start, the song goes back to the output it left, or
+  failing that to the default, as a move with its own gap.
   `engine.output.refused` names the one that would not start, with what the OS said, until the
   pin or default rule picks another output, as when the default changes or the refused output
   leaves the list.
@@ -94,7 +97,8 @@ await engine.close();
 - **An output that will not start** makes `openEngine` reject with `OutputUnavailableError`,
   whose `code` is `"output-unavailable"` and whose `device` names it. `outputDevices()` and
   `inputDevices()` list the OS's devices with no engine open, so a host can open another; they
-  open no stream and change no setting. An engine's own `outputDevices()` lists the same on a
+  open no stream and change no setting. Each entry's `transport` says how the device reaches the
+  machine, so a host can pass over a `virtual` one that plays to nobody. An engine's own `outputDevices()` lists the same on a
   device engine and none on the timer and offline clocks, which play on no output.
 - **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
   renders only when its caller runs `engine.pump(blocks)`. The tests run on it.

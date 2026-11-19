@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use devices::{CaptureRequest, Captured, Output, Request, Sink, Stats};
+use devices::{CaptureRequest, Captured, Request, Sink, Stats};
 use engine::block::RATE;
 use engine::driver::Driver;
 
@@ -40,17 +40,13 @@ pub fn run(command: Command) -> Result<(), String> {
 }
 
 fn list() -> Result<(), String> {
-    let describe = |output: &Output| {
-        let default = if output.is_default { " (default)" } else { "" };
-        format!("{}  {}{default}", output.id, output.name)
-    };
     println!("outputs");
     for output in devices::outputs().map_err(|error| error.to_string())? {
-        println!("  {}", describe(&output));
+        println!("  {output}");
     }
     println!("inputs");
     for input in devices::inputs().map_err(|error| error.to_string())? {
-        println!("  {}", describe(&input));
+        println!("  {input}");
     }
     Ok(())
 }

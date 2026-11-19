@@ -8,13 +8,25 @@
 //! 128-frame renders into whatever the device asks for, the feed that takes one channel of what an
 //! input delivers, and the stats a stream records.
 
+#[cfg(any(test, all(feature = "hardware", target_os = "linux")))]
+mod alsa_transport;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod buffer_hold;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod buffer_holds;
 mod capture;
 mod capture_feed;
 mod capture_request;
 #[cfg(any(test, all(feature = "hardware", target_os = "linux")))]
 mod channel_count;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod core_audio_transport;
+#[cfg(any(test, all(feature = "hardware", windows)))]
+mod endpoint_transport;
 mod feed;
 mod follow;
+#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
+mod io_buffer;
 #[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
 mod nominal_rate;
 mod output;
@@ -30,6 +42,7 @@ mod stats;
 mod stream_holding;
 mod summary;
 mod timer;
+mod transport;
 mod wake;
 
 pub use capture::{Capture, CaptureInfo, Captured, Capturing, Sink};
@@ -44,6 +57,7 @@ pub use sample::Sample;
 pub use stats::{BUCKET, BUCKETS, Stats};
 pub use summary::{Summary, ms};
 pub use timer::{Clock, MAX_CATCH_UP, MonotonicClock, Pacer, TimerDriver};
+pub use transport::Transport;
 pub use wake::Wake;
 
 #[cfg(all(feature = "hardware", target_os = "linux"))]
@@ -59,7 +73,7 @@ mod os;
 #[cfg(all(feature = "hardware", target_os = "linux"))]
 pub use alsa::{AlsaCapture, AlsaDriver, inputs, outputs};
 #[cfg(all(feature = "hardware", target_os = "macos"))]
-pub use coreaudio::{CoreAudioCapture, CoreAudioDriver, inputs, outputs};
+pub use coreaudio::{CoreAudioCapture, CoreAudioDriver, DeviceState, inputs, outputs};
 #[cfg(feature = "hardware")]
 pub use os::Os;
 #[cfg(all(feature = "hardware", windows))]
