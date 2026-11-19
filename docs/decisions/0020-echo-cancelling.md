@@ -181,21 +181,27 @@ corrector of its day, and let 221 get loud.
 
 Singing, offline, the guard before against this one:
 
-| Voice                                                                                                                                                   | Ducked before   | This rule |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------- |
-| The echo fixture's talker, its room playing the backing and the singer back, 11 playout delays from 10 to 60 ms, each at 16 places against the analyses | 12 of 176 runs  | none      |
-| 24 talkers, 110 to 220 Hz and six seeds, through the canceller the same way, 11 delays at 8 places each                                                 | 49 of 2112 runs | 8         |
-| 24 talkers whose fundamental stands alone, the second harmonic 15 dB down, 38 delays each                                                               | 678 of 912      | 4         |
-| Whistle E7 to B7, 300 ms notes, -36 to -22 dBFS, no harmonics, breaths of 0 to 60 ms                                                                    | never           | never     |
-| Soprano A5 to E6, 400 ms notes, 2nd harmonic -15 dB, vibrato of 25 to 100 cents                                                                         | never           | never     |
-| Soprano melisma and whistled scale, 125 or 94 ms notes, up 1 dB a note                                                                                  | never           | never     |
-| Whistled chromatic run E7 to B7, 94 ms notes, up 1 dB a note                                                                                            | once, 12 dB     | never     |
-| The same up 2 dB a note                                                                                                                                 | twice, to 24 dB | never     |
-| A 50 ms grace note under a phrase E7 to B7, 250 ms notes, up 2 dB a note                                                                                | once, 12 dB     | never     |
+| Voice                                                                                                                                                                  | Ducked before   | This rule |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------- |
+| The echo fixture's talker, 6 s of it over its room playing the backing and the singer back, 11 playout delays from 10 to 60 ms, each at 16 places against the analyses | 12 of 176 runs  | none      |
+| 24 talkers, 110 to 220 Hz and six seeds, through the canceller the same way, 11 delays at 8 places each                                                                | 49 of 2112 runs | 8         |
+| 24 talkers whose fundamental stands alone, the second harmonic 15 dB down, 38 delays each                                                                              | 678 of 912      | 4         |
+| Whistle E7 to B7, 300 ms notes, -36 to -22 dBFS, no harmonics, breaths of 0 to 60 ms                                                                                   | never           | never     |
+| Soprano A5 to E6, 400 ms notes, 2nd harmonic -15 dB, vibrato of 25 to 100 cents                                                                                        | never           | never     |
+| Soprano melisma and whistled scale, 125 or 94 ms notes, up 1 dB a note                                                                                                 | never           | never     |
+| Whistled chromatic run E7 to B7, 94 ms notes, up 1 dB a note                                                                                                           | once, 12 dB     | never     |
+| The same up 2 dB a note                                                                                                                                                | twice, to 24 dB | never     |
+| A 50 ms grace note under a phrase E7 to B7, 250 ms notes, up 2 dB a note                                                                                               | once, 12 dB     | never     |
 
 The last three were [#139](https://github.com/aeonentertainment/aeon-mixer/issues/139). The four
 talkers still caught with a bare fundamental are each a swell of up to 200 ms that still rises 6 dB
 once its first 107 ms are over, as a whistled note that grows does.
+
+The scorecard's echo fixture runs the guard over a singer and a howl after them, its room playing
+the slot back as the master carried it. Over 11 playout delays from 10 to 60 ms, each at 16 places
+against the analyses, the singer is never caught. The howl is caught once in 172 of the 176 runs and
+twice in 4, all at 60 ms, where the replay leaves the room's echo of the slot at the recorded 15 ms
+lag, which no room does. `howlCatches` reads 1 at each of the 11 delays.
 
 A howl under a singer: 1.2 kHz from -40 dBFS growing 25 dB a second under a voice at -20 dBFS. Under
 a voice whose fundamental stands alone, it is caught within 950 ms, at most 3 dB over the voice and

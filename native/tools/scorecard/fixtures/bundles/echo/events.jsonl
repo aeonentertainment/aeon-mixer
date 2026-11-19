@@ -1,3 +1,3 @@
-{"effects":[{"enabled":true,"kind":"echo-cancel"}],"frame":384,"index":0,"type":"setSlotEffects","us":1794981734462566}
-{"frame":384,"type":"start","us":1794981734462566}
-{"frame":768384,"type":"end","us":1794981750462566}
+{"effects":[{"enabled":true,"kind":"echo-cancel"},{"enabled":true,"kind":"howl-guard"}],"frame":384,"index":0,"type":"setSlotEffects","us":1795113798616693}
+{"frame":384,"type":"start","us":1795113798616693}
+{"frame":768384,"type":"end","us":1795113814616693}
