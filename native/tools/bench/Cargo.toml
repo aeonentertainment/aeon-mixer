@@ -1,0 +1,24 @@
+[package]
+name = "bench"
+description = "The mixer alone on a real clock: a session bundle played as replay plays it, and what the clock made of it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Opens real audio devices. Off by default, so the bench builds and runs on the timer clock with no
+# audio stack.
+hardware = ["devices/hardware"]
+
+[dependencies]
+devices = { workspace = true }
+engine = { workspace = true }
+replay = { path = "../replay" }
+rtrb = "0.4.1"
+scorecard = { path = "../scorecard" }
+serde_json = "1"
+transport = { workspace = true }
+
+[dev-dependencies]
+assert_no_alloc = "1.1"

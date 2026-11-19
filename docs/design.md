@@ -1568,10 +1568,10 @@ bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--inpu
   since a move would make the song differ from `replay`'s (8.11).
 - **What it measures** is what only a real clock can say: whether the mix kept up.
   `output.underruns` counts the periods the output was not handed in time. `output.renderP99Ms`
-  and `output.renderMaxMs` time a block's render against the output's period, which is all the
-  time a render has. The song's
-  own numbers are the scorecard's: scoring the bundle the bench writes gives the scorecard's
-  numbers for the bundle it played, so the bench does not repeat them.
+  and `output.renderMaxMs` time a block's render against the time a block has: the output's
+  period when it is shorter than a block, and a block's 2.67 ms when a callback renders several
+  blocks back to back. The song's own numbers are the scorecard's: scoring the bundle the bench
+  writes gives the scorecard's numbers for the bundle it played, so the bench does not repeat them.
 - **It writes a bundle** to `--out`, as a mixer writes one (8.11), with the real output in the
   manifest and `stats.jsonl` from the run. It keeps time by the output's frames: every `us` it
   writes, a packet's or a line's, is the manifest's `us` plus the frames since, at 48 frames a

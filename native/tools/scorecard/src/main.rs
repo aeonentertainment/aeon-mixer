@@ -3,8 +3,6 @@
 //! no device and no socket, and the same bundle scores to the same numbers every time.
 
 mod bundles;
-mod card;
-mod movement;
 mod numbers;
 
 #[cfg(test)]
@@ -14,9 +12,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use replay::bundle::report::{self, Options as Replay};
+use scorecard::{card, movement};
 
 use crate::card::Scorecard;
-use crate::movement::{Change, Movement};
 
 const USAGE: &str = "\
 usage: scorecard BUNDLE... [--profile FILE] [--backing STEMS] [--baseline FILE] [--write FILE]
@@ -86,29 +84,7 @@ fn run(options: &Options) -> Result<bool, String> {
         }
         return Ok(true);
     };
-    let movements = Movement::between(&card, &baseline);
-    if movements.is_empty() {
-        println!("no number moved");
-        return Ok(true);
-    }
-    println!("{:<42} {:>10} {:>10} {:>10} {:>10}", "", "baseline", "now", "change", "tolerance");
-    for movement in &movements {
-        let name = format!("{} {}", movement.bundle, movement.number);
-        let verdict = if movement.fails() { "  beyond" } else { "" };
-        match movement.change {
-            Change::Moved { baseline, now, tolerance } => println!(
-                "{name:<42} {baseline:>10.2} {now:>10.2} {:>+10.2} {tolerance:>10.2}{verdict}",
-                now - baseline
-            ),
-            Change::Gone { baseline } => {
-                println!("{name:<42} {baseline:>10.2} {:>10}{:>22}{verdict}", "gone", "")
-            }
-            Change::New { now } => println!("{name:<42} {:>10} {now:>10.2}", "new"),
-        }
-    }
-    let failing = movements.iter().filter(|movement| movement.fails()).count();
-    println!("\n{} moved, {failing} beyond what the baseline allows", movements.len());
-    Ok(failing == 0)
+    Ok(movement::report(&card, &baseline))
 }
 
 fn main() -> ExitCode {

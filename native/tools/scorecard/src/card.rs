@@ -8,8 +8,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::numbers::Numbers;
-
 /// The one format this tool reads and writes.
 pub const FORMAT: u64 = 1;
 
@@ -35,7 +33,12 @@ impl Scorecard {
     }
 
     /// Adds `bundle`'s numbers, each with the tolerance `baseline` gives it, or 0.
-    pub fn add(&mut self, bundle: &str, numbers: Numbers, baseline: Option<&Scorecard>) {
+    pub fn add(
+        &mut self,
+        bundle: &str,
+        numbers: BTreeMap<String, f64>,
+        baseline: Option<&Scorecard>,
+    ) {
         let tolerances = baseline.and_then(|card| card.bundles.get(bundle));
         let entries = numbers
             .into_iter()
