@@ -550,4 +550,126 @@ mod tests {
         assert_eq!(corrector.frames_until_reading(), 380);
         assert_eq!(corrector.reading_lag_samples(), 1024);
     }
+
+    /// One jump of the shifter's read point: when, how far, and how far that lands from a whole
+    /// number of the voice's periods, as a fraction of one. A splice that keeps a voice whole lands
+    /// near 0; 0.5 crossfades two points of the waveform half a cycle apart.
+    struct Splice {
+        at: usize,
+        misaligned: f64,
+        /// The output's level in the crossfade after the jump against the 10 ms before it, in dB.
+        dip_db: f64,
+    }
+
+    /// `input` through a corrector at full strength on every class, a frame at a time, and every
+    /// jump of its read point, with `hz_at` the voice's true pitch at each sample.
+    fn splices(input: &[f32], hz_at: impl Fn(usize) -> f64) -> Vec<Splice> {
+        let mut corrector = PitchCorrector::new(RATE);
+        corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
+        let mut output = vec![0.0; input.len()];
+        let mut delays = Vec::with_capacity(input.len());
+        assert_no_alloc(|| {
+            for (sample, out) in input.iter().zip(output.iter_mut()) {
+                let mut one = [0.0];
+                corrector.process(std::slice::from_ref(sample), &mut one);
+                *out = one[0];
+                delays.push(corrector.latency_samples() as f64);
+            }
+        });
+        let level = |from: usize, to: usize| {
+            let slice = &output[from..to.min(output.len())];
+            (slice.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / slice.len() as f64).sqrt()
+        };
+        (1..delays.len())
+            .filter(|&n| {
+                (delays[n] - delays[n - 1]).abs() >= 4.0 && n > 480 && n + 128 < delays.len()
+            })
+            .map(|n| {
+                let jump = (delays[n] - delays[n - 1]).abs();
+                let period = f64::from(RATE) / hz_at(n.saturating_sub(delays[n - 1] as usize));
+                let periods = (jump / period).round();
+                let misaligned = (jump - periods * period).abs() / period;
+                let dip_db = 20.0 * (level(n, n + 128) / level(n - 480, n).max(1e-9)).log10();
+                Splice { at: n, misaligned, dip_db }
+            })
+            .collect()
+    }
+
+    fn report(name: &str, splices: &[Splice], seconds: f64) -> usize {
+        let bad: Vec<&Splice> = splices.iter().filter(|s| s.misaligned > 0.1).collect();
+        let worst = splices.iter().map(|s| s.misaligned).fold(0.0, f64::max);
+        let dip = bad.iter().map(|s| s.dip_db).fold(0.0, f64::min);
+        eprintln!(
+            "{name}: {} jumps, {} misaligned past a tenth of a period ({:.1} a second), worst {worst:.2} of a period, deepest dip after one {dip:.1} dB, first at {:?}",
+            splices.len(),
+            bad.len(),
+            bad.len() as f64 / seconds,
+            bad.first().map(|s| s.at)
+        );
+        bad.len()
+    }
+
+    // A bass near E2 with vibrato dips under the 82 Hz the reader corrects from on every cycle,
+    // and the corrector lets go there. The voice still sounds, so the shifter must keep it whole
+    #[test]
+    fn a_low_voice_dipping_under_the_reader_is_spliced_whole() {
+        let seconds = 3.0;
+        for (centre, depth) in [(40.0, 50.0), (40.2, 40.0)] {
+            let hz = |i: usize| {
+                let cents = vibrato(depth, 5.5, i as f64 / f64::from(RATE));
+                midi_hz(centre) * 2f64.powf(cents / 1200.0)
+            };
+            let voice = sung((seconds * f64::from(RATE)) as usize, &buzz(), hz);
+            let name = format!("MIDI {centre} with {depth} c vibrato");
+            assert_eq!(report(&name, &splices(&voice, hz), seconds), 0, "{name}");
+        }
+    }
+
+    // A breathy note: noise as loud as the voice comes over it for 75 ms in every 300, long enough
+    // for the reader to stop trusting it. The voice sounds throughout and must stay whole
+    #[test]
+    fn a_breathy_note_the_reader_doubts_is_spliced_whole() {
+        let seconds = 3.0;
+        let hz = midi_hz(50.3);
+        let frames = (seconds * f64::from(RATE)) as usize;
+        let noise = breath(frames, 0.9);
+        let voice: Vec<f32> = harmonic_tone(hz, seconds)
+            .into_iter()
+            .enumerate()
+            .map(|(i, sample)| {
+                let breathing = i % (RATE as usize * 3 / 10) < RATE as usize * 3 / 40;
+                sample + if breathing { noise[i] } else { 0.0 }
+            })
+            .collect();
+        let bad = report("breathy D3", &splices(&voice[..frames], |_| hz), seconds);
+        assert_eq!(bad, 0);
+    }
+
+    /// Uniform noise from a fixed seed, `level` peak to peak: breath, for the tests that need it.
+    fn breath(frames: usize, level: f32) -> Vec<f32> {
+        let mut seed = 0x2545_f491_u32;
+        (0..frames)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                level * (f64::from(seed >> 8) / f64::from(1u32 << 24) - 0.5) as f32
+            })
+            .collect()
+    }
+
+    // A rest still moves the read point down: a line that starts after one starts near the floor
+    #[test]
+    fn a_rest_still_moves_the_delay_down() {
+        let line = voice_at(2.0, |t| if (0.8..1.2).contains(&t) { None } else { Some(-40.0) });
+        let mut corrector = PitchCorrector::new(RATE);
+        corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
+        let mut at_line_start = 0;
+        for (index, block) in line.chunks(128).enumerate() {
+            corrector.process(block, &mut [0.0; 128][..block.len()]);
+            if (1.19..1.2).contains(&((index * 128) as f64 / f64::from(RATE))) {
+                at_line_start = corrector.latency_samples();
+            }
+        }
+        let bound = 5.0 + 0.25 * f64::from(RATE) / midi_hz(56.6) + 8.0;
+        assert!((at_line_start as f64) < bound, "{at_line_start} samples at the line's start");
+    }
 }

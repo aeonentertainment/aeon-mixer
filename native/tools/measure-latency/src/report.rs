@@ -3,6 +3,8 @@
 
 use std::fmt::Write;
 
+use engine::slot::effects::Corrector;
+
 use crate::cli::DeviceArgs;
 use crate::machine;
 use crate::offline::{Row, ms};
@@ -45,12 +47,14 @@ pub fn offline(rows: &[Row]) -> String {
          on any network. **Corrector**: on, a voice 40 cents sharp sings phrases of 0.2 to 0.475 \
          s, each followed by a rest and a 50 ms sweep from 2 to 7.5 kHz, and the slot corrects it \
          to the nearest semitone at once with no guide. What it reports is the delay the corrector \
-         held as each sweep went through, which engine holds includes. The phrases leave that \
-         delay at different heights, so it is the span they found; a budget counts \
-         `correctorMaxDelayMs`, 15 ms. **Engine holds**: from the packet's arrival to the master's output: the \
+         held as each sweep went through, which engine holds includes. The rest before each sweep \
+         moves that delay down to a quarter period of the voice above the shifter's floor, so the \
+         span comes from the voice's period and is what a line's start meets; a budget counts \
+         `correctorMaxDelayMs`, {ceiling:.1} ms. **Engine holds**: from the packet's arrival to the master's output: the \
          wait for the next block, the slot's delay on the jitter-buffered paths, decode, slot and \
          master. **Total**: a sample entering the sender to its leaving the master; it excludes \
          the mouth to the phone's encoder, the network, and everything after the master.",
+        ceiling = ms(f64::from(Corrector::MAX_LATENCY_FRAMES)),
     );
     out
 }

@@ -61,11 +61,18 @@ hears a voice. The detector and the control path are untouched.
    past the reading. A jump back searches as before. Both stop at 82 Hz's period plus a sample.
 3. **Jumps are finer than a sample**, from #47. Whole-sample jumps bias a high voice by up to
    1.8 cents.
-4. **A rest moves the read point down.** Once the detector has missed the voice for four readings
-   in a row, the read point jumps, under the usual crossfade, to a quarter period above the floor,
-   once per rest. A rest is the one place a splice has no waveform to match, so the delay comes down
-   for free, and the next line starts low with room for a voice shifted up to run before it repeats
-   a period.
+4. **A rest moves the read point down.** Once the detector has let go of the voice, the read point
+   jumps, under the usual crossfade, to a quarter period above the floor, once per rest. A rest is
+   the one place a splice has no waveform to match, so the delay comes down for free, and the next
+   line starts low with room for a voice shifted up to run before it repeats a period. The detector
+   also lets go of a voice that still sounds: one under 82 Hz, or one it doubts for 40 ms, under
+   breath or a loud room. A jump of an arbitrary length there splices the note out of phase, so the
+   move waits until the input at both ends of the jump is under -50 dBFS or no longer repeats the
+   voice's last period: the best match of 384 samples with those a period before, within an
+   eighth, under 0.25. A voice under breath as loud as itself matches at 0.36 and up, breath alone
+   at 0.15 at most. The level floor is there because Opus's residue in a rest, at -90 to -60 dBFS,
+   repeats a period too, and held the move until the next sound. While a voice still sounds, it
+   looks again every crossfade.
 
 The fourth is the new idea. Decision 0009 tried draining to the floor itself and saw the sung p95
 rise, because a voice shifted up from the floor repeats a period at once. A quarter period of room
@@ -141,12 +148,12 @@ rows: 0.963 before. It is the only artefact measure here that reads the splices 
 
 - **Decisions 0010 and 0013** change the reading and the control signal, not the shifter. The
   reading projects the voice forward past `delaySamples()`, and a lower delay makes that
-  projection shorter. `PitchCorrector` tells the shifter `reader.voiced()`. With them the shifter
-  moves more, since correction acts on more of each note: on the golden vocal in the key of C, at
-  the first start offset, the sung p95 is 8.3 ms against 5.6 with this change alone, the largest
-  delay 11.0 against 6.4, and a line starts at a median of 2.2 ms against 1.7. On vocadito a line
-  starts at 1.2 to 2.4 ms against 1.1 to 1.7. The held-tone rows and the delay at rest do not
-  move.
+  projection shorter. `PitchCorrector` tells the shifter `reader.voiced()`. With them, and with
+  the rest move waiting while a voice still sounds, the shifter moves more, since correction acts
+  on more of each note and fewer rests move it down: on the golden vocal in the key of C, at the
+  first start offset, the sung p95 is 9.5 ms against 5.6 with this change alone, the largest delay
+  11.6 against 6.4, and a line starts at a median of 2.0 ms against 1.7. On vocadito a line starts
+  at 1.2 to 2.0 ms against 1.1 to 1.7. The held-tone rows and the delay at rest do not move.
 - **The octave for #48's higher and lower voices.** A floor that follows the ratio lets an octave
   up pay its own floor, 133 samples, only while it shifts an octave, and a voice and its correction
   would ride one sawtooth. Moving the octave in still needs the shift range opened to 18 semitones,
@@ -157,5 +164,7 @@ rows: 0.963 before. It is the only artefact measure here that reads the splices 
 
 - How any of it sounds. The blind listen in #116 holds off, the corrector before #112 and this one.
 - Mouth to speaker with correction on, which needs `measure-latency` on hardware (#116).
-- Whether a rest move is heard. It is a splice inside unvoiced sound, a breath or a consonant's
-  tail, where there is no pitch to break.
+- Whether a rest move is heard. It is a splice inside silence or unvoiced sound, a breath or a
+  consonant's tail, where there is no pitch to break.
+- A voice whose period moved while the detector had let go is matched against the last period it
+  read, within an eighth. One that slid further than that could still be spliced.

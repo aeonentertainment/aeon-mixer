@@ -5,9 +5,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use engine::backing::Planar;
 use serde_json::{Map, Value};
 
-use crate::audio::{read_wav, write_wav};
+use crate::audio::{decode_stereo, write_wav};
 
 const MEASURES: &str = "measures.json";
 
@@ -49,7 +50,7 @@ impl BeforeTakes {
             serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut takes = BTreeMap::new();
         for (source, measures) in measures {
-            let (left, right) = read_wav(&wav_of(dir, &source))?;
+            let Planar { left, right } = decode_stereo(&wav_of(dir, &source))?;
             takes.insert(source, Rendered { left, right, measures });
         }
         Ok(Self { dir: dir.to_owned(), takes })

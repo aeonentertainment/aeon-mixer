@@ -20,6 +20,14 @@ constexpr double kStartingPeriodSeconds = 1.0 / 200;
 constexpr int kInterpolationReach = 3;
 /** Where a rest leaves the read point, in periods above the floor: low, with room for a voice shifted up to run a while before it repeats a period. */
 constexpr double kRestingPeriods = 0.25;
+/**
+ * A stretch this alike to the one a period before is a voice that still sounds, which a rest move
+ * would splice out of phase. A voice under breath as loud as itself matches at 0.36 and up; breath
+ * alone reaches 0.15 and silence 0.
+ */
+constexpr float kPeriodicMatch = 0.25f;
+/** Under -50 dBFS a voice is too quiet for a splice in it to be heard, and a codec's residue in a rest can repeat a period at -90. */
+constexpr float kQuietestVoice = 0.00316f;
 
 int powerOfTwoAtLeast(double samples) {
   int size = 16;
@@ -47,6 +55,8 @@ struct PitchShifter::State {
   bool voiced = false;
   /** Whether this rest has already moved the read point down. */
   bool settled = false;
+  /** Samples until a rest that found a voice still sounding looks again. */
+  int restCheckIn = 0;
 
   explicit State(double sampleRate)
       : fadeIn(size_t(std::lround(sampleRate * kCrossfadeSeconds))),
@@ -83,18 +93,41 @@ struct PitchShifter::State {
     return y1 + 0.5f * t * (y2 - y0 + t * (2 * y0 - 5 * y1 + 4 * y2 - y3 + t * (3 * (y1 - y2) + y3 - y0)));
   }
 
-  /** How alike the stretch behind the read point and the stretch behind where a jump of `lag` would land. */
-  float correlation(int direction, long long lag) const {
-    const auto from = (long long)(std::floor(read));
+  /** How alike the `length` samples behind `from` and the ones behind `from + direction * lag`. */
+  float correlation(long long from, int direction, long long lag, int length) const {
     const long long to = from + direction * lag;
     float cross = 0, energyFrom = 0, energyTo = 0;
-    for (int k = 1; k <= int(fadeIn.size()); ++k) {
+    for (int k = 1; k <= length; ++k) {
       const float a = at(from - k), b = at(to - k);
       cross += a * b;
       energyFrom += a * a;
       energyTo += b * b;
     }
     return cross / std::sqrt(energyFrom * energyTo + 1e-12f);
+  }
+
+  /** How alike the stretch behind the read point and the stretch behind where a jump of `lag` would land. */
+  float correlation(int direction, long long lag) const {
+    return correlation((long long)(std::floor(read)), direction, lag, int(fadeIn.size()));
+  }
+
+  /**
+   * Whether the input around `point` is loud enough to hear and repeats a period of the voice earlier,
+   * as a sounding voice does whether or not the detector trusts it. Three crossfades long, so
+   * breath's chance matches stay far under the bar.
+   */
+  bool soundsAt(double point) const {
+    const auto from = (long long)(std::floor(point));
+    const int length = 3 * int(fadeIn.size());
+    float energy = 0;
+    for (int k = 1; k <= length; ++k) energy += at(from - k) * at(from - k);
+    if (energy < float(length) * kQuietestVoice * kQuietestVoice) return false;
+    const int nominal = int(std::lround(period));
+    const int reach = std::max(2, nominal / 8);
+    for (int lag = nominal - reach; lag <= nominal + reach; ++lag) {
+      if (correlation(from, -1, lag, length) > kPeriodicMatch) return true;
+    }
+    return false;
   }
 
   struct Jump {
@@ -147,15 +180,22 @@ struct PitchShifter::State {
   /**
    * Jumps a period back when the read point closes on the floor, or ahead once it has fallen a
    * period behind and the waveform matches there. In a rest there is nothing to keep whole, so the
-   * read point moves down to a quarter period above the floor, once.
+   * read point moves down to a quarter period above the floor, once. The detector also lets go of
+   * a voice it doubts or one under 82 Hz, which still sounds, so the move waits until neither end
+   * of its splice repeats the voice's period, looking again every crossfade while it does.
    */
   void keepInRange() {
     const double floor = floorFor(ratio);
     const double delay = double(written) - read;
-    if (!voiced && !settled) {
-      settled = true;
+    if (!voiced && !settled && --restCheckIn <= 0) {
       const double resting = floor + kRestingPeriods * period;
-      if (delay > resting + 1) return startJump(delay - resting);
+      const bool high = delay > resting + 1;
+      if (high && (soundsAt(read) || soundsAt(read + delay - resting))) {
+        restCheckIn = int(fadeIn.size());
+      } else {
+        settled = true;
+        if (high) return startJump(delay - resting);
+      }
     }
     if (delay < floor) return startJump(-bestJump(-1, floor).lag);
     if (delay <= floor + period + 1 || delay < waitUntil) return;
@@ -183,6 +223,7 @@ void PitchShifter::reset() {
   s.waitUntil = 0;
   s.voiced = false;
   s.settled = false;
+  s.restCheckIn = 0;
 }
 
 void PitchShifter::setSemitones(float semitones) {
@@ -196,7 +237,10 @@ void PitchShifter::setPeriod(float samples) {
 
 void PitchShifter::setVoiced(bool voiced) {
   State &s = *state_;
-  if (voiced) s.settled = false;
+  if (voiced) {
+    s.settled = false;
+    s.restCheckIn = 0;
+  }
   s.voiced = voiced;
 }
 
