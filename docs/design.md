@@ -764,6 +764,48 @@ compiled, but nothing documented or used it. Before 1.0, removing that export ta
 bump, as decisions 0007 and 0009 set for other pre-1.0 changes. Exporting it as a type only
 means no later refactor can change a public constructor by accident.
 
+The contract suite is a second entry point, `@aeonentertainment/mixer/contract`. It imports no
+addon, so a host checks a stand-in for the package without one (8.8).
+
+```ts
+/** The calls the suite makes on a mixer and on an offline engine. */
+export type ContractMixer = Pick<
+  Mixer,
+  | "slots"
+  | "setSlot"
+  | "setSlotEffects"
+  | "resetSlot"
+  | "push"
+  | "start"
+  | "destroy"
+  | "stats"
+  | "on"
+>;
+export interface ContractEngine extends Pick<OfflineEngine, "output" | "pump" | "on" | "close"> {
+  createMixer(config: MixerConfig): Promise<ContractMixer>;
+}
+/** This package's module, or the stand-in a host's tests drive in its place. */
+export interface ContractSubject<E extends ContractEngine = ContractEngine> {
+  openEngine(options: OpenEngineOptions & { output: { offline: true } }): Promise<E>;
+  outputDevices(): Promise<ReadonlyArray<DeviceInfo>>;
+}
+export interface ContractOptions<E extends ContractEngine> {
+  /** Moves `engine` to another output. An offline engine never moves: without it, that promise is unchecked. */
+  moveOutput?: (engine: E) => void;
+}
+export interface ContractReport {
+  /** Each promise broken, as a sentence, with what the suite found; empty when all hold. */
+  broken: Array<{ promise: string; found: string }>;
+  /** Each promise this run could not check, and why. */
+  unchecked: Array<{ promise: string; why: string }>;
+}
+/** Checks the promises above that a host relies on, one at a time on fresh offline engines. */
+export function checkContract<E extends ContractEngine>(
+  subject: ContractSubject<E>,
+  options?: ContractOptions<E>,
+): Promise<ContractReport>;
+```
+
 ## 8. Modules
 
 Each module names its purpose, the rules beyond section 2 that bind it, and what done means.
@@ -1375,6 +1417,9 @@ section 7.2 with typed events and validation of ranges before anything crosses.
   stream runs while the graph is live. `stats().rtpReturn.droppedBlocks` is there because the
   packetizer hides a drop as a timestamp jump: without the count, a stalled network thread
   looks to the host like a quiet room.
+- `src/contract/` is the contract suite, whose entry point and types are at the end of 7.2.
+  Each promise is a sentence, checked on its own offline engines; the move's runs only on a
+  stand-in the host can move. The package's own suite runs it against the package.
 
 Done when: every method and event in 7.2 exists, `vp check` passes with no `any`, and the
 TypeScript suite exercises them on the offline engine.
@@ -1690,7 +1735,10 @@ slots whose calls left that value out.
 - The offline driver is the clock in every engine test. No test opens a device. A test that
   creates an `rtp` or `l16` slot binds that slot's ephemeral port, because the port is what it
   checks, and may bind it again to see it held; no test sends a datagram, since nothing marks
-  one's arrival to await, and the packet path is proven in Rust on the offline driver.
+  one's arrival to await, and the packet path is proven in Rust on the offline driver. The
+  contract suite's sender promises (8.8) are the exception: they prove the lock over a real
+  socket, so they send on loopback and pump a block a millisecond until `stats()` moves, under a
+  deadline only a broken promise reaches.
 - Every realtime `process` and `render` runs under the `assert_no_alloc` guard in tests. Its
   allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
   so the engine does not.
