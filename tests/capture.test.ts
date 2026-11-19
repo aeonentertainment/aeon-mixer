@@ -67,7 +67,8 @@ test("closing the engine releases every mixer, armed or live", async () => {
   await startLive(engine, live);
   const armed = await engine.createMixer({ slots: [{ kind: "push" }] });
   expect(armed.push(0, new Float32Array(256))).toBe(128);
-  // The live mixer's swap out waits on the offline clock like any command
+  // The live mixer's swap out waits on the offline clock like any command. Not the suite's
+  // `closeOffline`, which swallows a pump that throws: here a throw fails the test
   const closed = engine.close();
   engine.pump(FADE_BLOCKS);
   await closed;

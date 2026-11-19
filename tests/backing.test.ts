@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { types } from "node:util";
 import { runInNewContext } from "node:vm";
 import { afterAll, expect, test } from "vite-plus/test";
-import { BLOCK, FADE_BLOCKS, startLive } from "../src/contract/offline-clock.ts";
+import { BLOCK, FADE_BLOCKS, rendered, startLive } from "../src/contract/offline-clock.ts";
 import { wav } from "../src/contract/wav.ts";
 import { defaultProfile, type Mixer, type MixerConfig, openEngine } from "../src/index.ts";
 import { destroyLive, left } from "./offline.ts";
@@ -138,17 +138,6 @@ function onceEnded(mixer: Mixer) {
     const off = mixer.on("backingEnded", () => {
       off();
       resolve();
-    });
-  });
-}
-
-/** Every render progress fraction, resolving with them once the last one is 1. */
-function rendered(mixer: Mixer) {
-  const fractions: number[] = [];
-  return new Promise<number[]>((resolve) => {
-    mixer.on("renderProgress", (fraction) => {
-      fractions.push(fraction);
-      if (fraction === 1) resolve(fractions);
     });
   });
 }

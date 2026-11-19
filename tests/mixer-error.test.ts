@@ -7,6 +7,7 @@ import { FADE_BLOCKS, rendered, startLive } from "../src/contract/offline-clock.
 import { wav } from "../src/contract/wav.ts";
 import { type Mixer, type MixerConfig, type OfflineEngine, openEngine } from "../src/index.ts";
 import type { NativeEvent } from "../src/native.ts";
+import { destroyLive } from "./offline.ts";
 
 // The offline clock cannot fault, so the fault test hands the engine the batch the events thread
 // would: the callback it gives the addon is the seam, and the public API stays as it is. `heard`
@@ -151,9 +152,7 @@ test("a start that goes unanswered emits error once, rejects with it, and leaves
     expect(errors[0]?.message).toMatch(/not acknowledged within 1000 ms; the engine is running/);
 
     expect(faults).not.toHaveBeenCalled();
-    const destroyed = mixer.destroy();
-    engine.pump(FADE_BLOCKS);
-    await destroyed;
+    await destroyLive(engine, mixer);
     await engine.close();
   });
 });
@@ -175,9 +174,7 @@ test("a backing command that goes unanswered emits error, and a second one adds 
     await expect(pausing).rejects.toThrow(/not acknowledged/);
     expect(errors).toHaveLength(1);
 
-    const destroyed = mixer.destroy();
-    engine.pump(FADE_BLOCKS);
-    await destroyed;
+    await destroyLive(engine, mixer);
     await engine.close();
   });
 });

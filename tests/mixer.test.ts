@@ -328,6 +328,7 @@ test("a command the clock never serves rejects after a second with the engine's 
     const started = mixer.start();
     vi.advanceTimersByTime(1000);
     await expect(started).rejects.toThrow(/not acknowledged within 1000 ms; the engine is running/);
+    // Not the suite's `closeOffline`, which swallows a pump that throws: here a throw fails the test
     const closing = engine.close();
     engine.pump(FADE_BLOCKS);
     await closing;

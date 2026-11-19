@@ -25,11 +25,16 @@ export async function startLive(
   return outcome.value;
 }
 
-/** Resolves once `mixer`'s backing has rendered and its stems are in the graph. */
+/**
+ * Resolves once `mixer`'s backing has rendered and its stems are in the graph, with every
+ * progress fraction it reported on the way.
+ */
 export function rendered(mixer: Pick<ContractMixer, "on">) {
-  return new Promise<void>((resolve) => {
+  const fractions: number[] = [];
+  return new Promise<number[]>((resolve) => {
     mixer.on("renderProgress", (fraction) => {
-      if (fraction === 1) resolve();
+      fractions.push(fraction);
+      if (fraction === 1) resolve(fractions);
     });
   });
 }

@@ -19,7 +19,10 @@ export const SILENT_STATS = {
 };
 
 /** Destroys a live mixer, pumping the offline clock through the swap fade so the acks arrive. */
-export async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
+export async function destroyLive(
+  engine: Pick<OfflineEngine, "pump">,
+  mixer: Pick<Mixer, "destroy">,
+) {
   const destroyed = mixer.destroy();
   engine.pump(FADE_BLOCKS);
   await destroyed;

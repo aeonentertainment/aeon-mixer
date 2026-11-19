@@ -18,7 +18,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { bundleOutput } from "../src/bundle/bundle-manifest.ts";
 import { BLOCK, FADE_BLOCKS, rendered, startLive } from "../src/contract/offline-clock.ts";
 import { wav } from "../src/contract/wav.ts";
-import { type Mixer, openEngine, parseProfile } from "../src/index.ts";
+import { openEngine, parseProfile } from "../src/index.ts";
 import { destroyLive } from "./offline.ts";
 
 const RATE = 48000;
@@ -303,18 +303,12 @@ test("a resetSlot in start's block is written on the side of start it was made o
   const { engine, pump, frames } = await countingEngine();
   const mixer = (name: string) =>
     engine.createMixer({ slots: [{ kind: "rtp" }], bundle: { dir: join(dir, name) } });
-  const destroy = async (live: Mixer) => {
-    const destroyed = live.destroy();
-    pump(FADE_BLOCKS);
-    await destroyed;
-  };
-
   // Made while armed, the reset reaches nothing, and a replay that reads it before start skips it
   const before = await mixer("reset-before");
   const beforeAt = frames();
   before.resetSlot(0);
   await startLive({ pump }, before);
-  await destroy(before);
+  await destroyLive({ pump }, before);
   expect(calls("reset-before")).toEqual([
     { type: "resetSlot", frame: beforeAt },
     { type: "start", frame: beforeAt },
@@ -329,7 +323,7 @@ test("a resetSlot in start's block is written on the side of start it was made o
   after.resetSlot(0);
   pump(FADE_BLOCKS);
   await started;
-  await destroy(after);
+  await destroyLive({ pump }, after);
   expect(calls("reset-after")).toEqual([
     { type: "start", frame: afterAt },
     { type: "resetSlot", frame: afterAt },
