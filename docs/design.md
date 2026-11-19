@@ -1595,8 +1595,10 @@ bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--inpu
 - **`loopback` measures a house mic's mouth to speaker without a mouth.** It plays decision
   0006's chirp into the output's left channel from the render, at frames it knows. A `capture`
   slot (decision 0018) reads it back from the input the rig reaches: a cable from the output's left
-  channel, or a mic `--air-cm` from the speaker, as `measure-latency`'s rigs are. The slot is out
-  of the mix and its output is read before the master, so the loop never feeds itself. Both ends
+  channel, or a mic `--air-cm` from the speaker, as `measure-latency`'s rigs are. The slot is
+  panned hard right and read from the master's right channel, as `measure-latency`'s rig reads its
+  slot from the left, and the output is handed only the chirps on its left, so the room never
+  hears the slot and the loop never feeds itself. Both ends
   are frames of the output's clock: the chirp's start as rendered and its arrival in the slot's
   output. The gap between them is the output, the cable or the air, the input and what the
   capture slot holds, which is the path a house mic's voice takes to the room. So the figure needs
@@ -1621,9 +1623,11 @@ bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--inpu
 
 Done when: on the timer clock's synthetic clock and a fake output, `bench play` of the scorecard's
 duet renders what `replay` renders, sample for sample, under the allocation guard, and the bundle
-it writes replays to those samples; a fake loop of a known delay reads back as that delay plus
-what the capture slot reports holding, within a frame; and each #116 run it can now do is written
-there as its command.
+it writes replays to those samples; a fake loop of a known delay, on an input that delivers each
+block as it arrives, reads back within a frame as that delay plus the wait the capture slot
+reports, less half the input's period, since the slot reports the middle of a wait one period wide
+and such an input's samples wait none of it on the hardware; and each #116 run it can now do is
+written there as its command.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 

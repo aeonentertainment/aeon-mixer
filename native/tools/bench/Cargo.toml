@@ -1,6 +1,6 @@
 [package]
 name = "bench"
-description = "The mixer alone on a real clock: a session bundle played as replay plays it, and what the clock made of it."
+description = "The mixer alone on a real clock: a session bundle played as replay plays it, and a house mic's loopback."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,7 @@ hardware = ["devices/hardware"]
 [dependencies]
 devices = { workspace = true }
 engine = { workspace = true }
+measure-latency = { path = "../measure-latency" }
 replay = { path = "../replay" }
 rtrb = "0.4.1"
 scorecard = { path = "../scorecard" }
