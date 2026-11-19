@@ -22,8 +22,13 @@ the line the comment sits on, and prefer the fix that removes code. A fix that a
 than it removes says in the reply why no existing code could change instead. A **second patch**
 is a stop sign: when a review finds a bug in code you added to answer an earlier finding, patch
 nothing more. Rewrite the approach so neither finding can occur, or reply with why the approach
-is right and the test that proves it. A finding larger than the PR becomes an issue titled
-`pattern: <the shape>` and no change here.
+is right and the test that proves it. A finding larger than the PR goes as a comment on the
+area's `pattern:` issue (open one titled `pattern: <the shape>` only when the area has none) and
+makes no change here.
+
+**Two rounds** is the budget. Before a push that changes code, go through the three review skills
+on the fix, as before the PR opened. A third round of findings is the same stop sign as a second
+patch: the slice is too large or the approach is wrong, so split it or rethink it.
 
 `babysit-pr` and `leaving-pr-comments` are user-level skills on the developer's machines. Without
 them: watch through the harness instead of polling, check every bot finding against the source,
@@ -67,7 +72,9 @@ and the numbers. A failing row is a bug: fix it, push, return to step 1.
 Check the stop list below. If nothing on it applies: `git fetch`, confirm the head is still the
 one you proved and green, then `gh pr merge <n> --squash --match-head-commit <sha>` with that
 head, so a push that slipped in fails the merge and sends you back to step 1. Then close the
-issue the PR finishes, with a comment naming the PRs and where any leftover went.
+issue the PR finishes, with a comment naming the PRs and where any leftover went. In the same
+turn, remove the PR's worktree and mark the agent that built it as finished in the harness, so
+nothing is left open.
 
 ### Stop and ask instead of merging
 
