@@ -10,23 +10,27 @@ const PAYLOAD_TYPE = 96;
 /**
  * A house mic's sender on loopback: RTP L16 packets of silence to an `l16` slot, from a port of
  * its own, so each sender is an address the slot tells apart.
+ *
+ * Every sender starts on the same SSRC, because the lock goes by address, never by SSRC
+ * (decision 0028). A slot that lost its lock then takes another sender's packets as late ones on
+ * the stream it has, and sees only a `restart()` as a new stream, so a check that waits for a
+ * resync cannot end early on a broken lock.
  */
 export class LoopbackSender {
   readonly #socket: Socket;
-  #ssrc: number;
+  #ssrc = 1;
   #seq = 0;
   #timestamp = 0;
 
-  private constructor(socket: Socket, ssrc: number) {
+  private constructor(socket: Socket) {
     this.#socket = socket;
-    this.#ssrc = ssrc;
   }
 
-  static async open(ssrc: number) {
+  static async open() {
     const socket = createSocket("udp4");
     socket.bind(0, "127.0.0.1");
     await once(socket, "listening");
-    return new LoopbackSender(socket, ssrc);
+    return new LoopbackSender(socket);
   }
 
   /** Starts a new stream from the same address, as a sender starting over does: a new SSRC. */
