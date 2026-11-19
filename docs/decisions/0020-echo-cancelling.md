@@ -138,15 +138,17 @@ the guard before, which looked only there, then took the fundamental for a howl.
 must sit at the exact fraction because a low singer's partials, 3 to 6 bins apart, would otherwise
 find one under a howl as often as not.
 
-**What it follows.** Two tones at once, each claiming the nearest peak within a semitone of where
-it was (never less than a bin), and new tones start on the loudest peaks no tone took that stand
-alone, in place of the quieter tone when there is no room. One peak an analysis let a singer's
-louder partial hide a howl's sightings; one tone let a singer's lone fundamental hold it while a
-howl grew beneath. Four peaks and two tones are the fewest that hold the numbers below; eight and
-four hold the same. A peak with something at its harmonics still continues a tone that has settled,
-if it sits within half a semitone of where the tone stood alone: a howl that a singer's partial
-lands on keeps its place, and its level then is not read. A voice's partial glides on with its
-harmonics and is lost.
+**What it follows.** Two tones at once, each claiming the nearest peak within a semitone of where it
+was (never less than a bin), and new tones start on the loudest peaks no tone took that stand alone.
+A new tone takes an empty place first, then the place of the tone unseen longest, and takes the
+place of a tone seen in that analysis only when every tone was, and only if it is the louder: a
+singer who leaps leaves their old note unseen, and it is that note, not a howl seen growing beneath
+them, that makes room. One peak an analysis let a singer's louder partial hide a howl's sightings;
+one tone let a singer's lone fundamental hold it while a howl grew beneath. Four peaks and two tones
+are the fewest that hold the numbers below; eight and four hold the same. A peak with something at
+its harmonics still continues a tone that has settled, if it sits within half a semitone of where
+the tone stood alone: a howl that a singer's partial lands on keeps its place, and its level then is
+not read. A voice's partial glides on with its harmonics and is lost.
 
 **When it is a howl.** A tone's growth is measured only from levels it was seen at alone. Its first
 107 ms are an attack; then it is judged from the middle of its last five sightings, which needs
@@ -172,7 +174,7 @@ on today's corrector:
 | Guard                                                           | Never caught | Caught past -20 dBFS |
 | --------------------------------------------------------------- | ------------ | -------------------- |
 | one tone, the strongest peak, a miss counting as quiet          | 0            | 77                   |
-| two tones from four peaks, levels only as seen, alone both ways | 0            | 60                   |
+| two tones from four peaks, levels only as seen, alone both ways | 0            | 61                   |
 
 The guard that followed a bin at a time with two misses never caught 8 of the rooms on the
 corrector of its day, and let 221 get loud.
@@ -182,7 +184,7 @@ Singing, offline, the guard before against this one:
 | Voice                                                                                                                                                   | Ducked before   | This rule |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------- |
 | The echo fixture's talker, its room playing the backing and the singer back, 11 playout delays from 10 to 60 ms, each at 16 places against the analyses | 12 of 176 runs  | none      |
-| 24 talkers, 110 to 220 Hz and six seeds, through the canceller the same way, 11 delays at 8 places each                                                 | 49 of 2112 runs | 9         |
+| 24 talkers, 110 to 220 Hz and six seeds, through the canceller the same way, 11 delays at 8 places each                                                 | 49 of 2112 runs | 8         |
 | 24 talkers whose fundamental stands alone, the second harmonic 15 dB down, 38 delays each                                                               | 678 of 912      | 4         |
 | Whistle E7 to B7, 300 ms notes, -36 to -22 dBFS, no harmonics, breaths of 0 to 60 ms                                                                    | never           | never     |
 | Soprano A5 to E6, 400 ms notes, 2nd harmonic -15 dB, vibrato of 25 to 100 cents                                                                         | never           | never     |
@@ -195,14 +197,19 @@ The last three were [#139](https://github.com/aeonentertainment/aeon-mixer/issue
 talkers still caught with a bare fundamental are each a swell of up to 200 ms that still rises 6 dB
 once its first 107 ms are over, as a whistled note that grows does.
 
-A howl under a singer: 1.2 kHz from -40 dBFS growing 25 dB a second under a voice at -20 dBFS.
-Under a voice whose fundamental stands alone, it is caught within 950 ms, at most 3 dB over the
-voice and in the middle 1.7 dB under it, where the guard before caught the singer first and the
-howl only 10 dB over them, 1.2 s in. Under a plain voice, 140 Hz and up with twelve harmonics, it is
-caught 0.86 s in at about the voice's level, as before: the voice's partials lie three or four bins
-from it, so it fails the narrow test until it outgrows them. A narrow test of two bins and a floor
-at the band's median see it 10 to 17 dB under the voice, and duck a singer in 2018 of the 2112 runs
-above.
+A howl under a singer: 1.2 kHz from -40 dBFS growing 25 dB a second under a voice at -20 dBFS. Under
+a voice whose fundamental stands alone, it is caught within 950 ms, at most 3 dB over the voice and
+in the middle 1.7 dB under it, where the guard before caught the singer first and the howl only 10
+dB over them, 1.2 s in. Under the same voice singing legato leaps of a third to a fifth every 250 to
+500 ms, across six singers and ten delays, it is caught by 805 ms and at most 0.1 dB over the voice;
+the guard before caught none of the 60 by that bar, the last 10.8 dB over it, and a new tone that
+took the quieter tone's place let 10 of them past it. Where the singer's own note lands within a
+semitone of the howl, as a whistle or a soprano's second partial near 1.2 kHz can, the two are one
+tone to the guard: 18 of 60 whistled runs and 25 of 60 soprano runs pass the bar, against 45 and 60
+before. Under a plain voice, 140 Hz and up with twelve harmonics, it is caught 0.86 s in at about
+the voice's level, as before: the voice's partials lie three or four bins from it, so it fails the
+narrow test until it outgrows them. A narrow test of two bins and a floor at the band's median see
+it 10 to 17 dB under the voice, and duck a singer in 2018 of the 2112 runs above.
 
 One draw of this loop is a coin toss on each platform's rounding, so the engine test holds the
 guard to its rate over 96 rooms: at most 33 louder than -20 dBFS, and at most one uncaught. Of the
@@ -266,6 +273,7 @@ From the tests on the offline driver, under the allocation guard, and `measure-e
 | A whistled run in 94 ms notes and a phrase after a grace note, louder each note                              | not ducked                                                  | none                           |
 | 24 talkers whose fundamental stands alone, 38 playout delays each                                            | 4 of 912 caught                                             | 9                              |
 | A howl under such a singer, 1.2 kHz growing 25 dB a second from -40 dBFS                                     | caught by 950 ms, under 3 dB over the voice                 | 950 ms, 3 dB                   |
+| The same singer leaping legato, a third to a fifth every 250 to 500 ms                                       | caught by 950 ms, under 3 dB over the voice                 | 950 ms, 3 dB                   |
 | A source silent 3 s as the backing plays: rtp stopped, capture lost, push stopped, muted at mic              | no louder than its source; back to 16.9 to 28.3 dB out      | 0.5 dB; 3 dB under before      |
 | A phone turned face down, its echo 12 dB down and low-passed at 1 kHz, from the second second                | 18.4 dB out                                                 | 12 dB                          |
 
