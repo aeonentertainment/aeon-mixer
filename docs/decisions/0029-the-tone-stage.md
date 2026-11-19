@@ -72,7 +72,7 @@ What it refuses, said plainly: **the warmth of a close cardioid mic.** A 6 dB lo
 leaves a low voice's fundamental 0.53 ms late and a 4 dB one 0.35 ms. It also refuses a 6 dB cut
 of Q 1 at 300 Hz, 0.35 ms late on its lower skirt, and any narrow lift under 500 Hz: 3 dB of Q 2
 at 400 Hz is 0.56 ms. Raising the cap is a
-new cost on the mic path under never-compromise 1. It takes a listen on the bench's pairs that
+new cost on the mic path under never-compromise 1. It takes a listen on paired takes that
 says the low end is worth it, and the developer's agreement. Until then it stays out.
 
 ## Where it sits
@@ -132,12 +132,12 @@ rule for which wins, and nobody has asked for it. A variant can be added without
 host.
 
 **What it aims at** is one curve, an engine constant: the average spectrum of singing through
-the bench's reference mic, as each band's level against the mean. A target per host would make
+the reference mic, as each band's level against the mean. A target per host would make
 "a good vocal mic" mean something else in every host, and the scorecard judges against one mic.
-The numbers come from the reference side of the bench's pairs (#197) and are written here when
-they exist. Until then the match has nothing to aim at and does not ship: `ToneBands` has no
-`Match` variant, the stage takes no reading of the voice, and `setSlotEffects` refuses
-`bands: "match"` by name.
+The numbers come from the reference recordings of the paired takes (`reference/`, design section
+8.11) and are written here when they exist. Until then the match has nothing to aim at and does
+not ship: `ToneBands` has no `Match` variant, the stage takes no reading of the voice, and
+`setSlotEffects` refuses `bands: "match"` by name.
 
 **It cannot tell a phone from a singer.** A dark voice and a dull phone average the same. That
 is why it is three broad filters with 6 dB of range and not a full equaliser, and why a profile
