@@ -35,10 +35,11 @@ export async function closeOffline(engine: ContractEngine) {
 }
 
 /**
- * Pumps a block a millisecond until `done` holds, false once `ms` have passed. A datagram on
- * loopback is read on the network thread, which leaves nothing to await: the clock has to run
- * for the slot to drain it, and running it near real time keeps a sender's second of quiet a
- * second. Only a broken promise waits out the deadline.
+ * Pumps a block a millisecond at most until `done` holds, false once `ms` have passed. A datagram
+ * on loopback is read on the network thread, which leaves nothing to await: the clock has to run
+ * for the slot to drain it. A 2.67 ms block per wait of 1 ms or more runs the engine at most about
+ * 2.7 times wall time, so a sender's second of quiet lasts at least 370 ms here, far longer than a
+ * datagram takes to reach the slot. Only a broken promise waits out the deadline.
  */
 export async function pumpUntil(engine: ContractEngine, done: () => boolean, ms = 1000) {
   const deadline = Date.now() + ms;

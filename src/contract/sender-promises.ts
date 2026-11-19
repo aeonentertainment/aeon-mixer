@@ -14,7 +14,7 @@ interface HeldSlot {
   port: number;
   /** The sender the slot is playing. */
   held: LoopbackSender;
-  /** Another address, a phone that has not sent yet. */
+  /** Another address, on `held`'s SSRC, a phone that has not sent yet. */
   next: LoopbackSender;
   ingest: () => { pushed: number; resyncs: number };
 }
@@ -23,6 +23,12 @@ interface HeldSlot {
  * Runs `body` on a live `l16` slot that has taken one packet from `held`: decision 0028's lock.
  * A refused packet counts in no stat, so each check ends on a packet that counts only when the
  * promise holds, or on a new stream's resync, which comes after everything sent before it.
+ *
+ * The two senders share an SSRC on purpose. The lock goes by address, never by SSRC (decision
+ * 0028), so a working lock tells them apart all the same. With the lock gone, `next`'s packets
+ * land on `held`'s stream as late packets and start none of their own, so the only resync left
+ * is a restart sent last, and a block that drains part of what was sent cannot end the wait
+ * with a pass's counts. Give `next` an SSRC of its own and a broken lock passes on a slow drain.
  */
 async function withHeldSlot(trial: Trial, body: (slot: HeldSlot) => Promise<Verdict>) {
   const { engine } = await trial.open();
@@ -31,7 +37,7 @@ async function withHeldSlot(trial: Trial, body: (slot: HeldSlot) => Promise<Verd
   if (typeof port !== "number") return { found: `an l16 slot had the port ${String(port)}` };
   await startLive(engine, mixer);
   const held = await LoopbackSender.open(1);
-  const next = await LoopbackSender.open(1000);
+  const next = await LoopbackSender.open(1);
   const ingest = () => {
     const { pushed = 0, resyncs = 0 } = mixer.stats().slots[0] ?? {};
     return { pushed, resyncs };
