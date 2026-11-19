@@ -78,19 +78,13 @@ pub struct Song {
     pub notes: Vec<String>,
 }
 
-/// What the control thread reads of a slot once its graph is on the audio thread.
+/// What the control thread reads of a slot once its graph is on the audio thread, in the
+/// manifest's order.
 pub struct SongSlot {
-    pub kind: String,
-    pub recorded: bool,
     /// The slot's counters, for a slot with packets to play.
     pub stats: Option<Arc<SharedStats>>,
     pub corrector_delay: Arc<CorrectorDelay>,
     pub echo: Arc<EchoReport>,
-}
-
-/// One slot's ingest, the control thread's end of it.
-pub(super) struct Ingest {
-    pub(super) packets: Option<(PacketProducer, Arc<SharedStats>)>,
 }
 
 impl Song {
@@ -108,13 +102,11 @@ impl Song {
             if slot.index != position {
                 return Err(format!("manifest.json lists slot {} at {position}", slot.index));
             }
-            let (ingest, source) = open(&slot.kind, profile.ingest.playout_delay_ms)?;
+            let (packets, source) = open(&slot.kind, profile.ingest.playout_delay_ms)?;
             let engine_slot = Slot::new(source);
-            let (ring, stats) = ingest.packets.unzip();
+            let (ring, stats) = packets.unzip();
             rings.push(ring);
             slots.push(SongSlot {
-                kind: slot.kind.clone(),
-                recorded: slot.recorded,
                 stats,
                 corrector_delay: engine_slot.corrector_delay(),
                 echo: engine_slot.echo_report(),
@@ -166,8 +158,15 @@ impl Song {
         let steps = desk.into_steps();
         let arrivals =
             bundle.arrivals.iter().take_while(|(_, arrival)| arrival.at <= last_start).copied();
-        let player =
-            Player::new(controls.params, controls.commands, steps, arrivals.collect(), rings);
+        let frames = Arc::clone(&controls.frames);
+        let player = Player::new(
+            controls.params,
+            controls.commands,
+            steps,
+            arrivals.collect(),
+            rings,
+            frames,
+        );
         Ok(Self {
             audio,
             player,
@@ -191,7 +190,9 @@ pub fn play(
     let Song { audio, mut player, mut events, mut retired, slots, blocks, notes, .. } =
         Song::prepare(bundle, profile, stems)?;
     let mut driver = OfflineDriver::new(audio.into_render());
-    let mut played: Vec<PlayedSlot> = slots
+    let mut played: Vec<PlayedSlot> = bundle
+        .manifest
+        .slots
         .iter()
         .map(|slot| PlayedSlot {
             kind: slot.kind.clone(),
@@ -255,14 +256,18 @@ pub fn play(
     Ok(Played { mix, slots: played, master_db, notes })
 }
 
+/// The control thread's end of a slot's packets, their ring and the slot's counters; none for a
+/// slot that plays as silence.
+pub(super) type Packets = Option<(PacketProducer, Arc<SharedStats>)>;
+
 /// A slot's source as `node/src/ingest.rs` opens it, with no socket: the replay is its network
 /// thread, and so is a live song writing a bundle.
-pub(super) fn open(kind: &str, delay: PlayoutDelay) -> Result<(Ingest, Box<dyn Source>), String> {
+pub(super) fn open(kind: &str, delay: PlayoutDelay) -> Result<(Packets, Box<dyn Source>), String> {
     let codec = match kind {
         "rtp" => Codec::opus().map_err(|e| e.to_string())?,
         "l16" => Codec::L16,
         "push" | "capture" => {
-            return Ok((Ingest { packets: None }, Box::new(Silence)));
+            return Ok((None, Box::new(Silence)));
         }
         other => return Err(format!("manifest.json names a slot kind {other:?}")),
     };
@@ -273,5 +278,5 @@ pub(super) fn open(kind: &str, delay: PlayoutDelay) -> Result<(Ingest, Box<dyn S
     };
     let stats = jitter.shared_stats();
     let source = Box::new(PacketSource::new(consumer, jitter));
-    Ok((Ingest { packets: Some((producer, stats)) }, source))
+    Ok((Some((producer, stats)), source))
 }

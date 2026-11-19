@@ -4,9 +4,10 @@
 //! nothing.
 
 use std::iter::Peekable;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::vec::IntoIter;
 
-use engine::block::BLOCK;
 use engine::command::{Command, CommandProducer};
 use engine::ingest::PacketProducer;
 use engine::params::{Params, ParamsWriter};
@@ -32,8 +33,8 @@ pub struct Player {
     arrivals: Peekable<IntoIter<(usize, Arrival)>>,
     rings: Vec<Option<PacketProducer>>,
     ring_full: Vec<usize>,
-    /// The first frame of the block about to render.
-    next: i64,
+    /// The engine's count of frames rendered: the first frame of the block about to render.
+    frames: Arc<AtomicU64>,
     /// A command the ring had no room for, kept so it is not dropped on the audio thread.
     jammed: Option<Command>,
 }
@@ -45,6 +46,7 @@ impl Player {
         steps: Vec<(i64, Step)>,
         arrivals: Vec<(usize, Arrival)>,
         rings: Vec<Option<PacketProducer>>,
+        frames: Arc<AtomicU64>,
     ) -> Self {
         let ring_full = vec![0; rings.len()];
         Self {
@@ -54,21 +56,21 @@ impl Player {
             arrivals: arrivals.into_iter().peekable(),
             rings,
             ring_full,
-            next: 0,
+            frames,
             jammed: None,
         }
     }
 
     /// Hands the engine every step and packet due at or before the block about to render, the
-    /// block `replay` takes each one up in, then moves on a block. Call it once before each
-    /// block. False once a command found the ring full: from then on it hands nothing, since the
-    /// song is no longer the bundle's.
+    /// block `replay` takes each one up in. Call it before each block; a second call before the
+    /// same block hands nothing new, and after a fault, when the engine's count stops, nothing
+    /// more is handed. False once a command found the ring full: from then on it hands nothing,
+    /// since the song is no longer the bundle's.
     pub fn before_block(&mut self) -> bool {
         if self.jammed.is_some() {
             return false;
         }
-        let start = self.next;
-        self.next += BLOCK as i64;
+        let start = self.frames.load(Relaxed) as i64;
         while let Some((_, step)) = self.steps.next_if(|&(at, _)| at <= start) {
             match step {
                 Step::Params(params) => self.params.update(|current| *current = params),
