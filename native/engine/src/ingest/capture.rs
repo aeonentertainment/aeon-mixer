@@ -205,6 +205,13 @@ impl CaptureVoice {
         self.target + self.headroom_frames() - self.step() / 2
     }
 
+    /// The most pulls a run short of input can last and still be the phase of two clocks or a late
+    /// wake: the blocks one wake takes, and never fewer than the longest input period's. A longer
+    /// run is an input that stopped.
+    fn phase_pulls(&self) -> usize {
+        (self.burst / BLOCK).max(MAX_PERIOD_FRAMES / BLOCK)
+    }
+
     /// How far into the input's period the wait can fall short of the trough and its headroom.
     fn step(&self) -> usize {
         if self.burst == BLOCK { gcd(self.period, BLOCK) } else { self.period }
@@ -332,13 +339,20 @@ impl Source for CaptureVoice {
             // Short: play what there is, then silence, and keep count until a pull is full again
             self.splice(fill, &mut out[..fill]);
             self.played = true;
+            self.shared.set_played();
             out[fill..].fill(0.0);
             stats.concealed += 1;
             let lacked = n - fill;
-            self.short = Some(match self.short {
+            let run = match self.short {
                 Some(run) => Short { pulls: run.pulls + 1, lacked: run.lacked + lacked, ..run },
                 None => Short { pulls: 1, lacked, first: lacked },
-            });
+            };
+            // Judged the pull the run outgrows any phase, as its end will judge it, so an input
+            // that stops for good is counted too
+            if run.pulls == self.phase_pulls() + 1 {
+                self.shared.add_stop();
+            }
+            self.short = Some(run);
             self.phase = MEASURING;
             self.publish(stats);
             return;
@@ -348,7 +362,7 @@ impl Source for CaptureVoice {
         // input stopped, which no target covers, and only the first pull's lack is the phase's.
         // The limit is the ring's, not this output's, so it holds after the output moves.
         if let Some(run) = self.short.take() {
-            let phase = run.pulls <= (self.burst / BLOCK).max(MAX_PERIOD_FRAMES / BLOCK);
+            let phase = run.pulls <= self.phase_pulls();
             let raise = if phase { run.lacked } else { run.first };
             let was = self.target;
             self.target = (self.target + raise + MARGIN).min(self.ceiling_target());
@@ -365,6 +379,7 @@ impl Source for CaptureVoice {
         }
         self.splice(frames, out);
         self.played = true;
+        self.shared.set_played();
         if !self.recovering {
             self.moved -= step;
         }
@@ -656,6 +671,7 @@ mod tests {
                 let wake = callback.div_ceil(BLOCK as u64) as u32;
                 assert!(learnt.concealed <= wake, "{case}: {learnt:?}");
                 assert_eq!(stats.concealed, learnt.concealed, "{case}: no gap once learnt");
+                assert_eq!(rig.voice.shared_stats().stops(), 0, "{case}: a phase short is no stop");
                 assert_eq!(rig.voice.target_frames() as u32, target, "{case}");
                 assert!(target <= (BLOCK as u64 + period) as u32 + MARGIN as u32, "{case}");
                 assert!(low >= BLOCK as u32, "{case}: {low}");
@@ -663,6 +679,36 @@ mod tests {
                 assert!(high <= target + headroom, "{case}: {high}");
             }
         }
+    }
+
+    /// The slot says it has played once it plays the mic and not its opening's silence, and judges
+    /// a stop only when a run of short pulls outgrows any phase: one missed delivery is the phase
+    /// of two clocks, an input that stops for good is one stop, and one that comes back and stops
+    /// again is two.
+    #[test]
+    fn it_says_when_it_has_played_and_counts_a_stop_but_never_a_phase_short() {
+        let mut rig = Rig::new(0, 128);
+        let shared = rig.voice.shared_stats();
+        rig.run(4);
+        assert!(!shared.played(), "priming plays silence");
+        rig.run(2 * SECOND);
+        assert!(shared.played());
+        let before = rig.stats().concealed;
+        rig.stall(2, true);
+        rig.run(SECOND);
+        assert!(rig.stats().concealed > before, "one missed delivery ran it short");
+        assert_eq!(shared.stops(), 0, "and that is the phase, not a stop");
+        rig.stalled = true;
+        rig.run(4);
+        assert_eq!(shared.stops(), 0, "a few pulls short could still be a phase");
+        rig.run(20);
+        assert_eq!(shared.stops(), 1, "a run past any phase is a stop, judged while it lasts");
+        rig.run(SECOND);
+        assert_eq!(shared.stops(), 1, "and counted once");
+        rig.stalled = false;
+        rig.run(2 * SECOND);
+        rig.stall(SECOND, false);
+        assert_eq!(shared.stops(), 2);
     }
 
     /// 50 ms without a delivery, then the input's backlog all at once or not at all. The stall
