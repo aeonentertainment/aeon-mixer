@@ -17,6 +17,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use engine::block::RATE;
 use replay::bundle::Bundle;
 use replay::bundle::line::{Effect, Event};
 use replay::bundle::report::{self, Options as Replay};
@@ -82,7 +83,7 @@ pub fn score(name: &str, dir: &Path, profile: Option<&Path>) -> Result<Paired, S
             off: hear(&off),
             on: on.as_deref().map(hear),
         };
-        let seconds = line_up.lag.abs() as f64 / 48_000.0;
+        let seconds = line_up.lag.abs() as f64 / f64::from(RATE);
         let when = if line_up.lag >= 0 { "before" } else { "after" };
         header += &format!(
             ", its recording starting {seconds:.2} s {when} the take (levels correlate {:.2})",
