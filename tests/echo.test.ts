@@ -1,23 +1,10 @@
 import { expect, test } from "vite-plus/test";
-import { type Mixer, type OfflineEngine, openEngine } from "../src/index.ts";
+import { BLOCK, startLive } from "../src/contract/offline-clock.ts";
+import { openEngine } from "../src/index.ts";
+import { destroyLive } from "./offline.ts";
 
-const BLOCK = 128;
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
 /** The room in this test plays the mic the mix this many blocks after it was rendered. */
 const PATH_BLOCKS = 10;
-
-async function startLive(engine: OfflineEngine, mixer: Mixer) {
-  const started = mixer.start();
-  engine.pump(FADE_BLOCKS);
-  return started;
-}
-
-async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
-  const destroyed = mixer.destroy();
-  engine.pump(FADE_BLOCKS);
-  await destroyed;
-}
 
 /** Repeatable noise in -1 to 1, the generator `aec:measure` uses. */
 function noise(seed: number) {

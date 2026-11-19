@@ -2,39 +2,20 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BackingStem, type OutputInfo, TRANSPORTS } from "../types.ts";
-import { messageOf, SETTLE_MS, startLive, within } from "./offline-clock.ts";
-import type { ContractMixer, ContractPromise, Trial } from "./contract-subject.ts";
+import { messageOf, rendered, SETTLE_MS, startLive, within } from "./offline-clock.ts";
+import { wav } from "./wav.ts";
+import type { ContractPromise, Trial } from "./contract-subject.ts";
 
 const RATE = 48000;
 
 /** A quarter second of a 440 Hz sine as a mono 16-bit WAV at 48 kHz. */
 function sineWav() {
-  const frames = RATE / 4;
-  const wav = Buffer.alloc(44 + frames * 2);
-  wav.write("RIFF", 0);
-  wav.writeUInt32LE(36 + frames * 2, 4);
-  wav.write("WAVEfmt ", 8);
-  wav.writeUInt32LE(16, 16);
-  wav.writeUInt16LE(1, 20);
-  wav.writeUInt16LE(1, 22);
-  wav.writeUInt32LE(RATE, 24);
-  wav.writeUInt32LE(RATE * 2, 28);
-  wav.writeUInt16LE(2, 32);
-  wav.writeUInt16LE(16, 34);
-  wav.write("data", 36);
-  wav.writeUInt32LE(frames * 2, 40);
-  for (let i = 0; i < frames; i += 1) {
-    wav.writeInt16LE(Math.round(16000 * Math.sin((2 * Math.PI * 440 * i) / RATE)), 44 + 2 * i);
-  }
-  return wav;
-}
-
-function rendered(mixer: ContractMixer) {
-  return new Promise<void>((resolve) => {
-    mixer.on("renderProgress", (fraction) => {
-      if (fraction === 1) resolve();
-    });
-  });
+  return wav(
+    Float32Array.from(
+      { length: RATE / 4 },
+      (_, i) => 0.5 * Math.sin((2 * Math.PI * 440 * i) / RATE),
+    ),
+  );
 }
 
 /** The first 38 blocks, a tenth of a second, an offline engine plays of `stem` as its backing. */
@@ -67,13 +48,16 @@ export const enginePromises: ReadonlyArray<ContractPromise> = [
   {
     promise: "A stem handed in as bytes plays the samples the same file plays by path.",
     async check(trial) {
-      const wav = sineWav();
+      const file = sineWav();
       const dir = await mkdtemp(join(tmpdir(), "aeon-contract-"));
       try {
         const path = join(dir, "stem.wav");
-        await writeFile(path, wav);
+        await writeFile(path, file);
         const byPath = await playedBy(trial, { kind: "instrumental", path });
-        const byBytes = await playedBy(trial, { kind: "instrumental", bytes: new Uint8Array(wav) });
+        const byBytes = await playedBy(trial, {
+          kind: "instrumental",
+          bytes: new Uint8Array(file),
+        });
         const heard = byPath.some((sample) => Math.abs(sample) > 0.1);
         const same = byPath.length === byBytes.length && byPath.every((s, i) => s === byBytes[i]);
         if (heard && same) return undefined;

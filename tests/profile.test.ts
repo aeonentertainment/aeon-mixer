@@ -1,29 +1,14 @@
 import { expect, test } from "vite-plus/test";
+import { BLOCK, startLive } from "../src/contract/offline-clock.ts";
 import {
   defaultProfile,
-  type Mixer,
   type OfflineEngine,
   openEngine,
   parseProfile,
   type SettingsProfile,
   type SlotEffect,
 } from "../src/index.ts";
-
-const BLOCK = 128;
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
-
-async function startLive(engine: OfflineEngine, mixer: Mixer) {
-  const started = mixer.start();
-  engine.pump(FADE_BLOCKS);
-  return started;
-}
-
-async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
-  const destroyed = mixer.destroy();
-  engine.pump(FADE_BLOCKS);
-  await destroyed;
-}
+import { destroyLive } from "./offline.ts";
 
 /** Interleaved stereo holding a 440 Hz tone, which folds to that tone. */
 function tone(blocks: number) {

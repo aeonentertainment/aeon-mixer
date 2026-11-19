@@ -16,12 +16,12 @@ import { fileURLToPath } from "node:url";
 import { afterAll, expect, test, vi } from "vite-plus/test";
 import packageJson from "../package.json" with { type: "json" };
 import { bundleOutput } from "../src/bundle/bundle-manifest.ts";
-import { type Mixer, type OfflineEngine, openEngine, parseProfile } from "../src/index.ts";
+import { BLOCK, FADE_BLOCKS, rendered, startLive } from "../src/contract/offline-clock.ts";
+import { wav } from "../src/contract/wav.ts";
+import { openEngine, parseProfile } from "../src/index.ts";
+import { destroyLive } from "./offline.ts";
 
 const RATE = 48000;
-const BLOCK = 128;
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
 /** Seek fades over 20 ms, 7.5 blocks: the eighth block lands it. */
 const SEEK_FADE_BLOCKS = 8;
 
@@ -32,23 +32,8 @@ afterAll(() => {
 
 /** Writes `seconds` of a constant as a mono 16-bit WAV at 48 kHz and returns its path. */
 function stem(name: string, seconds: number) {
-  const data = Buffer.alloc(RATE * seconds * 2);
-  for (let i = 0; i < RATE * seconds; i += 1) data.writeInt16LE(8192, 2 * i);
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + data.length, 4);
-  header.write("WAVEfmt ", 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(RATE, 24);
-  header.writeUInt32LE(RATE * 2, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(data.length, 40);
   const path = join(dir, name);
-  writeFileSync(path, Buffer.concat([header, data]));
+  writeFileSync(path, wav(new Float32Array(RATE * seconds).fill(0.25)));
   return path;
 }
 
@@ -64,27 +49,6 @@ async function countingEngine(options: { playoutDelayMs?: number } = {}) {
     },
     frames: () => frames,
   };
-}
-
-/** Resolves once the backing's render is done and its stems are in the graph. */
-function rendered(mixer: Mixer) {
-  return new Promise<void>((resolve) => {
-    mixer.on("renderProgress", (fraction) => {
-      if (fraction === 1) resolve();
-    });
-  });
-}
-
-async function startLive(pump: (blocks: number) => unknown, mixer: Mixer) {
-  const started = mixer.start();
-  pump(FADE_BLOCKS);
-  return started;
-}
-
-async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
-  const destroyed = mixer.destroy();
-  engine.pump(FADE_BLOCKS);
-  await destroyed;
 }
 
 interface Line {
@@ -226,7 +190,7 @@ test("an effect change and a seek mid-song each leave a line with the call as ma
   await rendered(mixer);
   pump(2);
   const startedAt = frames();
-  await startLive(pump, mixer);
+  await startLive({ pump }, mixer);
 
   pump(40);
   const effectsAt = frames();
@@ -290,7 +254,7 @@ test("stats() and the backing's position are written once a second, on the bundl
       bundle: { dir: path },
     });
     vi.advanceTimersByTime(1000);
-    await startLive(pump, mixer);
+    await startLive({ pump }, mixer);
     pump(372);
     vi.advanceTimersByTime(1000);
     await destroyLive(engine, mixer);
@@ -325,7 +289,7 @@ test("a mixer destroyed armed, destroyed mid-song or closed with its engine leav
     slots: [{ kind: "push" }],
     bundle: { dir: join(dir, "live") },
   });
-  await startLive(pump, live);
+  await startLive({ pump }, live);
   live.resetSlot(0);
   await destroyLive(engine, live);
   expect(types("live")).toEqual(["start", "ack", "resetSlot", "end"]);
@@ -339,18 +303,12 @@ test("a resetSlot in start's block is written on the side of start it was made o
   const { engine, pump, frames } = await countingEngine();
   const mixer = (name: string) =>
     engine.createMixer({ slots: [{ kind: "rtp" }], bundle: { dir: join(dir, name) } });
-  const destroy = async (live: Mixer) => {
-    const destroyed = live.destroy();
-    pump(FADE_BLOCKS);
-    await destroyed;
-  };
-
   // Made while armed, the reset reaches nothing, and a replay that reads it before start skips it
   const before = await mixer("reset-before");
   const beforeAt = frames();
   before.resetSlot(0);
-  await startLive(pump, before);
-  await destroy(before);
+  await startLive({ pump }, before);
+  await destroyLive({ pump }, before);
   expect(calls("reset-before")).toEqual([
     { type: "resetSlot", frame: beforeAt },
     { type: "start", frame: beforeAt },
@@ -365,7 +323,7 @@ test("a resetSlot in start's block is written on the side of start it was made o
   after.resetSlot(0);
   pump(FADE_BLOCKS);
   await started;
-  await destroy(after);
+  await destroyLive({ pump }, after);
   expect(calls("reset-after")).toEqual([
     { type: "start", frame: afterAt },
     { type: "resetSlot", frame: afterAt },
