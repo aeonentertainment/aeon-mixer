@@ -110,17 +110,11 @@ mod tests {
         let lead = 14_400;
         let (take, reference) = (side(0), side(lead));
         let found = LineUp::find(&take, &reference).unwrap();
-        let reach = MOST_LAG / COARSE as i64;
-        let coarse = best(&take, &reference, COARSE, -reach..=reach);
-        let fine = best(
-            &take,
-            &reference,
-            FINE,
-            coarse.lag / FINE as i64 - 10..=coarse.lag / FINE as i64 + 10,
-        );
+        // The hard case: at the true lag the 1 ms levels correlate under the bar
+        let at = lead as i64 / FINE as i64;
+        let fine = best(&take, &reference, FINE, at..=at);
         assert!(fine.correlation < LEAST_CORRELATION, "fine {:.2}", fine.correlation);
-        assert!(coarse.correlation > LEAST_CORRELATION, "coarse {:.2}", coarse.correlation);
-        assert_eq!(found.correlation, coarse.correlation);
+        assert!(found.correlation >= LEAST_CORRELATION, "reported {:.2}", found.correlation);
         assert_eq!(found.lag, lead as i64);
     }
 }

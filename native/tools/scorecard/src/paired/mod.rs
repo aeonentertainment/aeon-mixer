@@ -53,7 +53,7 @@ pub fn score(name: &str, dir: &Path, profile: Option<&Path>) -> Result<Paired, S
     }
     for reference in references {
         let slot = reference.slot;
-        let (on, off) = takes(dir, profile, slot)?;
+        let (on, off) = takes(dir, profile, &reference)?;
         let mut header = format!(
             "{name} slot {slot}, against {} at {} cm",
             reference.mic, reference.distance_cm
@@ -100,18 +100,20 @@ pub fn score(name: &str, dir: &Path, profile: Option<&Path>) -> Result<Paired, S
     Ok(paired)
 }
 
-/// Slot `slot`'s take alone, with no stems, as the room heard it, summed to mono: as it ran, when
-/// its stage was ever on, and with its stage off.
+/// The take of the slot `reference` pairs with, alone, with no stems, as the room heard it,
+/// summed to mono: as it ran, when its stage was ever on, and with its stage off.
 fn takes(
     dir: &Path,
     profile: Option<&Path>,
-    slot: usize,
+    reference: &Reference,
 ) -> Result<(Option<Vec<f32>>, Vec<f32>), String> {
+    let slot = reference.slot;
     let options = Replay { profile: profile.map(Path::to_path_buf), backing: None };
     let (mut bundle, profile, _) = report::load(dir, &options)?;
     if !bundle.manifest.slots.get(slot).is_some_and(|recorded| recorded.recorded) {
         return Err(format!(
-            "reference/{slot}.wav pairs with slot {slot}, which the bundle did not record"
+            "{} pairs with slot {slot}, which the bundle did not record",
+            reference.file
         ));
     }
     bundle.arrivals.retain(|&(index, _)| index == slot);

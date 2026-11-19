@@ -284,9 +284,11 @@ fn references(name: &str, files: &[&str]) -> PathBuf {
     for file in files {
         let bytes = match Path::new(file).extension().and_then(|e| e.to_str()) {
             Some("wav" | "WAV") => wav_bytes(&[0.0; 4]),
-            Some("json") => json!({ "format": 1, "mic": "a studio mic", "distanceCm": 10 })
-                .to_string()
-                .into_bytes(),
+            Some("json" | "JSON") => {
+                json!({ "format": 1, "mic": "a studio mic", "distanceCm": 10 })
+                    .to_string()
+                    .into_bytes()
+            }
             _ => Vec::new(),
         };
         std::fs::write(dir.join("reference").join(file), bytes).unwrap();
@@ -294,12 +296,15 @@ fn references(name: &str, files: &[&str]) -> PathBuf {
     dir
 }
 
-// A handheld recorder writes `.WAV`; the reference is read from the file that was matched
+// A recorder may write `.WAV`, and a person may name a description `.JSON`. Each test makes
+// exactly these names, so a filesystem that keeps case finds only what is there
 #[test]
-fn a_reference_keeps_the_case_its_recorder_gave_it() {
-    let (found, skipped) = Reference::find(&references("case", &["0.WAV", "0.json"])).unwrap();
-    assert_eq!(found.iter().map(|r| r.slot).collect::<Vec<_>>(), [0]);
-    assert_eq!(skipped, Vec::<String>::new());
+fn a_reference_is_read_whatever_the_case_of_its_extensions() {
+    for files in [["0.WAV", "0.json"], ["0.wav", "0.JSON"]] {
+        let (found, skipped) = Reference::find(&references(files[1], &files)).unwrap();
+        assert_eq!(found.iter().map(|r| r.slot).collect::<Vec<_>>(), [0], "{files:?}");
+        assert_eq!(skipped, Vec::<String>::new(), "{files:?}");
+    }
 }
 
 // `01.wav` and `+1.wav` parse as slot 1, so either would be read as another file's slot
@@ -318,13 +323,14 @@ fn a_reference_not_named_by_its_slot_is_refused_by_its_own_name() {
 
 #[test]
 fn files_that_are_not_references_are_named_and_never_called_no_reference() {
-    let dir = references("skipped", &["notes.txt", "1.json"]);
+    let dir = references("skipped", &["notes.txt", "0.WAV", "1.JSON"]);
     let paired = score("pair", &dir, None).unwrap();
     assert_eq!(
         paired.lines,
         [
-            "pair: reference/1.json was skipped: it has no 1.wav beside it",
-            "pair: reference/notes.txt was skipped: a reference is <slot>.wav",
+            "pair: reference/notes.txt was skipped: a reference is a .wav and a .json named by its slot",
+            "pair: reference/0.WAV was skipped: it has no description beside it, a .json of the same name",
+            "pair: reference/1.JSON was skipped: it has no recording beside it, a .wav of the same name",
             "pair: no file in reference/ is a reference, so the paired rows were not scored",
         ]
     );

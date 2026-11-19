@@ -1,7 +1,8 @@
 //! A paired take's reference mic, as a bundle holds it under `reference/` (docs/design.md 8.11):
 //! `<n>.wav` for slot `n`, mono, 48 kHz, 32-bit float, and `<n>.json` naming the mic.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -11,6 +12,8 @@ const FORMAT: u64 = 1;
 
 pub struct Reference {
     pub slot: usize,
+    /// The recording as found, `reference/0.WAV` say, to name it by.
+    pub file: String,
     pub mic: String,
     pub distance_cm: f64,
     pub samples: Vec<f32>,
@@ -25,8 +28,10 @@ struct About {
 
 impl Reference {
     /// Every reference in the bundle at `dir`, by slot, and each other file in its `reference/`
-    /// with why it was skipped; neither when it has no `reference/`. A `.wav` named other than
-    /// by its slot's plain number is refused, so no file is read as another's slot.
+    /// with why it was skipped; neither when it has no `reference/`. The folder is read once and
+    /// every file is opened by the path it was found at: a slot's recording and description are
+    /// the `.wav` and `.json`, in any case, named by its plain number. A name that is not one is
+    /// refused, so no file is read as another's slot.
     pub fn find(dir: &Path) -> Result<(Vec<Self>, Vec<String>), String> {
         let folder = dir.join("reference");
         if !folder.is_dir() {
@@ -39,35 +44,53 @@ impl Reference {
             .collect::<Result<Vec<_>, _>>()
             .map_err(read)?;
         paths.sort();
-        let wav = |path: &Path| extension(path).as_deref() == Some("wav");
-        let (mut found, mut skipped) = (Vec::<Self>::new(), Vec::new());
-        for path in &paths {
-            let file = format!("reference/{}", path.file_name().unwrap_or_default().display());
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-            if wav(path) {
-                let slot =
-                    stem.parse::<usize>().ok().filter(|slot| slot.to_string() == stem).ok_or_else(
-                        || format!("{file}: a reference is named by its slot, as 0.wav"),
-                    )?;
-                if found.iter().any(|reference| reference.slot == slot) {
-                    return Err(format!("{file}: a second reference for slot {slot}"));
-                }
-                found.push(Self::read(path, &file, slot)?);
-            } else if extension(path).as_deref() != Some("json") {
-                skipped.push(format!("{file} was skipped: a reference is <slot>.wav"));
-            } else if !paths.iter().any(|other| wav(other) && other.file_stem() == path.file_stem())
-            {
-                skipped.push(format!("{file} was skipped: it has no {stem}.wav beside it"));
+        let mut skipped = Vec::new();
+        // Each stem's recordings and descriptions, as found
+        let mut stems: BTreeMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = BTreeMap::new();
+        for path in paths {
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+            match extension.as_deref() {
+                Some("wav") => stems.entry(stem).or_default().0.push(path),
+                Some("json") => stems.entry(stem).or_default().1.push(path),
+                _ => skipped.push(format!(
+                    "{} was skipped: a reference is a .wav and a .json named by its slot",
+                    shown(&path)
+                )),
             }
         }
+        let mut found = Vec::new();
+        for (stem, (recordings, descriptions)) in &stems {
+            let file = recordings.iter().chain(descriptions).next().map(|path| shown(path));
+            let file = file.unwrap_or_default();
+            let slot = stem
+                .parse::<usize>()
+                .ok()
+                .filter(|slot| slot.to_string() == *stem)
+                .ok_or_else(|| format!("{file}: a reference is named by its slot, as 0.wav"))?;
+            match (recordings.as_slice(), descriptions.as_slice()) {
+                ([recording], [description]) => {
+                    found.push(Self::read(recording, description, slot)?)
+                }
+                ([recording], []) => skipped.push(format!(
+                    "{} was skipped: it has no description beside it, a .json of the same name",
+                    shown(recording)
+                )),
+                ([], [description]) => skipped.push(format!(
+                    "{} was skipped: it has no recording beside it, a .wav of the same name",
+                    shown(description)
+                )),
+                _ => return Err(format!("{file}: slot {slot} has more than one .wav or .json")),
+            }
+        }
+        found.sort_by_key(|reference| reference.slot);
         Ok((found, skipped))
     }
 
-    /// The reference at `path`, which a person names `file`, and the `.json` beside it.
-    fn read(path: &Path, file: &str, slot: usize) -> Result<Self, String> {
-        let about = path.with_extension("json");
-        let name = format!("reference/{}", about.file_name().unwrap_or_default().display());
-        let text = std::fs::read_to_string(&about).map_err(|e| format!("{name}: {e}"))?;
+    /// Slot `slot`'s reference from the recording and the description found for it.
+    fn read(recording: &Path, description: &Path, slot: usize) -> Result<Self, String> {
+        let name = shown(description);
+        let text = std::fs::read_to_string(description).map_err(|e| format!("{name}: {e}"))?;
         let mut value: Value = serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))?;
         match value
             .as_object_mut()
@@ -81,15 +104,16 @@ impl Reference {
             None => return Err(format!("{name}: a reference needs a format")),
         }
         let about: About = serde_json::from_value(value).map_err(|e| format!("{name}: {e}"))?;
-        let bytes = std::fs::read(path).map_err(|e| format!("{file}: {e}"))?;
+        let file = shown(recording);
+        let bytes = std::fs::read(recording).map_err(|e| format!("{file}: {e}"))?;
         let samples = float_wav(&bytes).map_err(|e| format!("{file}: {e}"))?;
-        Ok(Self { slot, mic: about.mic, distance_cm: about.distance_cm, samples })
+        Ok(Self { slot, file, mic: about.mic, distance_cm: about.distance_cm, samples })
     }
 }
 
-/// A file's extension in lower case: a recorder may write `.WAV`.
-fn extension(path: &Path) -> Option<String> {
-    path.extension().map(|extension| extension.to_string_lossy().to_lowercase())
+/// A file found in `reference/`, as a person sees it there.
+fn shown(path: &Path) -> String {
+    format!("reference/{}", path.file_name().unwrap_or_default().display())
 }
 
 /// The samples of a mono, 48 kHz, 32-bit float WAV, plain or extensible. Anything else is refused
