@@ -3,7 +3,8 @@
 **Status:** accepted, 2026-11-10, ahead of the code for #53. An output that will not start
 leaves the song where it was, 2026-11-13, for aeon-karaoke#510. A start that hangs is refused
 after 3 s, 2026-11-13, for #161. The open starts its output off the event loop, 2026-11-13, for
-#164. A move's gap counts from the old stream's last callback, 2026-11-18, for #248.
+#164. A move's gap counts from the earlier of the wake and the old stream's last callback,
+2026-11-18, for #248.
 
 ## The problem
 

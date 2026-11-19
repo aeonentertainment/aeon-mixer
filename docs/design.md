@@ -113,7 +113,7 @@ What the engine reports so the rest of the device can follow:
   for the gap. `outputChanged` carries the new `latencyMs`, the gap, and `heldMs`, how long the
   move held the playhead: the gap when the backing was playing or fading out to a pause or a seek
   as the old stream stopped, 0 when it was paused, not started, ended or absent. The gap starts
-  where the old stream stopped calling back, so after a stall it counts the stall (section 8.3).
+  no later than the old stream's last callback, so after a stall it counts the stall (section 8.3).
   A host that keeps a lyric clock from `startedAt` moves it by `heldMs` and the change in
   latency, or re-anchors it on the next `position` event. A pause or resume still in flight at
   the move counts on the side of it where the audio thread took it, so the host keeps no paused
