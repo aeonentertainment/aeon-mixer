@@ -314,9 +314,10 @@ fn a_reference_not_named_by_its_slot_is_refused_by_its_own_name() {
         let dir =
             references(file, &[&format!("{file}.wav"), &format!("{file}.json"), "1.wav", "1.json"]);
         let Err(refused) = Reference::find(&dir) else { panic!("{file}.wav was read") };
+        // The refusal names the first file met with that spelling
         assert_eq!(
             refused,
-            format!("reference/{file}.wav: a reference is named by its slot, as 0.wav")
+            format!("reference/{file}.json: a reference is named by its slot, as 0.wav")
         );
     }
 }

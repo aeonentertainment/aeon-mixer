@@ -46,8 +46,8 @@ impl Reference {
             .map_err(read)?;
         paths.sort();
         let mut skipped = Vec::new();
-        // Each stem's recordings and descriptions, as found
-        let mut stems: BTreeMap<String, (Vec<PathBuf>, Vec<PathBuf>)> = BTreeMap::new();
+        // Each slot's recordings and descriptions, as found
+        let mut slots: BTreeMap<usize, (Vec<PathBuf>, Vec<PathBuf>)> = BTreeMap::new();
         for path in paths {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             // What a copy off a recorder's card leaves behind (`.DS_Store`, `._0.wav`) is nobody's
@@ -55,29 +55,29 @@ impl Reference {
             if name.starts_with('.') {
                 continue;
             }
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
             let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+            let kind = extension.as_deref().filter(|e| matches!(*e, "wav" | "json"));
             // A stem that is no number could never be read as a slot's: a note kept beside the
             // reference is skipped and named, like any other file
-            let numbered = stem.parse::<usize>().is_ok();
-            match extension.as_deref() {
-                Some("wav") if numbered => stems.entry(stem).or_default().0.push(path),
-                Some("json") if numbered => stems.entry(stem).or_default().1.push(path),
-                _ => skipped.push(format!(
+            let (Some(kind), Ok(slot)) = (kind, stem.parse::<usize>()) else {
+                skipped.push(format!(
                     "{} was skipped: a reference is a .wav and a .json named by its slot",
                     shown(&path)
-                )),
+                ));
+                continue;
+            };
+            if slot.to_string() != stem {
+                return Err(format!(
+                    "{}: a reference is named by its slot, as 0.wav",
+                    shown(&path)
+                ));
             }
+            let (recordings, descriptions) = slots.entry(slot).or_default();
+            if kind == "wav" { recordings.push(path) } else { descriptions.push(path) }
         }
         let mut found = Vec::new();
-        for (stem, (recordings, descriptions)) in &stems {
-            let file = recordings.iter().chain(descriptions).next().map(|path| shown(path));
-            let file = file.unwrap_or_default();
-            let slot = stem
-                .parse::<usize>()
-                .ok()
-                .filter(|slot| slot.to_string() == *stem)
-                .ok_or_else(|| format!("{file}: a reference is named by its slot, as 0.wav"))?;
+        for (&slot, (recordings, descriptions)) in &slots {
             match (recordings.as_slice(), descriptions.as_slice()) {
                 ([recording], [description]) => {
                     found.push(Self::read(recording, description, slot)?)
@@ -90,10 +90,15 @@ impl Reference {
                     "{} was skipped: it has no recording beside it, a .wav of the same name",
                     shown(description)
                 )),
-                _ => return Err(format!("{file}: slot {slot} has more than one .wav or .json")),
+                _ => {
+                    let file = recordings.iter().chain(descriptions).next().map(|path| shown(path));
+                    return Err(format!(
+                        "{}: slot {slot} has more than one .wav or .json",
+                        file.unwrap_or_default()
+                    ));
+                }
             }
         }
-        found.sort_by_key(|reference| reference.slot);
         Ok((found, skipped))
     }
 
