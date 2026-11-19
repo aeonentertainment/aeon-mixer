@@ -37,6 +37,7 @@ in a patch would look safe to take, which is the side effect rule 4 forbids.
 
 | Release | Change                                                                                                                                                                                             | Record                    |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 0.10.0  | `playoutDelayMs` is measured from the first packet on: a stream whose first packet came late reads that lateness over the delay it opened at, for good when pinned. Budget on it, not the pin.     | #260, 0007                |
 | 0.9.0   | A backing stem is a `BackingStem`, a path or bytes, so `stem.path` read back from a config is `string \| undefined`: check `stem.path !== undefined` before using it.                              | #207, #234                |
 | 0.9.0   | `SlotStats` gains a required `tone` field and `SlotEffect` a `"tone"` kind, so a hand-built fake adds the field and a switch over every kind needs a case.                                         | #205, 0029                |
 | 0.9.0   | `DeviceInfo`, what `outputDevices()` and `inputDevices()` list, gains a required `transport` field, which a hand-built fake must add.                                                              | #255, 0025                |

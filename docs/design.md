@@ -986,25 +986,36 @@ should reach that slot.
   of the spread over the block to spare. After that fall, three late notes out of the last 20 move
   it later to cover them. No move leaves a delay under 3.67 ms, a block a packet can wait to be
   drained and a millisecond, nor over 15 ms, the delay it opened at, with no exception: a fall goes
-  at least to 15 ms even when some of what it saw is then late, and a rise stops there. Before its
-  first move a stream's earliest packets can wait longer, since its first packet anchors it: 15 ms
-  plus how late that packet came, and up to a block for the drain. A pinned stream keeps that for
-  good; a chosen one gives it up at the fall. A move waits for the slot
-  to be under -30 dBFS for 21 ms, happens at the head of what waits to play, drops only samples
-  that are quiet too, and counts as a resync. The echo moves by what the move drops or delays, but
-  the new delay also takes up the slack the stream had drifted into, so the part of the new delay
-  the echo did not move by is a splice in the source's `delay()`, and the latency and splices
-  together move by what the echo did. A delay means how long the stream's earliest packets wait,
-  and `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
-  reasons and the numbers.
-- Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
-  last second's packets arrived against their due times. A step is a frame, or as many whole
-  2.5 ms as the delay holds when a frame is longer. When every packet came at least a step early,
-  or the earliest did once the delay has fallen, the anchor moves a step earlier and that step is
-  dropped; when even the earliest came a step late, or half the delay's room over a block late
-  when that is less, it moves a step later and that step is concealed. Either counts as a resync,
-  and either is a splice in the source's `delay()`, since it moves the echo and not the latency.
-  These and the drifted slack a delay move takes up are a jitter buffer's two kinds of splice.
+  at least to 15 ms even when some of what it saw is then late, and a rise stops there. A move
+  waits for the slot to be under -30 dBFS for 21 ms, happens at the head of what waits to play,
+  drops only samples that are quiet too, and counts as a resync. The echo moves by what the move
+  drops or delays, but the new delay also takes up the wait the anchor's slack had not counted, a
+  late first packet's and drift's, so the part of the new delay the echo did not move by is a
+  splice in the source's `delay()`, and the latency and splices together move by what the echo
+  did. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the reasons and the
+  numbers.
+- A delay is how long the stream's earliest packets wait, from the block that drains them to their
+  due time, and the buffer measures it on every stream, pinned or chosen: the most slack of any
+  packet in the notes a move is chosen from, the last 20 and the half second being noted. `stats()`
+  reports that as `playoutDelayMs`, and a fall and a rise move from it, so the number a host reads
+  is the one the moves bound. The first packet reads as the opening delay. When it came late, the
+  packets after it arrive that much earlier against their due times, and from the first of them the
+  delay reads the opening delay plus that lateness: for good on a pinned stream, until the fall on a
+  chosen one. Drift moves it between skew steps, as it moves the earliest packets. A packet can also
+  wait up to a block before its drain, which no slack sees. Measuring moves nothing: the anchor
+  stays where its first packet put it. The anchor's slack, the opening delay until a move and the
+  move's delay after it, is what skew correction holds the stream at and what the source's latency
+  counts, so the guide clock and the echo canceller follow the anchor as before and do not count a
+  first packet's lateness.
+- Skew moves the anchor one step at a time, holding the stream at the anchor's slack. Once a second
+  the buffer looks at how early the last second's packets arrived against their due times, next to
+  that slack. A step is a frame, or as many whole 2.5 ms as the slack holds when a frame is longer.
+  When every packet came at least a step early, or the earliest did once the delay has fallen, the
+  anchor moves a step earlier and that step is dropped; when even the earliest came a step late, or
+  half the slack's room over a block late when that is less, it moves a step later and that step is
+  concealed. Either counts as a resync, and either is a splice in the source's `delay()`, since it
+  moves the echo and not the latency. These and the wait a delay move takes up are a jitter
+  buffer's two kinds of splice.
   Each stream it anchors counts in `delay()`'s `streams`, so the echo canceller starts its drift
   over with it.
   Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
@@ -1143,7 +1154,9 @@ pause under a second with its sequence numbers contiguous loses nothing and ever
 plays at the stream's delay; a slot left to choose falls to the floor on a clean link on every
 frame size, stays exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a
 quiet moment, and, when its first packet came on time, loses at most 0.1 percent more of its
-packets to lateness than the same song at the opening delay.
+packets to lateness than the same song at the opening delay; and a stream whose first packet came
+late reports what its earliest packets wait, pinned or chosen, while one whose first packet came
+on time reports the opening delay.
 
 ### 8.5 Backing: `engine/src/backing/`
 

@@ -31,6 +31,24 @@ A slot's delay belongs to its stream, and the engine chooses it while the stream
 - `stats()` adds `playoutDelayMs` and `lateAtOpening`, the late packets that would also have been
   late had the delay stayed where it opened. The buffer counts those against a held stream that
   makes its own skew corrections at the opening delay, since a shorter delay corrects sooner.
+  `playoutDelayMs` is measured, never assumed: the most slack of any packet in the notes a move is
+  chosen from, on a pinned stream as on a chosen one.
+
+## Reporting the wait, not the anchor
+
+The first packet anchors a stream at the opening delay, so when it came late every packet after it
+waits that lateness longer, and until #260 `playoutDelayMs` read the opening delay anyway: 15 ms
+for a 20 ms stream whose earliest packets waited 22. A host pins 15 ms and builds its latency
+budget on what `stats()` says, so the budget was spent with nothing to show it. Two fixes were
+open: report what the earliest packets wait, or move such a stream so it waits what was pinned.
+On the developer's direction of 2026-11-19, the delay reports the wait and moves nothing. The
+stream plays exactly as before, and the extra wait still covers stalls (the costs below); the
+number is now the one a singer hears. The other answer stays open: it would trade those covered
+stalls for the pinned delay, and is a change of what plays, so it needs its own measurement.
+
+The source's latency stays the anchor's slack, so the guide clock and the echo canceller see what
+they saw before, and the guide clock does not count a first packet's lateness. This ships in
+0.10.0, since `playoutDelayMs` then reads more than before for such a stream: decision 0024.
 
 ## What changed from the issue
 
@@ -210,13 +228,13 @@ something a breath already solves. If a slot is never quiet it stays where it op
   host builds its latency budget on. On the offline driver, silent Opus over 12 s of a clean link
   and then a 25 ms stall every 400 ms for 48 s, 20 ms frames whose first packet came 7 ms late lose
   66 packets to lateness. A stream pinned at 15 ms loses 24, since its earliest packets wait about
-  22 ms, and the old rise, back to the anchor it opened at and so to 23 ms, lost 26. That is 42 more
-  late packets than the pinned stream, 1.4 percent of the 3000 sent, against the 0.1 percent bar,
-  which is measured against a stream held at the opening delay. At 4 ms late it is
-  67 against 36 pinned and 38 under the old rise. With a first packet on time the chosen delay loses
-  what the pinned stream does, 68 against 66. The fall pays too: a first packet 20 ms late with 12 ms
-  stalls in the first ten seconds falls to 15 ms and loses 11 packets in 22 s, where the old fall
-  stopped at 27 ms and lost none.
+  22 ms, which its `playoutDelayMs` reads, and the old rise, back to the anchor it opened at and so
+  to 23 ms, lost 26. That is 42 more late packets than the pinned stream, 1.4 percent of the 3000
+  sent, against the 0.1 percent bar, which is measured against a stream held at the opening delay.
+  At 4 ms late it is 67 against 36 pinned and 38 under the old rise. With a first packet on time the
+  chosen delay loses what the pinned stream does, 68 against 66. The fall pays too: a first packet
+  20 ms late with 12 ms stalls in the first ten seconds falls to 15 ms and loses 11 packets in 22 s,
+  where the old fall stopped at 27 ms and lost none.
 
 ## What `measure-latency` says
 
