@@ -988,25 +988,36 @@ should reach that slot.
   of the spread over the block to spare. After that fall, three late notes out of the last 20 move
   it later to cover them. No move leaves a delay under 3.67 ms, a block a packet can wait to be
   drained and a millisecond, nor over 15 ms, the delay it opened at, with no exception: a fall goes
-  at least to 15 ms even when some of what it saw is then late, and a rise stops there. Before its
-  first move a stream's earliest packets can wait longer, since its first packet anchors it: 15 ms
-  plus how late that packet came, and up to a block for the drain. A pinned stream keeps that for
-  good; a chosen one gives it up at the fall. A move waits for the slot
-  to be under -30 dBFS for 21 ms, happens at the head of what waits to play, drops only samples
-  that are quiet too, and counts as a resync. The echo moves by what the move drops or delays, but
-  the new delay also takes up the slack the stream had drifted into, so the part of the new delay
-  the echo did not move by is a splice in the source's `delay()`, and the latency and splices
-  together move by what the echo did. A delay means how long the stream's earliest packets wait,
-  and `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
-  reasons and the numbers.
-- Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
-  last second's packets arrived against their due times. A step is a frame, or as many whole
-  2.5 ms as the delay holds when a frame is longer. When every packet came at least a step early,
-  or the earliest did once the delay has fallen, the anchor moves a step earlier and that step is
-  dropped; when even the earliest came a step late, or half the delay's room over a block late
-  when that is less, it moves a step later and that step is concealed. Either counts as a resync,
-  and either is a splice in the source's `delay()`, since it moves the echo and not the latency.
-  These and the drifted slack a delay move takes up are a jitter buffer's two kinds of splice.
+  at least to 15 ms even when some of what it saw is then late, and a rise stops there. A move
+  waits for the slot to be under -30 dBFS for 21 ms, happens at the head of what waits to play,
+  drops only samples that are quiet too, and counts as a resync. The echo moves by what the move
+  drops or delays, but the new delay also takes up the wait the anchor's slack had not counted, a
+  late first packet's and drift's, so the part of the new delay the echo did not move by is a
+  splice in the source's `delay()`, and the latency and splices together move by what the echo
+  did. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the reasons and the
+  numbers.
+- A delay is how long the stream's earliest packets wait, from the block that drains them to their
+  due time, and the buffer measures it on every stream, pinned or chosen: the most slack of any
+  packet in the notes a move is chosen from, the last 20 and the half second being noted. `stats()`
+  reports that as `playoutDelayMs`, and a fall and a rise move from it, so the number a host reads
+  is the one the moves bound. The first packet reads as the opening delay. When it came late, the
+  packets after it arrive that much earlier against their due times, and from the first of them the
+  delay reads the opening delay plus that lateness: for good on a pinned stream, until the fall on a
+  chosen one. Drift moves it between skew steps, as it moves the earliest packets. A packet can also
+  wait up to a block before its drain, which no slack sees. Measuring moves nothing: the anchor
+  stays where its first packet put it. The anchor's slack, the opening delay until a move and the
+  move's delay after it, is what skew correction holds the stream at and what the source's latency
+  counts, so the guide clock and the echo canceller follow the anchor as before and do not count a
+  first packet's lateness.
+- Skew moves the anchor one step at a time, holding the stream at the anchor's slack. Once a second
+  the buffer looks at how early the last second's packets arrived against their due times, next to
+  that slack. A step is a frame, or as many whole 2.5 ms as the slack holds when a frame is longer.
+  When every packet came at least a step early, or the earliest did once the delay has fallen, the
+  anchor moves a step earlier and that step is dropped; when even the earliest came a step late, or
+  half the slack's room over a block late when that is less, it moves a step later and that step is
+  concealed. Either counts as a resync, and either is a splice in the source's `delay()`, since it
+  moves the echo and not the latency. These and the wait a delay move takes up are a jitter
+  buffer's two kinds of splice.
   Each stream it anchors counts in `delay()`'s `streams`, so the echo canceller starts its drift
   over with it.
   Arrival slack is the measure rather than the decoded FIFO's fill, because decoding on demand
@@ -1145,7 +1156,9 @@ pause under a second with its sequence numbers contiguous loses nothing and ever
 plays at the stream's delay; a slot left to choose falls to the floor on a clean link on every
 frame size, stays exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a
 quiet moment, and, when its first packet came on time, loses at most 0.1 percent more of its
-packets to lateness than the same song at the opening delay.
+packets to lateness than the same song at the opening delay; and a stream whose first packet came
+late reports what its earliest packets wait, pinned or chosen, while one whose first packet came
+on time reports the opening delay until a move.
 
 ### 8.5 Backing: `engine/src/backing/`
 
@@ -1242,15 +1255,20 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 - A voice is a formant move in semitones from the singer's own. Voice names and their settings
   are presets and live with the host. Off, or on at 0, the stage hands the voice over bit for
   bit.
-- A voice that moves pitch will come through the corrector's shifter, which takes the
-  transposition into its own ratio, so a voice and correction cost one delay and not two, and
-  `correctorDelayMs` reports it. Its knob joins the contract with that work, not before.
 - Cleanup's stages are causal, with no lookahead and no frame. The high-pass is a 12 dB per
   octave Butterworth at 80 Hz, whose phase shift delays a fundamental by 1.8 ms at 110 Hz and
   0.4 at 220. The gate follows the room's own level, so it needs no threshold per phone, and
   takes up to 18 dB off between lines. The compressor is 3:1 over -30 dBFS with at most 6 dB of
   makeup, so it never brings a slot more than 6 dB closer to feedback. Off, each fades to unity
   over a block and then costs nothing.
+- The high-pass and a tone section switch a biquad two ways, on purpose. The high-pass crossfades
+  from dry to filtered over one block from a zeroed state, and is dry from the block after it
+  turns off. A tone section glides its coefficients from flat, and after it turns off runs as flat
+  until its ring settles. Side by side on 110 Hz harmonics over rumble, the glide's samples sit up
+  to 0.25 of full scale from the crossfade's in the block it turns on and the six after, up to 0.26
+  from dry for 16 blocks (43 ms) after off, and within 3.0e-8 of the crossfade's once settled. Moving the high-pass to the glide would remove
+  about ten lines and change what a singer hears at the switch, which only a listen and a
+  `measure-latency` run could clear. The crossfade stays.
 - The tone stage is `slot::effects::tone`, Rust biquads of its own with no kernel, run after the
   meter: `Tone::process(params, block)`. In order it is the plosive guard, the bands, the air
   shelf and the de-esser, so the de-esser judges the sibilance that leaves the stage. The match,
@@ -1450,6 +1468,75 @@ master has the two levels, from
   0029), the five that compare a phone with a reference mic need that recording stored beside a
   bundle, and `tone_late` and `tone_readings` come with the stage.
 
+`native/tools/bench` is the mixer alone on a real clock, with no host application around it. A
+developer at a desk asks it "did my change make it worse" in one command, and the runs in #116
+that need only an output and a cable become a script. Like the tools above, it opens a device only
+when built with `hardware` and run with `--open-device`. Without that flag it runs on the timer
+clock (decision 0011), which opens nothing. Its tests run on the timer clock's synthetic clock,
+with fake outputs and inputs of their own. Device ids are the ones `measure-latency list` prints.
+
+```
+bench play BUNDLE [--backing STEMS] [--profile FILE] [--out DIR] [--baseline FILE] [--write FILE]
+                  [--open-device [--output ID] [--period 64|128]]
+bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--input ID]
+               [--input-channel N] [--period 64|128] [--level-db DB] [--baseline FILE] [--write FILE]
+```
+
+- **`play` is `replay` on a real clock.** It builds the mixer a bundle's manifest describes, under
+  the bundle's profile or `--profile`, with `--backing` as `replay` takes it. It reads the bundle
+  and resolves each call with `replay`'s own code, so the two cannot drift. Before the first block
+  it prepares the whole song: each call as the command it sends, each packet in its slot's order.
+  The render then hands each one to the engine in the block `replay` would, counted from the
+  manifest's frame. So on any clock the bench renders what `replay` renders of the same bundle,
+  sample for sample, and only the clock differs: the output's own, its period, and whatever else
+  the machine is doing. The scorecard's duet is the first bundle it plays.
+- **It follows no output.** An output that stops or changes ends the run and is named,
+  since a move would make the song differ from `replay`'s (8.11).
+- **What it measures** is what only a real clock can say: whether the mix kept up.
+  `output.underruns` counts the periods the output was not handed in time. `output.renderP99Ms`
+  and `output.renderMaxMs` time a block's render against the output's period, which is all the
+  time a render has. The song's
+  own numbers are the scorecard's: scoring the bundle the bench writes gives the scorecard's
+  numbers for the bundle it played, so the bench does not repeat them.
+- **It writes a bundle** to `--out`, as a mixer writes one (8.11), with the real output in the
+  manifest and `stats.jsonl` from the run. It keeps time by the output's frames: every `us` it
+  writes, a packet's or a line's, is the manifest's `us` plus the frames since, at 48 frames a
+  millisecond, and no packet is stamped later than the block it was handed to. Its pairs never
+  drift, so the bundle replays to the samples the bench rendered. The bench is a second writer of
+  format 1, held to it by `replay` reading what it writes in the bench's tests.
+- **`loopback` measures a house mic's mouth to speaker without a mouth.** It plays decision
+  0006's chirp into the output's left channel from the render, at frames it knows. A `capture`
+  slot (decision 0018) reads it back from the input the rig reaches: a cable from the output's left
+  channel, or a mic `--air-cm` from the speaker, as `measure-latency`'s rigs are. The slot is out
+  of the mix and its output is read before the master, so the loop never feeds itself. Both ends
+  are frames of the output's clock: the chirp's start as rendered and its arrival in the slot's
+  output. The gap between them is the output, the cable or the air, the input and what the
+  capture slot holds, which is the path a house mic's voice takes to the room. So the figure needs
+  no clock line and splits nothing (decision 0006 says why a loopback cannot be split).
+- **One detector.** It finds each chirp with `measure-latency`'s matched filter and onset rule,
+  taken from that crate as a library, and refuses where that tool does: an input that is silent
+  or stands under 30 dB over its noise, or chirps that disagree by more than 0.75 ms. Its numbers:
+  `loopback.roundTripMs`, the median chirp's gap less the air; `loopback.spreadMs`, how far the
+  chirps disagree; `loopback.gainDb`, the chirp's level as read against its level as played; and
+  `loopback.snrDb`, the first arrival over the input's noise.
+- **Its result is a scorecard file.** `play` names its numbers by the bundle's directory, as the
+  scorecard does, and `loopback` by `loopback`. `--write` and `--baseline` follow the scorecard's
+  rules, so two bench runs compare as two scorecards do. A bench figure belongs to its machine,
+  and a baseline taken on another machine says nothing about this one.
+- **What it prints**, for someone who has never seen it: what it played (the bundle, its slots,
+  its length, and whether the stems were found); on what (the output's name, rate, period and the
+  latency it reports, or the timer clock and that nothing was heard); each slot's `stats()` once a
+  second as it plays; and then what it measured, with a verdict in words. A run kept up, or fell
+  behind by so many periods. A round trip is set against decision 0008's 20 to 30 ms. Against a
+  baseline, each number that moved is printed with whether it moved past its tolerance. A refusal
+  prints why in place of a number.
+
+Done when: on the timer clock's synthetic clock and a fake output, `bench play` of the scorecard's
+duet renders what `replay` renders, sample for sample, under the allocation guard, and the bundle
+it writes replays to those samples; a fake loop of a known delay reads back as that delay plus
+what the capture slot reports holding, within a frame; and each #116 run it can now do is written
+there as its command.
+
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
 The class behind Aeon Karaoke's mixing-engine port that drives this package, beside the
@@ -1631,8 +1718,9 @@ slots whose calls left that value out.
 
 Work is split so that agents run in parallel without touching the same files. A workstream
 owns the paths named in the module sections in its row. Shared files are `native/Cargo.toml`,
-`native/engine/src/lib.rs` and `src/index.ts`: add your own line, leave the rest. Each row is a
-GitHub issue, which carries what it is blocked by; each issue is one or more PRs.
+`native/engine/src/lib.rs` and `src/index.ts`: add your own line, leave the rest. The rows were
+the first build's workstreams, each an issue now closed. The table stays as the map of which
+module sections a piece of work owns: a new issue names the rows whose paths it touches.
 
 A measuring tool may add a read-only accessor to a kernel or engine type another workstream owns:
 one function that reports state, with no change to behaviour. That is how a tool reads state
@@ -1695,3 +1783,51 @@ Each is deliberate and here so no one reverts it by accident.
 - Choosing a slot's delay before `start`, from the packets a phone already sends to an armed mixer,
   so the first ten seconds of a song have the chosen delay too. Nothing here measures how long a
   mixer sits armed yet.
+- Higher and lower voices: an octave up with formants +3 semitones, and an octave down with -3,
+  the settings and research in decision 0014. They come through the corrector's shifter, which
+  reads its delay line at the product of the correction and the octave, so a voice with
+  correction costs the corrector's one delay and `correctorDelayMs` reports it. Through the voice
+  stage's own shifter they would cost a second delay, up to 31.5 ms at 82 Hz with correction on.
+  The pitch knob joins the contract with that work, and where it lives (with the corrector's
+  knobs, or only with a guide) is that work's to decide. It starts once the corrector's shifter
+  has settled, since it changes the same kernel, and is about four pull requests: the contract
+  with decision 0014, the kernel, the slot and binding, and a listen set. It is done when tones
+  an octave up and down land within a stated number of cents, `correctorMaxDelayMs` reads the
+  same with a voice and correction as with correction alone, a click leaves where it entered, and
+  a listen keeps them. The faults to listen for are known: an octave down on a 440 Hz voice keeps
+  more of the singer's own formants than the asked ones, and shifting down can drop a short
+  sound. With correction off, an octave voice pays the shifter's delay where today the slot pays
+  none: a cost on the mic path the listen has to justify. Deeper and brighter shipped without
+  them, and the beta's list does not name them.
+- Harmony: up to two voices per slot taken from the corrected voice, each a `VoiceShifter`
+  (decision 0004) at the diatonic interval the guide's note and `keyMask` give, panned off centre.
+  They run beside the dry voice, so the dry voice keeps its path and its delay, and each trails it
+  by decision 0004's bound, up to 15.0 ms at 82 Hz a tritone up and 16.5 ms an octave up; whether
+  that reads as fuller or as late is a listen's to say. No guide, no harmony, and the stage drops
+  a voice on unvoiced sound itself, since the kernel keeps shifting through consonants. On test
+  tones the kernel lands within 5 cents across an octave either way; its formants miss by under
+  2 dB RMS at 6 semitones down and 3 to 5 dB at 12 down on low voices. One voice is about 1.0 %
+  of a core on an M2 Pro, two on four slots about 8 %, of which voices on one slot could share
+  their pitch reading, about 0.2 of each 1 %, if the kernel could take one in. It was parked on
+  15 November 2026, and is best started after the corrector's listen, since it shifts the
+  corrected voice and would carry any warble into two more. Done when each voice lands within
+  10 cents of its interval on a test tone, the dry voice's click row does not move, four slots run
+  under the allocation guard with their CPU quoted, and a blind listen rates it at or above no
+  harmony.
+- `measureSlot(index)`: one call on a mixer that plays a test sound in the mix, finds it in one
+  slot's input, and resolves with the delay to the sample on the engine's clock and a confidence,
+  or with not heard and what was heard (the level, and how much of the sound), so a quiet phone
+  can be told from the wrong microphone. The sound goes out and back the way a voice does, so the
+  loop is the delay a singer hears and no clock is synced between the phone and the engine. The
+  detector is `measure-latency`'s, its chirp and matched filter moved where the engine can use
+  them, not a new one. Where the echo canceller is on, its delay finder and this share one
+  estimate, and the engine could follow the delay through a song from the backing in the mic. The
+  engine measures and reports; when to measure is the host's, which today plays a chime through
+  a short mixer and reads it back from `pitch` events, so a missed chime says nothing. It is a
+  new public method and about four pull requests: the contract in 7.2 and 8.8, the detector
+  shared out of `measure-latency`, the test sound and detection in the engine, and the binding
+  with its tests. Done when, on the offline driver, a slot fed the mix back at a known delay reads
+  it within a block, and one fed silence or the sound 40 dB down resolves as not heard and says
+  what it heard. Two things only hardware answers: whether a phone's noise suppression mangles
+  the sweep, and how the loop splits between the output and the phone, which a `capture` slot
+  with no network in its path can measure. It is not on the beta's list.
