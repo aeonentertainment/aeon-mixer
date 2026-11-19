@@ -42,6 +42,25 @@ pub fn pink_noise(frames: usize, seed: u32) -> Vec<f32> {
 /// `low_hz` and twice it, in syllables of 120 to 400 ms with gaps between them. It is not
 /// speech, but it has speech's line spectrum, its gaps and its moving pitch.
 pub fn talker(frames: usize, low_hz: f64, seed: u32) -> Vec<f32> {
+    syllables(frames, low_hz, seed, |phase| {
+        (1..=12).map(|h| (phase * h as f64).sin() / h as f64).sum()
+    })
+}
+
+/// `talker` with its fundamental standing alone, as an echo canceller that subtracts an echo of
+/// the singer the room never played can leave a voice: the second harmonic 15 dB down and the
+/// rest falling as 1/h from there, so its fundamental passes a howl detector's harmonic test where
+/// `talker`'s does not.
+pub fn dark_talker(frames: usize, low_hz: f64, seed: u32) -> Vec<f32> {
+    let second = 10f64.powf(-15.0 / 20.0);
+    syllables(frames, low_hz, seed, |phase| {
+        phase.sin()
+            + (2..=12).map(|h| (phase * h as f64).sin() * second * 2.0 / h as f64).sum::<f64>()
+    })
+}
+
+/// `talker`'s syllables, each sample the sum `partials` gives at the pitch's phase.
+fn syllables(frames: usize, low_hz: f64, seed: u32, partials: impl Fn(f64) -> f64) -> Vec<f32> {
     let rate = 48_000.0;
     let mut rng = Lcg::new(seed);
     let mut out = vec![0.0f32; frames];
@@ -57,8 +76,7 @@ pub fn talker(frames: usize, low_hz: f64, seed: u32) -> Vec<f32> {
             let hz = start_hz + (end_hz - start_hz) * progress;
             phase = (phase + TAU * hz / rate) % (TAU * 1000.0);
             let envelope = (std::f64::consts::PI * progress).sin();
-            let sample: f64 = (1..=12).map(|h| (phase * h as f64).sin() / h as f64).sum();
-            out[at + i] = (0.25 * envelope * sample) as f32;
+            out[at + i] = (0.25 * envelope * partials(phase)) as f32;
         }
         at += syllable + gap;
     }

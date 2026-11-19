@@ -1,7 +1,7 @@
 use assert_no_alloc::assert_no_alloc;
 
 use super::*;
-use crate::fixtures::{at_db, db, rms, talker};
+use crate::fixtures::{at_db, dark_talker, db, pink_noise, rms, talker};
 use crate::test_support::RATE;
 
 const BLOCK: usize = 128;
@@ -259,29 +259,108 @@ fn a_whistled_run_getting_louder_is_left_alone() {
     }
 }
 
-// The guard's known limit: a run it follows note to note, where no note is held long enough to
-// start afresh, and its crescendo counted across the notes. A whistled chromatic run E7 to B7 in
-// 94 ms notes, from -36 dBFS up 1 dB a note, is ducked 12 dB once, 682 ms in, and 2 dB a note is
-// ducked twice, to 24 dB, from 309 ms. A 50 ms grace note a semitone under a phrase climbing E7 to
-// B7 in 250 ms notes, up 2 dB a note, is followed into the whole phrase and ducked once, 832 ms in.
-// The guard before ducked none of these, and the issue for real rooms to settle is #139. When a
-// change stops these ducks, this test says so and decision 0020's limit is rewritten with it.
+// A run whose notes are shorter than a held pitch needs: a whistled chromatic run E7 to B7 in 94 ms
+// notes, from -36 dBFS up 1 dB a note and up 2 dB a note, and a 50 ms grace note a semitone under
+// a phrase climbing E7 to B7 in 250 ms notes, up 2 dB a note. Each note holds its pitch flat and
+// steps at once to the next, so each starts afresh and the crescendo is never counted across them.
+// The guard before ducked them 12 dB once, 24 dB twice and 12 dB once (#139).
 #[test]
-fn a_fast_run_or_a_phrase_after_a_grace_note_is_ducked() {
-    let ducks = |signal: Vec<f32>| {
-        let (_, catches) = guarded_catching(signal);
-        catches.iter().map(|frame| frame * 1000 / RATE as usize).collect::<Vec<_>>()
-    };
+fn a_fast_run_or_a_phrase_after_a_grace_note_is_left_alone() {
     let run = |step_db: f32| -> Vec<(f32, f32)> {
         (0..8).map(|n| (100.0 + n as f32, -36.0 + step_db * n as f32)).collect()
     };
-    let one_db = ducks(melody(&run(1.0), 94, 0, &[], 0.0));
-    let two_db = ducks(melody(&run(2.0), 94, 0, &[], 0.0));
     let mut phrase = melody(&[(99.0, -36.0)], 50, 0, &[], 0.0);
     phrase.extend(melody(&run(2.0), 250, 0, &[], 0.0));
-    let grace = ducks(phrase);
-    println!("ducked at {one_db:?}, {two_db:?} and {grace:?} ms");
-    assert_eq!((one_db.len(), two_db.len(), grace.len()), (1, 2, 1));
+    for (name, signal) in [
+        ("the run up 1 dB a note", melody(&run(1.0), 94, 0, &[], 0.0)),
+        ("the run up 2 dB a note", melody(&run(2.0), 94, 0, &[], 0.0)),
+        ("the phrase after a grace note", phrase),
+    ] {
+        let (_, catches) = guarded_catching(signal);
+        assert_eq!(catches, [], "{name} was ducked");
+    }
+}
+
+/// The delays a slot's source can hand the voice over at, 10 to 60 ms, in frames: where the
+/// guard's analyses fall in a syllable moves with each.
+fn delays() -> impl Iterator<Item = usize> {
+    (480..=2880).step_by(64)
+}
+
+// A voice whose fundamental stands alone, as an echo canceller left one over a pink-noise room in
+// #245: the second harmonic 15 dB down, so the fundamental passes the harmonic test. Its syllables
+// swell, fade into a breath and swell again, and it is not caught however late it arrives. Each of
+// 24 talkers runs 6 s over the room's residual at -46 dBFS, at each of 38 delays. The guard before
+// measured growth from whichever window straddled a breath, and caught 678 of the 912. This one
+// catches 4, each a swell of up to 200 ms still rising 6 dB once its first 107 ms are over: the
+// limit decision 0020 names for a whistled note that grows. One in a hundred is the bound.
+#[test]
+fn a_voice_whose_fundamental_stands_alone_is_not_caught_at_any_delay() {
+    const MOST_CAUGHT: usize = 9;
+    let frames = 6 * RATE as usize;
+    let residual = at_db(pink_noise(frames + 2880, 3), -46.0);
+    let talkers: Vec<(f64, u32)> =
+        [140.0, 220.0].into_iter().flat_map(|low| (1..=12).map(move |seed| (low, seed))).collect();
+    let caught: Vec<String> = std::thread::scope(|scope| {
+        let workers: Vec<_> = talkers
+            .iter()
+            .map(|&(low, seed)| {
+                let residual = &residual;
+                scope.spawn(move || {
+                    let voice = at_db(dark_talker(frames, low, seed), -20.0);
+                    delays()
+                        .filter(|&delay| {
+                            let mut heard = residual[..frames + delay].to_vec();
+                            for (heard, sung) in heard[delay..].iter_mut().zip(&voice) {
+                                *heard += sung;
+                            }
+                            !guarded_catching(heard).1.is_empty()
+                        })
+                        .map(|delay| format!("{low} Hz seed {seed} at {} ms", delay / 48))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers.into_iter().flat_map(|worker| worker.join().expect("a talker panicked")).collect()
+    });
+    println!("{} of {} caught: {caught:?}", caught.len(), talkers.len() * delays().count());
+    assert!(caught.len() <= MOST_CAUGHT, "{caught:?}");
+}
+
+// A howl under a singer whose fundamental stands alone: 1.2 kHz from -40 dBFS growing 25 dB a
+// second, starting 2 s into the song, under that voice at -20 dBFS, at five delays and three
+// singers. The guard follows the singer's fundamental and the howl as two tones, so the howl is
+// caught as it grows, within 950 ms and before it is 3 dB louder than the singer, and the singer
+// is never caught. The guard before followed one tone, the louder: it caught the singer first, and
+// caught the howl only about 10 dB over them, 1.2 s in.
+#[test]
+fn a_howl_under_a_singer_is_caught_before_it_is_louder_than_them() {
+    let (rate, frames) = (RATE as usize, 6 * RATE as usize);
+    let starts = 2 * rate;
+    let residual = at_db(pink_noise(frames, 3), -46.0);
+    // In RMS, as `at_db` levels the voice: a sine's peak is 3 dB over its RMS
+    let howl_db = |i: usize| -40.0 + 25.0 * i as f32 / RATE as f32;
+    let howl = sine(1200.0, frames - starts, |i| howl_db(i) + 3.01);
+    for seed in [5, 7, 11] {
+        let voice = at_db(dark_talker(frames, 140.0, seed), -20.0);
+        for delay in delays().step_by(8) {
+            let mut heard = residual.clone();
+            for (heard, sung) in heard[delay..].iter_mut().zip(&voice) {
+                *heard += sung;
+            }
+            for (heard, howl) in heard[starts..].iter_mut().zip(&howl) {
+                *heard += howl;
+            }
+            let (_, catches) = guarded_catching(heard);
+            let first = catches.first().copied();
+            let caught = first.filter(|&at| at > starts).map(|at| at - starts);
+            assert!(
+                caught.is_some_and(|after| after < 950 * rate / 1000 && howl_db(after) < -17.0),
+                "seed {seed} at {} ms: first catch at {first:?}",
+                delay / 48
+            );
+        }
+    }
 }
 
 // A note's edge can cost the guard a sight of the tone just as it settles. A whistle at 1.2 kHz

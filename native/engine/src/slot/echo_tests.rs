@@ -614,11 +614,11 @@ fn correcting_room(seed: u32) -> (bool, f32) {
 // howl as it grows. One room is one draw of a chaotic loop: the singer, the noise and each
 // platform's rounding decide to a tenth of a dB when the guard sees it, so a single room passes or
 // fails by chance. The guard is held to a rate over 96 seeded rooms instead. Over 480 rooms on
-// macOS, the guard before this one let 46 % of them pass -20 dBFS and never caught 1.7 %; this one
-// lets 16 % pass and catches every one, on today's corrector and on one that reads every 5 ms. Of
-// these 96 it lets 12 pass against 38. The bound, 33 of 96, sits 5 standard deviations over 16 %
-// and 2.2 under the old guard's 46 %. One room in 96 may go uncaught, as margin for a platform's
-// own draw.
+// macOS, the guard that followed a bin at a time let 46 % of them pass -20 dBFS and never caught
+// 1.7 %; the one that followed a tone through a corrector's moves let 16 % pass, and this one,
+// following two tones from four peaks, lets 12.5 % (60) pass, and each catches every one. Of these
+// 96 it lets 10 pass. The bound, 33 of 96, sits 5 standard deviations over 16 % and 2.2 under the
+// first guard's 46 %. One room in 96 may go uncaught, as margin for a platform's own draw.
 #[test]
 fn the_guard_catches_howls_with_the_corrector_and_the_voice_on() {
     const ROOMS: u32 = 96;
