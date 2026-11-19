@@ -180,7 +180,10 @@ export interface GuideInput {
   keyMask: number
 }
 
-/** Every input the OS offers, the default marked: the devices a `capture` slot may name. */
+/**
+ * Every input the OS offers, the default marked: the devices a `capture` slot may name. The test
+ * OS's when it stands in.
+ */
 export declare function inputs(): Array<OutputEntry>
 
 export type NativeEvent =
@@ -224,6 +227,7 @@ export interface OutputEntry {
   id: string
   name: string
   isDefault: boolean
+  transport: 'builtIn' | 'usb' | 'bluetooth' | 'display' | 'network' | 'aggregate' | 'virtual' | 'other' | 'unknown'
 }
 
 export interface OutputInfo {

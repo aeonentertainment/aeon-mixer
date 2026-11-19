@@ -18,6 +18,7 @@ use super::{Follower, StartError, System};
 use crate::output::Output;
 use crate::request::Request;
 use crate::stats::Stats;
+use crate::transport::Transport;
 use crate::wake::Wake;
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -92,6 +93,7 @@ impl Fake {
                 id: (*id).into(),
                 name: format!("{id} speakers"),
                 is_default: *is_default,
+                transport: Transport::BuiltIn,
             })
             .collect();
         if let Some(wake) = &room.wake {
