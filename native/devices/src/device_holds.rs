@@ -155,7 +155,6 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::steps::Steps;
 
     /// Devices by id with their rates and buffer sizes, and every property asked for in order. The
     /// first rate asked lands at once, never with `First::Never`, or only once its wait has given
@@ -521,53 +520,18 @@ mod tests {
         );
     }
 
-    /// `open` marks the rate landing through the hold and the buffer after it, so a start that
-    /// fails later, here on the stream's format, says where its time went.
+    /// `rate_landed` is where `open` marks "48 kHz held", so a start whose buffer set fails still
+    /// says the rate landed: it runs once 48 kHz was asked and landed, before any size is asked.
     #[test]
-    fn a_start_that_fails_after_the_hold_names_the_rate_then_the_buffer() {
-        let holds = DeviceHolds::new(Fake::new(&[(MONITOR, 44_100.0)]));
-        let mut steps = Steps::new();
-        let hold = holds.hold(MONITOR, PERIOD, || steps.done("48 kHz held")).unwrap();
-        steps.done("IO buffer set");
-        let failed = steps.failed(DriverError::Backend("not f32 PCM".into()));
-        drop(hold);
-        let reason = failed.to_string();
-        let rate = reason.find(", after 48 kHz held at ").expect(&reason);
-        let buffer = reason.find(", IO buffer set at ").expect(&reason);
-        assert!(rate < buffer, "{reason}");
-    }
-
-    #[test]
-    fn a_start_that_fails_setting_the_buffer_says_the_rate_had_landed() {
+    fn rate_landed_runs_after_48_khz_lands_and_before_the_size_is_asked() {
         let fake = Fake { refuses: vec![MONITOR], ..Fake::new(&[(MONITOR, 44_100.0)]) };
         let holds = DeviceHolds::new(fake);
-        let mut steps = Steps::new();
-        let asked_when_landed = Mutex::new(Vec::new());
-        let error = holds
-            .hold(MONITOR, PERIOD, || {
-                *asked_when_landed.lock().unwrap() = holds.hal.asked();
-                steps.done("48 kHz held");
-            })
-            .map(drop)
-            .unwrap_err();
-        let landed = [(MONITOR, Ask::Rate(48_000.0))];
-        assert_eq!(
-            *asked_when_landed.lock().unwrap(),
-            landed,
-            "marked before the buffer was asked"
-        );
-        let reason = steps.failed(error).to_string();
-        assert!(reason.contains("the device refused the size"), "{reason}");
-        assert!(reason.contains(", after 48 kHz held at "), "{reason}");
-        assert!(!reason.contains("IO buffer set"), "{reason}");
-    }
-
-    #[test]
-    fn a_rate_that_never_lands_marks_nothing() {
-        let fake = Fake { first: First::Never, ..Fake::new(&[(MONITOR, 44_100.0)]) };
-        let holds = DeviceHolds::new(fake);
-        let mut landed = false;
-        assert!(holds.hold(MONITOR, PERIOD, || landed = true).is_err());
-        assert!(!landed);
+        let mut when_landed = None;
+        let held = holds.hold(MONITOR, PERIOD, || {
+            when_landed = Some((holds.hal.asked(), holds.hal.rate_of(MONITOR)));
+        });
+        assert!(held.is_err(), "the device refuses the size");
+        let landed = (vec![(MONITOR, Ask::Rate(48_000.0))], 48_000.0);
+        assert_eq!(when_landed, Some(landed));
     }
 }

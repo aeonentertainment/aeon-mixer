@@ -7,6 +7,7 @@ mod hal_properties;
 mod io;
 mod property;
 mod state;
+mod steps;
 mod watch;
 
 use engine::driver::DriverError;

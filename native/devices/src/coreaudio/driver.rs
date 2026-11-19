@@ -16,10 +16,10 @@ use super::callback::Callback;
 use super::hal_properties::HOLDS;
 use super::io::Io;
 use super::property::{get, string};
+use super::steps::Steps;
 use crate::feed::Feed;
 use crate::request::Request;
 use crate::stats::Stats;
-use crate::steps::Steps;
 
 /// The CoreAudio HAL with no AudioUnit between: an IOProc on the device, with the device's IO
 /// buffer set to the asked period until the stream stops. Other apps keep playing; the device runs

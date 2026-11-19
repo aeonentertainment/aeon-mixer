@@ -33,8 +33,6 @@ mod request;
 mod sample;
 mod stats;
 #[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
-mod steps;
-#[cfg(any(test, all(feature = "hardware", target_os = "macos")))]
 mod stream_holding;
 mod summary;
 mod timer;
