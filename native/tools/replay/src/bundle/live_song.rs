@@ -91,9 +91,9 @@ impl LiveSong {
         let mut tapped = Vec::new();
         let mut slots = Vec::new();
         for (index, kind) in kinds.iter().enumerate() {
-            let (ingest, source) = open(kind, PlayoutDelay::Pinned(15.0)).unwrap();
+            let (packets, source) = open(kind, PlayoutDelay::Pinned(15.0)).unwrap();
             slots.push(Slot::new(source));
-            let producer = ingest.packets.map(|(producer, _)| producer);
+            let producer = packets.map(|(producer, _)| producer);
             tapped.push(producer.is_some().then_some(recordings.len()));
             if producer.is_some() {
                 let path = dir.join("slots").join(format!("{index}.pcap"));
