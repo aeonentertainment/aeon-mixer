@@ -20,16 +20,19 @@ export type IngestKind = "rtp" | "l16" | "push" | "capture";
  * not named here; `unknown` is a device the OS or driver did not say. A new OS transport maps into
  * one of these, so the union does not grow.
  */
-export type Transport =
-  | "builtIn"
-  | "usb"
-  | "bluetooth"
-  | "display"
-  | "network"
-  | "aggregate"
-  | "virtual"
-  | "other"
-  | "unknown";
+export type Transport = (typeof TRANSPORTS)[number];
+/** Every `Transport`, the one list the union is read from. Internal: `src/index.ts` exports the type alone. */
+export const TRANSPORTS = [
+  "builtIn",
+  "usb",
+  "bluetooth",
+  "display",
+  "network",
+  "aggregate",
+  "virtual",
+  "other",
+  "unknown",
+] as const;
 
 /** One device as `outputDevices()` and `inputDevices()` list it. */
 export interface DeviceInfo {

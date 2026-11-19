@@ -1,28 +1,13 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { BackingStem, OutputInfo, Transport } from "../types.ts";
+import { type BackingStem, type OutputInfo, TRANSPORTS } from "../types.ts";
 import { messageOf, startLive, within } from "./offline-clock.ts";
 import type { ContractMixer, ContractPromise, Trial } from "./contract-subject.ts";
 
 const RATE = 48000;
 /** How long a call the suite awaits may take to settle before it counts as never settling. */
 const SETTLE_MS = 2000;
-
-// A record, so a transport added to the union fails to compile here until it is listed
-const TRANSPORTS = new Set(
-  Object.keys({
-    builtIn: true,
-    usb: true,
-    bluetooth: true,
-    display: true,
-    network: true,
-    aggregate: true,
-    virtual: true,
-    other: true,
-    unknown: true,
-  } satisfies Record<Transport, true>),
-);
 
 /** A quarter second of a 440 Hz sine as a mono 16-bit WAV at 48 kHz. */
 function sineWav() {
@@ -76,7 +61,7 @@ export const enginePromises: ReadonlyArray<ContractPromise> = [
           typeof id !== "string" ||
           typeof name !== "string" ||
           typeof isDefault !== "boolean" ||
-          !TRANSPORTS.has(transport),
+          !new Set<string>(TRANSPORTS).has(transport),
       );
       return odd && { found: `it listed ${JSON.stringify(odd)}` };
     },

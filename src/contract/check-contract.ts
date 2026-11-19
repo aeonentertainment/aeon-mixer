@@ -8,7 +8,6 @@ import type {
   ContractPromise,
   ContractSubject,
   Trial,
-  Verdict,
 } from "./contract-subject.ts";
 
 const PROMISES = [...enginePromises, ...slotPromises, ...senderPromises];
@@ -50,7 +49,7 @@ async function run<E extends ContractEngine>(
   check: ContractPromise["check"],
   subject: ContractSubject<E>,
   { moveOutput }: ContractOptions<E>,
-): Promise<Verdict> {
+) {
   const opened: E[] = [];
   const trial: Trial = {
     async open(options = {}) {

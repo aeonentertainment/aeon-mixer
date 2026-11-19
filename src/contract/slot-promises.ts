@@ -1,12 +1,6 @@
 import { defaultProfile } from "../profile/default-profile.ts";
 import { BLOCK, startLive } from "./offline-clock.ts";
-import type {
-  ContractEngine,
-  ContractMixer,
-  ContractPromise,
-  Trial,
-  Verdict,
-} from "./contract-subject.ts";
+import type { ContractEngine, ContractMixer, ContractPromise, Trial } from "./contract-subject.ts";
 
 const LEVEL = 0.5;
 
@@ -24,7 +18,7 @@ function gainHeard(engine: ContractEngine, mixer: ContractMixer) {
 const near = (heard: number, wanted: number) => Math.abs(heard - wanted) < 1e-4;
 
 /** What an idle rtp, l16 and push slot report, under a delay `pinned` or left to choose. */
-async function idleStats(trial: Trial, pinned: number | undefined): Promise<Verdict> {
+async function idleStats(trial: Trial, pinned: number | undefined) {
   const { engine } = await trial.open(pinned === undefined ? {} : { playoutDelayMs: pinned });
   const mixer = await engine.createMixer({
     slots: [{ kind: "rtp" }, { kind: "l16" }, { kind: "push" }],
