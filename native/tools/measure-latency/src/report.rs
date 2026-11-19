@@ -27,7 +27,7 @@ pub fn offline(rows: &[Row]) -> String {
             "| {} | {} | {} | {} | {:.2} | {:.2} | {} | {} |",
             row.ingest,
             slot_delay(row),
-            if row.corrected { "on" } else { "off" },
+            corrector(row),
             if row.cleanup { "on" } else { "off" },
             ms(row.ingest.gather_frames() as f64),
             ms(row.lookahead as f64),
@@ -42,7 +42,12 @@ pub fn offline(rows: &[Row]) -> String {
          sender fills before any of it can leave. **Sender encoder**: Opus's lookahead, which the \
          phone pays. **Slot's delay**: what the slot reports, pinned by the host or chosen by the \
          slot. A chosen row is what a slot comes to with no jitter to cover, the least it can hold \
-         on any network. **Engine holds**: from the packet's arrival to the master's output: the \
+         on any network. **Corrector**: on, a voice 40 cents sharp sings phrases of 0.2 to 0.475 \
+         s, each followed by a rest and a 50 ms sweep from 2 to 7.5 kHz, and the slot corrects it \
+         to the nearest semitone at once with no guide. What it reports is the delay the corrector \
+         held as each sweep went through, which engine holds includes. The phrases leave that \
+         delay at different heights, so it is the span they found; a budget counts \
+         `correctorMaxDelayMs`, 15 ms. **Engine holds**: from the packet's arrival to the master's output: the \
          wait for the next block, the slot's delay on the jitter-buffered paths, decode, slot and \
          master. **Total**: a sample entering the sender to its leaving the master; it excludes \
          the mouth to the phone's encoder, the network, and everything after the master.",
@@ -56,6 +61,16 @@ fn slot_delay(row: &Row) -> String {
         (None, _) => "none".into(),
         (Some(ms), Delay::Pinned(_)) => format!("pinned {ms:.2}"),
         (Some(ms), Delay::Chosen) => format!("chosen {ms:.2}"),
+    }
+}
+
+/// Whether a row's corrector is on, the voice it heard and what it reported.
+fn corrector(row: &Row) -> String {
+    match row.corrector {
+        None => "off".into(),
+        Some(correction) => {
+            format!("on, {:.0} Hz voice, reports {}", correction.hz, range(correction.reported))
+        }
     }
 }
 
@@ -121,7 +136,7 @@ pub fn device(
                 "| {}, period {period} | {} | {} | {} | {:.2} to {:.2} | {output:.2} | {:.2} to {:.2} |",
                 row.ingest,
                 slot_delay(row),
-                if row.corrected { "on" } else { "off" },
+                corrector(row),
                 if row.cleanup { "on" } else { "off" },
                 least,
                 most,
@@ -146,7 +161,10 @@ blank when it reports none. **OS says output**: `StreamInfo`, the figure decisio
 house-mic path's own cost. **Moved**: most to least across the chirps of that opening; over 0.75 means no number. **Render spread**: how far block \
 renders stand from their mean, most to least, so a long callback's bursts show. **Mic path \
 at most**: the offline total plus the output: a sample entering the sender to its leaving the \
-speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer.";
+speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer. \
+**Corrector**: as in the offline table. An on row's offline total holds the delay the corrector \
+reported for its sweeps there; the output's figure is taken with the corrector off, since it \
+holds nothing past the master.";
 
 fn opening_row(opening: &Opening, air: f64) -> String {
     let asked = format!("{}, {}", opening.asked, opening.output_period);

@@ -21,6 +21,13 @@ impl Chirp {
         Self { low_hz: 500.0, high_hz: 7500.0, frames: RATE as usize / 5, level }
     }
 
+    /// 2 to 7.5 kHz over 50 ms, for a row with the corrector engaged. The corrector's detector
+    /// reads the long sweep as a pitch and shifts it; this one sits above a voice and its 43 ms
+    /// window barely holds it, so it goes through at the delay the corrector held. Decision 0009.
+    pub fn short(level: f32) -> Self {
+        Self { low_hz: 2000.0, high_hz: 7500.0, frames: RATE as usize / 20, level }
+    }
+
     /// The sweep at a frame position that need not be whole, so a test can build a delay of any
     /// fraction of a frame. Zero outside the sweep.
     pub fn at(&self, frame: f64) -> f32 {
