@@ -188,6 +188,29 @@ fn a_tone_stage_replays_with_its_left_out_amounts_at_0() {
 }
 
 #[test]
+fn a_tone_stage_the_engine_would_refuse_is_refused_with_the_engines_reason() {
+    let mut song = LiveSong::new("tone-refused", &["rtp"], None);
+    song.start();
+    // As written by hand: the live engine refuses this band in `setSlotEffects`, 2.3 ms late at
+    // 96 Hz by decision 0029, so it is a line here and never reaches the engine
+    song.line(json!({
+        "type": "setSlotEffects",
+        "index": 0,
+        "effects": [{
+            "kind": "tone",
+            "enabled": true,
+            "bands": [{ "kind": "peak", "hz": 100, "gainDb": 6, "q": 1 }]
+        }]
+    }));
+    song.play_to(SECOND / 2);
+    let (dir, _) = song.end();
+    let bundle = Bundle::read(&dir).unwrap();
+    let error = play(&bundle, &bundle.profile, None).err().unwrap();
+    assert!(error.starts_with("the tone stage's bands and air leave 9"), "{error}");
+    assert!(error.ends_with("ms late, over the 0.2 ms cap"), "{error}");
+}
+
+#[test]
 fn a_bundle_cut_short_replays_to_its_last_packet() {
     let mut song = LiveSong::new("cut", &["rtp"], None);
     song.start();

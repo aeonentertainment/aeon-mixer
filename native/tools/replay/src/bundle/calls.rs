@@ -70,6 +70,9 @@ pub fn effects(effects: &[Effect], profile: &EffectsProfile) -> Result<EffectPar
                     air_db: air_db.unwrap_or(0.0),
                     de_ess_db: de_ess_db.unwrap_or(0.0),
                 };
+                // The live engine refuses these in `setSlotEffects`, so a bundle the mixer wrote
+                // never holds them; one written by hand may, and would score a stage no host plays
+                chain.tone.check().map_err(|refusal| refusal.to_string())?;
             }
         }
     }
