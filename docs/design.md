@@ -1375,6 +1375,12 @@ section 7.2 with typed events and validation of ranges before anything crosses.
   stream runs while the graph is live. `stats().rtpReturn.droppedBlocks` is there because the
   packetizer hides a drop as a timestamp jump: without the count, a stalled network thread
   looks to the host like a quiet room.
+- `src/contract/` is the contract suite, exported as `@aeonentertainment/mixer/contract`.
+  `checkContract(subject)` runs the promises of 7.2 a host relies on, each a sentence, against
+  this package's module or a host's stand-in for it, on fresh offline engines, and returns the
+  ones broken with what it found. It imports no addon. An offline engine never moves, so the
+  move's promise runs only on a stand-in the host can move, through `moveOutput`. The package's
+  own suite runs it against the package.
 
 Done when: every method and event in 7.2 exists, `vp check` passes with no `any`, and the
 TypeScript suite exercises them on the offline engine.
@@ -1690,7 +1696,10 @@ slots whose calls left that value out.
 - The offline driver is the clock in every engine test. No test opens a device. A test that
   creates an `rtp` or `l16` slot binds that slot's ephemeral port, because the port is what it
   checks, and may bind it again to see it held; no test sends a datagram, since nothing marks
-  one's arrival to await, and the packet path is proven in Rust on the offline driver.
+  one's arrival to await, and the packet path is proven in Rust on the offline driver. The
+  contract suite's sender promises (8.8) are the exception: they prove the lock over a real
+  socket, so they send on loopback and pump a block a millisecond until `stats()` moves, under a
+  deadline only a broken promise reaches.
 - Every realtime `process` and `render` runs under the `assert_no_alloc` guard in tests. Its
   allocator panics on an allocation inside a guarded region, and the crate carries the `unsafe`
   so the engine does not.
