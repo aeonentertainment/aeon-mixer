@@ -139,10 +139,14 @@ rows: 0.963 before. It is the only artefact measure here that reads the splices 
 
 ## How it fits beside other work
 
-- **#67 and #90** change the reading and the control signal, not the shifter. #67 reads
-  `delaySamples()` to project the voice forward, and a lower delay makes that projection shorter.
-  Rebased onto either, the one line in `PitchCorrector` becomes
-  `shifter.setVoiced(reader.voiced())`.
+- **Decisions 0010 and 0013** change the reading and the control signal, not the shifter. The
+  reading projects the voice forward past `delaySamples()`, and a lower delay makes that
+  projection shorter. `PitchCorrector` tells the shifter `reader.voiced()`. With them the shifter
+  moves more, since correction acts on more of each note: on the golden vocal in the key of C, at
+  the first start offset, the sung p95 is 8.3 ms against 5.6 with this change alone, the largest
+  delay 11.0 against 6.4, and a line starts at a median of 2.2 ms against 1.7. On vocadito a line
+  starts at 1.2 to 2.4 ms against 1.1 to 1.7. The held-tone rows and the delay at rest do not
+  move.
 - **The octave for #48's higher and lower voices.** A floor that follows the ratio lets an octave
   up pay its own floor, 133 samples, only while it shifts an octave, and a voice and its correction
   would ride one sawtooth. Moving the octave in still needs the shift range opened to 18 semitones,

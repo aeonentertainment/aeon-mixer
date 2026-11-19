@@ -90,9 +90,9 @@ seen in the song's key went from 13.1 to 13.9 ms to 9.9 to 14.0 ms over four sta
 shifter's delay rides on the shift it is given, inside the same bound. CPU per correcting slot
 reads 0.66 % against 0.67 %.
 
-An agent cannot hear. The set for the blind listen in #46 puts this beside #67's corrector and
-off. Whether held notes sound like the singer, and whether the slower glide out of vibrato is
-heard, is for that listen.
+An agent cannot hear. The blind listen puts the corrector with decisions 0010, 0013 and 0021 beside
+the one before them and off. Whether held notes sound like the singer, and whether the slower glide
+out of vibrato is heard, is for that listen.
 
 ## What was rejected, and why
 

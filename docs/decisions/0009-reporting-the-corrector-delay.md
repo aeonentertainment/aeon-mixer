@@ -5,8 +5,8 @@
 ## The problem
 
 The corrector's shifter reads the voice back from a delay line. The delay climbs or falls with the
-shift, jumps by a pitch period at the end of its range, and stays where it is when the voice stops.
-On the golden vocal, one read per second gave 10.0, 1.2, 7.2, 7.6, 7.9, 1.3, 4.4 ms. A host needs
+shift, jumps by a pitch period at the end of its range, and moves down once the voice stops
+(decision 0021; before #112 it stayed where it was). On the golden vocal, one read per second gave 10.0, 1.2, 7.2, 7.6, 7.9, 1.3, 4.4 ms. A host needs
 something to do with that, and #44 first proposed adding the current figure to its configured
 latency.
 
@@ -67,10 +67,12 @@ GStreamer's figures sit inside the span: 10 of the 100 offsets give a p95 at or 
 max at or under 10.3. Decoding with ffmpeg in place of the engine's decoder reproduces #43's four
 offsets to 0.1 ms, so the decoder is not the gap either.
 
-The reason p95 moves so far is that the delay freezes in a rest and most of this clip is rest: 2840
-of the 3750 blocks in the window are unvoiced. At offset 0, the top 5 percent is 194 blocks and only
-8 are voiced. Nearly all of it is one 0.47 s rest, from 10.25 s, held at 11.9 ms. A statistic over
-time mostly says where the sawtooth stopped before the longest rest.
+The reason p95 moved so far, before #112, is that the delay froze in a rest and most of this clip is
+rest: 2840 of the 3750 blocks in the window are unvoiced. At offset 0, the top 5 percent was 194
+blocks and only 8 were voiced. Nearly all of it was one 0.47 s rest, from 10.25 s, held at 11.9 ms.
+A statistic over time mostly said where the sawtooth stopped before the longest rest. A rest now
+moves the delay down, so `measure-corrector` also reports it where the voice sounds and where a
+line starts.
 
 The voice is also really that low. Its guide reaches down to MIDI 40 and a tenth of its voiced
 readings sit under 87 Hz, so 13 ms is what such a voice costs and does not point to a detector error.
@@ -114,8 +116,9 @@ it. A short signal passes, since the detector's 43 ms window barely holds it. At
 both arrived exactly at the delay read before them.
 
 So the row plays an off-pitch voiced phrase, then a rest, then the short sweep, through the existing
-`MatchedFilter`. The phrase's length sets how far the delay has moved, and the row prints the span for
-a low, middle and high voice.
+`MatchedFilter`. Since #112 the rest moves the delay down to a quarter period above the shifter's
+floor unless it already sits lower, so the sweep mostly meets that height, and the row prints the
+span it found for a low, middle and high voice.
 
 Through Opus the onset rule took noise for the sweep. At 64 kb/s the codec leaves peaks 15 to 20 dB
 under the short sweep's and ahead of it, inside the rule's 20 dB, and with the corrector off it

@@ -101,9 +101,10 @@ frame runs all three, 47 microseconds in one block, and today every slot reads i
 is 0.75 ms of a 2.67 ms block at 16 slots on this machine, against 0.39 ms before. If a slower device
 misses blocks, staggering the slots is the first thing to try.
 
-The bound on the voice's delay does not change, 1.2 ms plus 1.125 periods. On the golden vocal the mean
-stays at about 5 ms and the largest delay seen rose from 12.0 to 13.9 ms in the song's key, since the
-corrector engages more often.
+This changes the reading, not the shifter, so the bound on the voice's delay does not move: 1.2 ms
+plus 1.125 periods then, one period and 0.25 ms since decision 0021. With the shifter of the time,
+the golden vocal's mean stayed at about 5 ms and the largest delay seen rose from 12.0 to 13.9 ms in
+the song's key, since the corrector engages more often.
 
 The cost in the voice is vibrato. A 50 cent vibrato at 5.5 Hz came out at 1.21 of its depth at full
 strength and 1.10 at 0.6, because late correction added to it. It now comes out at 0.82 and 0.85, and

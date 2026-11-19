@@ -129,8 +129,8 @@ What the engine reports so the rest of the device can follow:
   and the moved-to `latencyMs` after one, less the slot's mic-path latency, which the
   engine knows, plus a host-set `guideOffsetMs` for what it cannot know: the phone's capture and
   the Wi-Fi.
-- An engaged corrector delays its slot's voice by an amount that moves with the voice, and holds
-  it through a rest. `stats()` gives each slot `correctorDelayMs`, the delay as it stands, and
+- An engaged corrector delays its slot's voice by an amount that moves with the voice, and a
+  rest moves it down. `stats()` gives each slot `correctorDelayMs`, the delay as it stands, and
   `correctorMaxDelayMs`, its 13.5 ms ceiling; both read 0 with correction off. A host shows
   the first and budgets with the second. Neither enters a clock: nothing can play a live voice
   early, and the guide clock and a pitch reading both name the corrector's input, ahead of its
@@ -1188,7 +1188,9 @@ within 5 cents after the crossfade.
 
 The C++ leaves and the Rust stages that drive them. The corrector's sources start from Aeon
 Karaoke's `lib/dsp/pitch-corrector` at a named commit, with its vendored FFT; `PitchReader` and the
-period refinement are ours, [decision 0010](decisions/0010-pitch-reading.md). The stretcher is
+period refinement are ours, [decision 0010](decisions/0010-pitch-reading.md), as are `NoteCentre`
+([0013](decisions/0013-note-centre.md)) and the shifter's delay
+([0021](decisions/0021-one-period-and-a-rest.md)). The stretcher is
 signalsmith-stretch. The reverb is a Rust port of Freeverb. The voice shifter is Rust of our own,
 [decision 0004](decisions/0004-voice-shifter.md) has why and its delay bound. Each C++ kernel gets
 an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
