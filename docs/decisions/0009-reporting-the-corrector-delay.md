@@ -6,9 +6,9 @@
 
 The corrector's shifter reads the voice back from a delay line. The delay climbs or falls with the
 shift, jumps by a pitch period at the end of its range, and moves down once the voice stops
-(decision 0021; before #112 it stayed where it was). On the golden vocal, one read per second gave 10.0, 1.2, 7.2, 7.6, 7.9, 1.3, 4.4 ms. A host needs
-something to do with that, and #44 first proposed adding the current figure to its configured
-latency.
+(decision 0021; before #112 it stayed where it was). On the golden vocal, one read per second
+gave 10.0, 1.2, 7.2, 7.6, 7.9, 1.3, 4.4 ms. A host needs something to do with that, and #44 first
+proposed adding the current figure to its configured latency.
 
 ## Decision
 
