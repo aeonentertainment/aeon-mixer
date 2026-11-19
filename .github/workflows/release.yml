@@ -1,12 +1,10 @@
 # A release is one tarball that holds the TypeScript build and the prebuilt addon for every
 # platform, so installing it needs no Rust toolchain and runs no install script. Pushing a tag
 # `v<version>` attaches it to a GitHub release. A pull request that touches the release builds
-# and install-tests the same tarball without releasing it. Running the workflow by hand with a tag
-# publishes that release's tarball to npm and builds nothing.
+# and install-tests the same tarball without releasing it.
 #
 # Every job runs on a GitHub-hosted runner with no cache: a release is built on a clean machine
-# from nothing CI on our own runners wrote, and npm's trusted publishing does not accept those
-# runners.
+# from nothing CI on our own runners wrote.
 name: Release
 
 on:
@@ -16,25 +14,17 @@ on:
     paths:
       - .github/workflows/release.yml
       - package.json
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: The release whose tarball goes to npm, for example v0.3.0
-        required: true
 
 permissions:
   contents: read
 
-# Keyed on the release, not the branch: a dispatch from main waits days for its approval, and a
-# dispatch for another release must not queue behind it
 concurrency:
-  group: release-${{ inputs.tag || github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   addon:
     name: addon (${{ matrix.name }})
-    if: github.event_name != 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -163,31 +153,4 @@ jobs:
           tarball=$(ls aeonentertainment-mixer-*.tgz)
           integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
           gh release create "$GITHUB_REF_NAME" "$tarball" --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "$GITHUB_REF_NAME" --notes "npm integrity: \`$integrity\`"
-
-  # Publishes the tarball already attached to the GitHub release, so npm gets the bytes the install
-  # tests ran. No token: npm trades the job's OIDC identity for one, and it trusts only a job in
-  # the npm environment. That environment takes a `v*` tag or main and waits for a maintainer's
-  # approval, so a branch that rewrites this file still cannot publish.
-  npm:
-    name: npm publish
-    environment: npm
-    if: >-
-      always() &&
-      (github.event_name == 'workflow_dispatch' || needs.release.result == 'success')
-    needs: release
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
-        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "aeonentertainment-mixer-*.tgz"
-      - run: npm publish ./aeonentertainment-mixer-*.tgz --access public
+            --title "$GITHUB_REF_NAME" --notes "integrity: \`$integrity\`"
