@@ -1438,8 +1438,100 @@ master has the two levels, from
   out and its numbers moving with the delay.
 - **Not yet.** A fixture that holds `howlCatches` still: over a singer the guard catches the
   synthetic voice at some delays and not others (#245). Of the tone stage's rows (decision
-  0029), the five that compare a phone with a reference mic need that recording stored beside a
-  bundle, and `tone_late` and `tone_readings` come with the stage.
+  0029), the five that compare a phone with a reference mic read the reference a bundle holds
+  under `reference/` (the bench, below), and `tone_late` and `tone_readings` come with the stage.
+
+`native/tools/bench` is the mixer alone on a real clock, with no host application around it. A
+developer at a desk asks it "did my change make it worse" in one command, and the runs in #116
+that need only an output and a cable become a script. Like the tools above, it opens a device only
+when built with `hardware` and run with `--open-device`. Without that flag it runs on the timer
+clock (decision 0011), which opens nothing. Its tests run on the timer clock's synthetic clock,
+with fake outputs and inputs of their own. Device ids are the ones `measure-latency list` prints.
+
+```
+bench play BUNDLE [--backing STEMS] [--profile FILE] [--out DIR] [--baseline FILE] [--write FILE]
+                  [--open-device [--output ID] [--period 64|128]]
+bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--input ID]
+               [--input-channel N] [--period 64|128] [--level-db DB] [--baseline FILE] [--write FILE]
+```
+
+- **`play` is `replay` on a real clock.** It builds the mixer a bundle's manifest describes, under
+  the bundle's profile or `--profile`, with `--backing` as `replay` takes it. It reads the bundle
+  and resolves each call with `replay`'s own code, so the two cannot drift. Before the first block
+  it prepares the whole song: each call as the command it sends, each packet in its slot's order.
+  The render then hands each one to the engine in the block `replay` would, counted from the
+  manifest's frame. So on any clock the bench renders what `replay` renders of the same bundle,
+  sample for sample, and only the clock differs: the output's own, its period, and whatever else
+  the machine is doing. The scorecard's duet is the first bundle it plays.
+- **It follows no output.** An output that stops or changes ends the run and is named,
+  since a move would make the song differ from `replay`'s (8.11).
+- **What it measures** is what only a real clock can say: whether the mix kept up.
+  `output.underruns` counts the periods the output was not handed in time. `output.renderP99Ms`
+  and `output.renderMaxMs` time a block's render against the output's period, which is all the
+  time a render has. The song's
+  own numbers are the scorecard's: scoring the bundle the bench writes gives the scorecard's
+  numbers for the bundle it played, so the bench does not repeat them.
+- **It writes a bundle** to `--out`, as a mixer writes one (8.11), with the real output in the
+  manifest and `stats.jsonl` from the run. It keeps time by the output's frames: every `us` it
+  writes, a packet's or a line's, is the manifest's `us` plus the frames since, at 48 frames a
+  millisecond, and no packet is stamped later than the block it was handed to. Its pairs never
+  drift, so the bundle replays to the samples the bench rendered. The bench is a second writer of
+  format 1, held to it by `replay` reading what it writes in the bench's tests.
+- **`loopback` measures a house mic's mouth to speaker without a mouth.** It plays decision
+  0006's chirp into the output's left channel from the render, at frames it knows. A `capture`
+  slot (decision 0018) reads it back from the input the rig reaches: a cable from the output's left
+  channel, or a mic `--air-cm` from the speaker, as `measure-latency`'s rigs are. The slot is out
+  of the mix and its output is read before the master, so the loop never feeds itself. Both ends
+  are frames of the output's clock: the chirp's start as rendered and its arrival in the slot's
+  output. The gap between them is the output, the cable or the air, the input and what the
+  capture slot holds, which is the path a house mic's voice takes to the room. So the figure needs
+  no clock line and splits nothing (decision 0006 says why a loopback cannot be split).
+- **One detector.** It finds each chirp with `measure-latency`'s matched filter and onset rule,
+  taken from that crate as a library, and refuses where that tool does: an input that is silent
+  or stands under 30 dB over its noise, or chirps that disagree by more than 0.75 ms. Its numbers:
+  `loopback.roundTripMs`, the median chirp's gap less the air; `loopback.spreadMs`, how far the
+  chirps disagree; `loopback.gainDb`, the chirp's level as read against its level as played; and
+  `loopback.snrDb`, the first arrival over the input's noise.
+- **Its result is a scorecard file.** `play` names its numbers by the bundle's directory, as the
+  scorecard does, and `loopback` by `loopback`. `--write` and `--baseline` follow the scorecard's
+  rules, so two bench runs compare as two scorecards do. A bench figure belongs to its machine,
+  and a baseline taken on another machine says nothing about this one.
+- **What it prints**, for someone who has never seen it: what it played (the bundle, its slots,
+  its length, and whether the stems were found); on what (the output's name, rate, period and the
+  latency it reports, or the timer clock and that nothing was heard); each slot's `stats()` once a
+  second as it plays; and then what it measured, with a verdict in words. A run kept up, or fell
+  behind by so many periods. A round trip is set against decision 0008's 20 to 30 ms. Against a
+  baseline, each number that moved is printed with whether it moved past its tolerance. A refusal
+  prints why in place of a number.
+
+**A reference recording sits inside the bundle it pairs with.** A paired take (decision 0029) is
+a phone's slot and a reference vocal mic hearing one singer at once. The two move and are scored
+as one directory:
+
+```
+<bundle>/reference/
+  <n>.wav    the reference mic for slot n: mono, 48 kHz, 32-bit float
+  <n>.json   format 1; us, its first sample on the bundle's clock; the mic's name; distanceCm
+```
+
+- **On the bundle's clock.** `us` places the reference as a packet's arrival is placed, through
+  the bundle's pairs, so the scorecard lines the two takes up on one clock. The bench dates the
+  first sample against the output's frames with `measure-latency`'s clock lines, one under the
+  input's wakes and one under the output's, so the input's buffering drops out (decision 0006). An input on its own crystal drifts against the output by
+  up to 100 ppm, 18 ms over three minutes, which the paired rows' long-term spectra do not feel.
+- **Not `host/`.** The engine never looks inside `host/`, and the scorecard must read the
+  reference. `replay` and the mixer's own writer leave `reference/` alone.
+- **Privacy.** A reference holds the singer's voice as the bundle does, and is made under the
+  same consent (8.11).
+- **Not yet.** The live inputs: a phone sending RTP straight to a slot, a house mic on a `capture`
+  slot, and the reference mic recorded beside them, which make the paired takes. The layout is
+  fixed now so the scorecard's paired rows (#205) can be built against it on a synthetic pair.
+
+Done when: on the timer clock's synthetic clock and a fake output, `bench play` of the scorecard's
+duet renders what `replay` renders, sample for sample, under the allocation guard, and the bundle
+it writes replays to those samples; a fake loop of a known delay reads back as that delay plus
+what the capture slot reports holding, within a frame; and each #116 run it can now do is written
+there as its command.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
@@ -1473,6 +1565,7 @@ released sender meets, as 7.2 does.
   events.jsonl     every call that changes what is heard, and what the engine reported
   stats.jsonl      stats() once a second
   host/            the host's own files; the engine makes it and never looks inside
+  reference/       a reference mic's take per slot, written by the bench (8.9)
 ```
 
 - **The clock.** The audio thread adds each block to a count of output frames, an atomic it
