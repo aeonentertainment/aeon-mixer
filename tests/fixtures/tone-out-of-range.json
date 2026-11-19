@@ -1,0 +1,57 @@
+[
+  {
+    "effect": { "kind": "tone", "enabled": true, "plosiveDb": 13 },
+    "error": "plosiveDb must be between 0 and 12, got 13"
+  },
+  {
+    "effect": { "kind": "tone", "enabled": true, "airDb": -6 },
+    "error": "airDb must be between 0 and 6, got -6"
+  },
+  {
+    "effect": { "kind": "tone", "enabled": true, "deEssDb": 20 },
+    "error": "deEssDb must be between 0 and 12, got 20"
+  },
+  {
+    "effect": {
+      "kind": "tone",
+      "enabled": true,
+      "bands": [{ "kind": "low-shelf", "hz": 40, "gainDb": -3 }]
+    },
+    "error": "bands[0].hz must be between 80 and 16000, got 40"
+  },
+  {
+    "effect": {
+      "kind": "tone",
+      "enabled": true,
+      "bands": [{ "kind": "high-shelf", "hz": 20000, "gainDb": -6 }]
+    },
+    "error": "bands[0].hz must be between 80 and 16000, got 20000"
+  },
+  {
+    "effect": {
+      "kind": "tone",
+      "enabled": true,
+      "bands": [{ "kind": "peak", "hz": 1000, "gainDb": 7, "q": 1 }]
+    },
+    "error": "bands[0].gainDb must be between -12 and 6, got 7"
+  },
+  {
+    "effect": {
+      "kind": "tone",
+      "enabled": true,
+      "bands": [{ "kind": "peak", "hz": 1000, "gainDb": -3, "q": 0.1 }]
+    },
+    "error": "bands[0].q must be between 0.3 and 8, got 0.1"
+  },
+  {
+    "effect": {
+      "kind": "tone",
+      "enabled": true,
+      "bands": [
+        { "kind": "peak", "hz": 3000, "gainDb": 2, "q": 1 },
+        { "kind": "peak", "hz": 500, "gainDb": -13, "q": 1 }
+      ]
+    },
+    "error": "bands[1].gainDb must be between -12 and 6, got -13"
+  }
+]

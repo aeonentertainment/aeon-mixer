@@ -6,7 +6,7 @@ use std::path::Path;
 use engine::block::RATE;
 use engine::command::Command;
 use engine::params::{CorrectorParams, ReverbParams, ToneBand, ToneBands, ToneParams};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::Bundle;
 use super::live_song::{LiveSong, profile};
@@ -185,6 +185,48 @@ fn a_tone_stage_replays_with_its_left_out_amounts_at_0() {
     song.play_to(2 * SECOND + SECOND / 2);
     let (dir, live) = song.end();
     assert!(replay(&dir, None, None).mix == live);
+}
+
+#[test]
+fn a_tone_stage_the_engine_would_refuse_is_refused_with_the_engines_reason() {
+    let mut song = LiveSong::new("tone-refused", &["rtp"], None);
+    song.start();
+    // As written by hand: the live engine refuses this band in `setSlotEffects`, 2.3 ms late at
+    // 96 Hz by decision 0029, so it is a line here and never reaches the engine
+    song.line(json!({
+        "type": "setSlotEffects",
+        "index": 0,
+        "effects": [{
+            "kind": "tone",
+            "enabled": true,
+            "bands": [{ "kind": "peak", "hz": 100, "gainDb": 6, "q": 1 }]
+        }]
+    }));
+    song.play_to(SECOND / 2);
+    let (dir, _) = song.end();
+    let bundle = Bundle::read(&dir).unwrap();
+    let error = play(&bundle, &bundle.profile, None).err().unwrap();
+    assert!(error.starts_with("the tone stage's bands and air leave 9"), "{error}");
+    assert!(error.ends_with("ms late, over the 0.2 ms cap"), "{error}");
+}
+
+#[test]
+fn a_tone_value_out_of_its_range_is_refused_as_the_live_mixer_refuses_it() {
+    // The cases `tests/tone.test.ts` hands the live mixer, so the two lists cannot drift apart
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/tone-out-of-range.json");
+    let cases: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert!(!cases.is_empty());
+    for (n, case) in cases.iter().enumerate() {
+        let mut song = LiveSong::new(&format!("tone-range-{n}"), &["rtp"], None);
+        song.start();
+        song.line(json!({ "type": "setSlotEffects", "index": 0, "effects": [case["effect"]] }));
+        song.play_to(SECOND / 4);
+        let (dir, _) = song.end();
+        let bundle = Bundle::read(&dir).unwrap();
+        let error = play(&bundle, &bundle.profile, None).err().unwrap();
+        assert_eq!(error, case["error"].as_str().unwrap());
+    }
 }
 
 #[test]

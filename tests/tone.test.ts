@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "vite-plus/test";
-import { openEngine, type ToneBand } from "../src/index.ts";
+import { openEngine, type SlotEffect, type ToneBand } from "../src/index.ts";
 
 const lift = (hz: number): ToneBand => ({ kind: "peak", hz, gainDb: 6, q: 1 });
 const presence = (gainDb: number): ToneBand => ({ kind: "peak", hz: 3000, gainDb, q: 1 });
@@ -47,6 +48,22 @@ test("setSlotEffects refuses the blind match, which has no target yet, and a ban
   expect(() => mixer.setSlotEffects(0, [{ kind: "tone", enabled: true, airDb: 7 }])).toThrow(
     "airDb must be between 0 and 6, got 7",
   );
+  await mixer.destroy();
+  await engine.close();
+});
+
+// Replay's `a_tone_value_out_of_its_range_is_refused_as_the_live_mixer_refuses_it` reads the same
+// cases, so the ranges a bundle is held to cannot drift from the live mixer's
+test("setSlotEffects refuses each tone value out of its range in the words replay uses", async () => {
+  const fixture = new URL("./fixtures/tone-out-of-range.json", import.meta.url);
+  const cases: ReadonlyArray<{ effect: SlotEffect; error: string }> = JSON.parse(
+    readFileSync(fixture, "utf8"),
+  );
+  expect(cases.length).toBeGreaterThan(0);
+  const { engine, mixer } = await armed();
+  for (const { effect, error } of cases) {
+    expect(() => mixer.setSlotEffects(0, [effect])).toThrow(error);
+  }
   await mixer.destroy();
   await engine.close();
 });

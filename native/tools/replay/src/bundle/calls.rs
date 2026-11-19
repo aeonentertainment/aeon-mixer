@@ -9,7 +9,7 @@ use engine::params::{
 use engine::slot::guide::Note;
 
 use super::line::{Effect, Guide, SlotSettings, ToneBand};
-use super::profile::{EffectsProfile, SlotProfile};
+use super::profile::{EffectsProfile, SlotProfile, within};
 
 /// A slot as a mixer starts it: the profile's gain and pan, every effect off.
 pub fn slot_start(profile: &SlotProfile) -> SlotParams {
@@ -61,6 +61,23 @@ pub fn effects(effects: &[Effect], profile: &EffectsProfile) -> Result<EffectPar
             Effect::Cleanup { enabled } => chain.cleanup = CleanupParams { enabled },
             Effect::HowlGuard { enabled } => chain.howl_guard = HowlGuardParams { enabled },
             Effect::Tone { enabled, ref bands, plosive_db, air_db, de_ess_db } => {
+                // `src/tone.ts` holds each value to its range before the engine's caps judge the
+                // whole, in this order and these words
+                for (i, band) in bands.iter().flatten().enumerate() {
+                    let (hz, gain_db, q) = match *band {
+                        ToneBand::Peak { hz, gain_db, q } => (hz, gain_db, Some(q)),
+                        ToneBand::LowShelf { hz, gain_db }
+                        | ToneBand::HighShelf { hz, gain_db } => (hz, gain_db, None),
+                    };
+                    within(&format!("bands[{i}].hz"), hz, 80.0, 16_000.0)?;
+                    within(&format!("bands[{i}].gainDb"), gain_db, -12.0, 6.0)?;
+                    if let Some(q) = q {
+                        within(&format!("bands[{i}].q"), q, 0.3, 8.0)?;
+                    }
+                }
+                within("plosiveDb", plosive_db.unwrap_or(0.0), 0.0, 12.0)?;
+                within("airDb", air_db.unwrap_or(0.0), 0.0, 6.0)?;
+                within("deEssDb", de_ess_db.unwrap_or(0.0), 0.0, 12.0)?;
                 let bands: Vec<_> = bands.iter().flatten().map(tone_band).collect();
                 chain.tone = ToneParams {
                     enabled,
@@ -70,6 +87,9 @@ pub fn effects(effects: &[Effect], profile: &EffectsProfile) -> Result<EffectPar
                     air_db: air_db.unwrap_or(0.0),
                     de_ess_db: de_ess_db.unwrap_or(0.0),
                 };
+                // The live engine refuses these in `setSlotEffects`, so a bundle the mixer wrote
+                // never holds them; one written by hand may, and would score a stage no host plays
+                chain.tone.check().map_err(|refusal| refusal.to_string())?;
             }
         }
     }
