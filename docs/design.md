@@ -1463,7 +1463,7 @@ or each in a directory of them, as `replay` does, under `--profile` and with `--
 and turns each song into numbers. Every number is read from what the replay's engine reported, as
 `stats()`, `level` and `pitch` report it live, so it measures nothing a host could not see, except
 the two that read a reading's shift, pull and note start, which the binding does not carry yet
-(8.6). It
+(8.6), and the paired rows below, which read the mix against a recording no host has. It
 reads each slot's `stats()` after every block. Per recorded slot: `late`, `concealed` and
 `playoutDelayMs` as the song ended; `correctorDelayMs`, the mean of `correctorDelayMs` over the
 blocks it was above 0; `pitchErrorCents`, the median of `|errorSemitones|` in cents over the
@@ -1495,9 +1495,52 @@ master has the two levels, from
   fills noise in where the backing's waveform was, which leaves the canceller little to take
   out and its numbers moving with the delay.
 - **Not yet.** A fixture that holds `howlCatches` still: over a singer the guard catches the
-  synthetic voice at some delays and not others (#245). Of the tone stage's rows (decision
-  0029), the five that compare a phone with a reference mic need that recording stored beside a
-  bundle, and `tone_late` and `tone_readings` come with the stage.
+  synthetic voice at some delays and not others (#245).
+
+**The paired rows** judge the tone stage against a reference vocal mic (decision 0029). A slot `n`
+whose bundle holds `reference/<n>.wav` (8.11) is a paired take. Its rows read audio, not reports:
+the mix of a replay that holds only slot `n`'s packets and plays no stems, summed to mono. So a
+pair is sung with reverb and voice off, which the rows would score as tone.
+
+- **Two more replays.** `off` replays the take with every tone effect on slot `n` turned off, and
+  `on` replays it as it ran. A take whose stage was never on scores `off` alone and says so. Only
+  a paired bundle pays for them.
+- **Lining up.** The reference carries no clock. The scorecard reads both takes' levels every
+  10 ms and takes the lag, within 60 s either way, at which they correlate best over an overlap of
+  at least half the phone's take, and prints it. A best correlation under 0.5 scores no paired row
+  and says why. A recorder on its own crystal drifts by up to 100 ppm against the output, 18 ms
+  over three minutes, under one of the 85 ms frames below.
+- **Frames.** Over the overlap, frames of 4096 samples (85 ms) every 2048, Hann-windowed, each
+  classed on the reference: voiced when it stands within 30 dB of the reference's 95th-percentile
+  frame and holds more power under 5 kHz than over it; unvoiced when it stands as near and holds
+  more over; between lines when it is among the reference's quietest tenth. The phone's frames
+  take the reference's classes, so both takes are judged on the same moments. A take's voiced
+  level is the mean power of its voiced frames.
+- **The rows**, per slot and take, named as `slot0.pairDistanceDb.off`:
+  - `pairDistanceDb`, `off` and `on`: the mean power of the voiced frames in each of the 22 third
+    octaves from 100 Hz to 12.5 kHz, in dB, phone less reference, with the mean gap taken off to
+    match levels; the RMS of what is left.
+  - `pairLowDb`, `pairMidDb`, `pairPresenceDb` and `pairTopDb`, `off` and `on`: the mean of those
+    gaps over the third octaves centred from 100 Hz up to 400, 400 Hz up to 2 kHz, 2 up to 6 kHz,
+    and 6 to 12.5 kHz. Positive is louder than the mic there.
+  - `sibilanceDb`, `reference`, `off` and `on`: the mean power over 5 kHz in the unvoiced frames
+    against the voiced level.
+  - `plosivesPerMinute`, `reference`, `off` and `on`: the take through two of the engine's 100 Hz
+    Butterworth low-passes, 24 dB an octave, read every 10 ms; each run of readings that stands
+    over the voiced level is a burst, counted per minute of the overlap.
+  - `noiseFloorDb`, `reference`, `off` and `on`: the mean power of the frames between lines
+    against the voiced level.
+- **A bundle with no `reference/`** scores as it did before these rows, and the scorecard prints
+  that its paired rows were not scored. A reference with no `.json` beside it, or a format other
+  than 1, is refused by name.
+- **What it prints**, for someone tuning the stage who has not read decision 0029: for each
+  paired slot, the mic, its distance and the lag the takes lined up at; the rows for the
+  reference, the stage off and the stage on; and a sentence saying how far from the mic the phone
+  sounds with the stage off, and how much closer, or further, the stage brought it.
+- **The proof** is a synthetic pair the scorecard's tests write: a voice as the reference, and the
+  same voice through known bands as the phone's slot. Each row reads the gap the bands make, the
+  stage with the inverse bands brings `pairDistanceDb` toward 0, and both fixtures' baselines
+  hold.
 
 `native/tools/bench` is the mixer alone on a real clock, with no host application around it. A
 developer at a desk asks it "did my change make it worse" in one command, and the runs in #116
@@ -1600,6 +1643,7 @@ released sender meets, as 7.2 does.
   events.jsonl     every call that changes what is heard, and what the engine reported
   stats.jsonl      stats() once a second
   host/            the host's own files; the engine makes it and never looks inside
+  reference/       a reference mic's take of a slot, for the scorecard's paired rows (8.9)
 ```
 
 - **The clock.** The audio thread adds each block to a count of output frames, an atomic it
@@ -1657,9 +1701,20 @@ released sender meets, as 7.2 does.
 - **Nothing here touches the audio thread but that one store.** The pcaps cost the network thread
   what decision 0017 measured, once per slot. Events and stats are written on the control thread,
   each line whole, so a process that dies leaves a bundle that reads to its last line.
+- **`reference/`** holds a paired take's reference mic (decision 0029): `<n>.wav`, the reference
+  vocal mic for slot `n`, mono, 48 kHz, 32-bit float, started up to 60 s either side of the song;
+  and `<n>.json`, `{ "format": 1, "mic": "<its name>", "distanceCm": <from the mouth> }`, which the
+  scorecard prints. It needs no clock, since the scorecard lines the two takes up by their levels
+  (8.9), so a reference recorded on any machine and started by hand pairs. The scorecard reads it
+  and nothing else does: the mixer never writes it and `replay` never reads it. It is not under
+  `host/`, which is the host's own. A bundle with it or without it is format 1. Today a pair is
+  made two ways: the scorecard's tests write a synthetic one, and a person puts a recording there
+  with the steps in #116. Recording it from the bench, beside the slot it pairs with, is later
+  work: the bench has no command that records an input to a file.
 - **Privacy.** A bundle holds every singer's voice in the song. It is made only when the host
   asks for one, nothing in this package sends it anywhere (never-compromise 3), and the host
-  owns it and answers for each singer's consent (8.4).
+  owns it and answers for each singer's consent (8.4). A reference holds the singer's voice too,
+  and is made under the same consent.
 - **Replay.** `replay DIR [--profile FILE] [--backing STEMS] [--wav OUT] [--json]` builds the mixer
   the manifest describes on the offline driver, under the bundle's profile or the one `--profile`
   names (8.12), with the manifest's `frame` as its first block. Its graph is swapped in at the
