@@ -1507,8 +1507,10 @@ pair is sung with reverb and voice off, which the rows would score as tone.
   a paired bundle pays for them.
 - **Lining up.** The reference carries no clock. The scorecard reads both takes' levels every
   10 ms and takes the lag, within 60 s either way, at which they correlate best over an overlap of
-  at least half the phone's take, and prints it. A best correlation under 0.5 scores no paired row
-  and says why. A recorder on its own crystal drifts by up to 100 ppm against the output, 18 ms
+  at least half the phone's take, then refines that lag every 1 ms around it, and prints it. A
+  best correlation under 0.5 scores no paired row and says why. The correlation judged and
+  printed is the 10 ms one: 1 ms levels follow where each window falls in a pitch period, so two
+  mics that line up well still read lower there. A recorder on its own crystal drifts by up to 100 ppm against the output, 18 ms
   over three minutes, under one of the 85 ms frames below.
 - **Frames.** Over the overlap, frames of 4096 samples (85 ms) every 2048, Hann-windowed, each
   classed on the reference: voiced when it stands within 30 dB of the reference's 95th-percentile
@@ -1531,8 +1533,15 @@ pair is sung with reverb and voice off, which the rows would score as tone.
   - `noiseFloorDb`, `reference`, `off` and `on`: the mean power of the frames between lines
     against the voiced level.
 - **A bundle with no `reference/`** scores as it did before these rows, and the scorecard prints
-  that its paired rows were not scored. A reference with no `.json` beside it, or a format other
-  than 1, is refused by name.
+  that its paired rows were not scored.
+- **What is in `reference/`.** The folder is read once and every file opened by the name it was
+  found under, with `.wav` and `.json` in either case, since a recorder writes `.WAV`. One stray
+  file must not stop every bundle, so what is not a reference is skipped and named, with the
+  reason: a recording with no description beside it or a description with no recording, and any
+  other name, a note such as `mic.json` included. A hidden file, as a copy off a recorder's card
+  leaves, is passed over without a line. What could be read as another slot's is refused by
+  name: a number spelled another way (`01`, `+1`), two recordings or two descriptions for one
+  slot, and a format other than 1.
 - **What it prints**, for someone tuning the stage who has not read decision 0029: for each
   paired slot, the mic, its distance and the lag the takes lined up at; the rows for the
   reference, the stage off and the stage on; and a sentence saying how far from the mic the phone
