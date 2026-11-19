@@ -90,10 +90,19 @@ export type SlotConfig =
   | { kind: Exclude<IngestKind, "capture"> }
   | { kind: "capture"; device?: string; channel?: number };
 
+/**
+ * A stem is the encoded file at `path`, or the whole encoded file in `bytes`, decoded the same way:
+ * docs/design.md 8.5. `createMixer` reads `bytes` until it settles, so leave them unchanged until
+ * then. Either keeps every capability: seek, key and speed work on the decoded stem.
+ */
+export type BackingStem =
+  | { kind: StemKind; path: string; bytes?: never }
+  | { kind: StemKind; bytes: Uint8Array; path?: never };
+
 export interface MixerConfig {
   slots: ReadonlyArray<SlotConfig>;
   backing?: {
-    stems: ReadonlyArray<{ kind: StemKind; path: string }>;
+    stems: ReadonlyArray<BackingStem>;
     /** Semitones, rendered before start. */
     key: number;
     /** A factor, rendered before start. */

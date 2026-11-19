@@ -118,9 +118,10 @@ export declare class Mixer {
   release(): void
 }
 
+/** Each stem is its path, or the whole encoded file in memory. */
 export interface BackingInput {
-  instrumental: string
-  guide?: string
+  instrumental: string | Uint8Array
+  guide?: string | Uint8Array
   /** The armed key, rendered before start. */
   semitones: number
   /** The armed speed factor, rendered before start. */

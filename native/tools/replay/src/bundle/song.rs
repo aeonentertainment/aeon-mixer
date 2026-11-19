@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use assert_no_alloc::assert_no_alloc;
 use engine::audio_thread::{AudioThread, Controls};
-use engine::backing::{Backing, RenderJob, StemFiles};
+use engine::backing::{Backing, RenderJob, StemSources};
 use engine::block::BLOCK;
 use engine::command::{Command, Event as EngineEvent};
 use engine::driver::OfflineDriver;
@@ -82,7 +82,7 @@ pub(super) struct Ingest {
 pub fn play(
     bundle: &Bundle,
     profile: &Profile,
-    stems: Option<StemFiles>,
+    stems: Option<StemSources>,
 ) -> Result<Played, String> {
     let manifest = &bundle.manifest;
     let mut ingests = Vec::new();
