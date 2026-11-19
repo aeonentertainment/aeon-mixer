@@ -1438,8 +1438,8 @@ master has the two levels, from
   out and its numbers moving with the delay.
 - **Not yet.** A fixture that holds `howlCatches` still: over a singer the guard catches the
   synthetic voice at some delays and not others (#245). Of the tone stage's rows (decision
-  0029), the five that compare a phone with a reference mic read the reference a bundle holds
-  under `reference/` (the bench, below), and `tone_late` and `tone_readings` come with the stage.
+  0029), the five that compare a phone with a reference mic need that recording stored beside a
+  bundle, and `tone_late` and `tone_readings` come with the stage.
 
 `native/tools/bench` is the mixer alone on a real clock, with no host application around it. A
 developer at a desk asks it "did my change make it worse" in one command, and the runs in #116
@@ -1504,29 +1504,6 @@ bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--inpu
   baseline, each number that moved is printed with whether it moved past its tolerance. A refusal
   prints why in place of a number.
 
-**A reference recording sits inside the bundle it pairs with.** A paired take (decision 0029) is
-a phone's slot and a reference vocal mic hearing one singer at once. The two move and are scored
-as one directory:
-
-```
-<bundle>/reference/
-  <n>.wav    the reference mic for slot n: mono, 48 kHz, 32-bit float
-  <n>.json   format 1; us, its first sample on the bundle's clock; the mic's name; distanceCm
-```
-
-- **On the bundle's clock.** `us` places the reference as a packet's arrival is placed, through
-  the bundle's pairs, so the scorecard lines the two takes up on one clock. The bench dates the
-  first sample against the output's frames with `measure-latency`'s clock lines, one under the
-  input's wakes and one under the output's, so the input's buffering drops out (decision 0006). An input on its own crystal drifts against the output by
-  up to 100 ppm, 18 ms over three minutes, which the paired rows' long-term spectra do not feel.
-- **Not `host/`.** The engine never looks inside `host/`, and the scorecard must read the
-  reference. `replay` and the mixer's own writer leave `reference/` alone.
-- **Privacy.** A reference holds the singer's voice as the bundle does, and is made under the
-  same consent (8.11).
-- **Not yet.** The live inputs: a phone sending RTP straight to a slot, a house mic on a `capture`
-  slot, and the reference mic recorded beside them, which make the paired takes. The layout is
-  fixed now so the scorecard's paired rows (#205) can be built against it on a synthetic pair.
-
 Done when: on the timer clock's synthetic clock and a fake output, `bench play` of the scorecard's
 duet renders what `replay` renders, sample for sample, under the allocation guard, and the bundle
 it writes replays to those samples; a fake loop of a known delay reads back as that delay plus
@@ -1565,7 +1542,6 @@ released sender meets, as 7.2 does.
   events.jsonl     every call that changes what is heard, and what the engine reported
   stats.jsonl      stats() once a second
   host/            the host's own files; the engine makes it and never looks inside
-  reference/       a reference mic's take per slot, written by the bench (8.9)
 ```
 
 - **The clock.** The audio thread adds each block to a count of output frames, an atomic it
