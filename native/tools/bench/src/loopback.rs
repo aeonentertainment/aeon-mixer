@@ -16,6 +16,7 @@ use engine::driver::{Driver, Render};
 use engine::graph::Graph;
 use engine::ingest::{capture_voice, input_period_for};
 use engine::slot::Slot;
+use measure_latency::cli::{MAX_LEVEL_DB, under_clipper};
 use measure_latency::physical::Physical;
 use measure_latency::programme::Programme;
 use rtrb::RingBuffer;
@@ -23,6 +24,12 @@ use rtrb::RingBuffer;
 use crate::cli::LoopbackArgs;
 use crate::result;
 use crate::round_trip;
+
+/// The loudest sample the loopback hands an output: `measure-latency`'s cap, under the master's
+/// clipper, as amplitude, about 0.708.
+pub fn loudest() -> f32 {
+    10f32.powf(MAX_LEVEL_DB / 20.0)
+}
 
 /// Decision 0008's budget for the mic path, mouth to speaker, in ms.
 const BUDGET_MS: (f64, f64) = (20.0, 30.0);
@@ -79,6 +86,11 @@ pub fn loopback(
     input: impl FnOnce(u32) -> Box<dyn Capture + Send>,
     input_stats: Arc<Stats>,
 ) -> Result<Measured, String> {
+    // Refused before anything plays, whoever built `args`: a level no one can hear safely
+    if !args.level_db.is_finite() {
+        return Err(format!("--level-db takes a finite number, not {}", args.level_db));
+    }
+    under_clipper(args.level_db)?;
     let programme = programme(args.level_db);
     let played = programme.signal();
     let frames = played.len();
@@ -104,6 +116,7 @@ pub fn loopback(
     let slot_stats = voice.shared_stats();
     let render: Render = Box::new({
         let (signal, joined, slot) = (played.clone(), Arc::clone(&joined), Arc::clone(&slot_stats));
+        let loudest = loudest();
         // The programme's count, held at 0 until the capture slot says it has played its input:
         // until then it plays silence while it opens, primes and settles. So however late the
         // input opens, no chirp falls in that silence, and the floor is read from what the input
@@ -124,7 +137,9 @@ pub fn loopback(
                 if *frame < frames {
                     let _ = heard.push(*r);
                 }
-                (*l, *r) = (signal.get(*frame).copied().unwrap_or(0.0), 0.0);
+                // Never past the cap, whatever the programme holds: this goes to a real speaker
+                let chirp = signal.get(*frame).copied().unwrap_or(0.0);
+                (*l, *r) = (chirp.clamp(-loudest, loudest), 0.0);
                 *frame += 1;
                 // Once, after the programme's last frame: nothing is left on the clock to make late.
                 // A phase short the slot rode out is no stop, and the spread check judges what it
@@ -318,7 +333,8 @@ pub fn command(
     input: impl FnOnce(u32) -> Box<dyn Capture + Send>,
     input_stats: Arc<Stats>,
 ) -> Result<bool, String> {
-    let baseline = args.baseline.as_deref().map(scorecard::card::Scorecard::read).transpose()?;
+    let baseline = result::baseline(args.baseline.as_deref())?;
+    result::writable(args.write.as_deref())?;
     let measured = loopback(&args.loopback, output, output_stats, input, input_stats)?;
     let numbers = [
         ("loopback.roundTripMs", measured.round_trip_ms),

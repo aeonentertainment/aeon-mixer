@@ -3,6 +3,7 @@
 //! `replay` would, so the run renders what `replay` renders; what it measures is whether the
 //! clock got every block in time.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -31,12 +32,23 @@ pub fn play(
     driver: Box<dyn Driver + Send>,
     stats: Arc<Stats>,
 ) -> Result<bool, String> {
-    let (bundle, profile, stems) = report::load(&args.bundle, &args.replay).map_err(|e| {
-        format!("{} is not a session bundle bench can play: {e}", args.bundle.display())
-    })?;
-    let baseline = args.baseline.as_deref().map(Scorecard::read).transpose()?;
+    if !args.bundle.join("manifest.json").is_file() {
+        return Err(format!(
+            "{} is not a session bundle bench can play: it holds no manifest.json",
+            args.bundle.display()
+        ));
+    }
+    // Each error past here names the file it could not read: the bundle's, the stems', the profile
+    let (bundle, profile, stems) = report::load(&args.bundle, &args.replay)?;
+    let baseline = result::baseline(args.baseline.as_deref())?;
+    result::writable(args.write.as_deref())?;
     if let Some(out) = args.out.as_deref().filter(|out| out.exists()) {
         return Err(format!("{} already exists; --out writes a new bundle", out.display()));
+    }
+    let out_folder =
+        args.out.as_deref().and_then(Path::parent).filter(|f| !f.as_os_str().is_empty());
+    if let Some(folder) = out_folder.filter(|folder| !folder.is_dir()) {
+        return Err(format!("--out: the folder {} does not exist", folder.display()));
     }
     let stems_found = stems.is_some();
     let song = Song::prepare(&bundle, &profile, stems)?;

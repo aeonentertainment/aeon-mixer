@@ -7,11 +7,7 @@ use measure_latency::matched_filter::{
     MatchedFilter, ONSET_REACH, first_arrival, signal_to_noise_db,
 };
 use measure_latency::programme::Programme;
-use measure_latency::reading::{MAX_MOVED_MS, MIN_SNR_DB, median};
-
-/// Under this loudest sample the input heard nothing, which on macOS is what a refused microphone
-/// sounds like: `measure-latency`'s own bar.
-const SILENT_DB: f64 = -70.0;
+use measure_latency::reading::{MAX_MOVED_MS, MIN_SNR_DB, SILENT_DB, median, peak_db};
 
 /// Each chirp's figures, in programme order.
 pub struct RoundTrip {
@@ -51,8 +47,7 @@ pub fn read(
     programme: &Programme,
     air_ms: f64,
 ) -> Result<RoundTrip, String> {
-    let peak = heard.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
-    let peak_db = 20.0 * f64::from(peak).max(1e-9).log10();
+    let peak_db = peak_db(heard);
     if peak_db < SILENT_DB {
         return Err(format!(
             "the input is silent, its loudest at {peak_db:.0} dBFS: on macOS let this terminal use \
@@ -88,6 +83,13 @@ pub fn read(
         round_trip.snr_db = round_trip.snr_db.min(snr);
         round_trip.gaps_ms.push((back.frame - out.frame) * 1000.0 / f64::from(RATE) - air_ms);
         round_trip.gains_db.push(20.0 * (back.strength / out.strength).log10());
+    }
+    // The spread's own min and max would step over a NaN, and a scorecard cannot hold one
+    let figures = round_trip.gaps_ms.iter().chain(&round_trip.gains_db).chain([&round_trip.snr_db]);
+    if let Some(figure) = figures.copied().find(|figure| !figure.is_finite()) {
+        return Err(format!(
+            "a reading came out as {figure}, not a number: the distance or the level was not one"
+        ));
     }
     if round_trip.spread_ms() > MAX_MOVED_MS {
         return Err(format!(

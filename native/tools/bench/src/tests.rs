@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,6 +21,7 @@ use replay::bundle::song::Song;
 use scorecard::card::Scorecard;
 use serde_json::{Value, json};
 
+use measure_latency::cli::MAX_LEVEL_DB;
 use measure_latency::physical::Physical;
 
 use crate::cli::{Args, Clock, LoopbackArgs};
@@ -231,6 +232,8 @@ struct FakeLoop {
     input: Behaves,
     sink: Arc<Mutex<Option<Sink>>>,
     stats: Arc<Stats>,
+    /// The loudest sample the loopback handed the output, as `f32` bits: what a speaker played.
+    loudest: Arc<AtomicU32>,
 }
 
 /// Frames of the fake cable's ring: far past its length and the most a late wake holds back.
@@ -290,7 +293,7 @@ impl Capture for FakeInput {
 
 impl Driver for FakeLoop {
     fn start(self: Box<Self>, render: Render) -> Result<Running, DriverError> {
-        let Self { delay, period, input, sink, stats } = *self;
+        let Self { delay, period, input, sink, stats, loudest } = *self;
         // The first lock may set the lock up, which allocates, so it is taken here
         drop(sink.lock());
         let stop = Arc::new(AtomicBool::new(false));
@@ -308,6 +311,7 @@ impl Driver for FakeLoop {
                     assert_no_alloc(|| {
                         feed.take(period, |_, left, _| {
                             for sample in left {
+                                loudest.fetch_max(sample.abs().to_bits(), Ordering::Relaxed);
                                 chirped = chirped.or((*sample != 0.0).then_some(played));
                                 let floor = if input.hiss { hiss(&mut noise) } else { 0.0 };
                                 tape[played % TAPE] = sample + floor;
@@ -378,7 +382,8 @@ fn looped_into(delay: usize, period: usize, input: Behaves) -> Result<Measured, 
     let sink = Arc::new(Mutex::new(None));
     let (output_stats, input_stats) = (Arc::new(Stats::new()), Arc::new(Stats::new()));
     let stats = Arc::clone(&output_stats);
-    let output = FakeLoop { delay, period, input, sink: Arc::clone(&sink), stats };
+    let loudest = Arc::new(AtomicU32::new(0));
+    let output = FakeLoop { delay, period, input, sink: Arc::clone(&sink), stats, loudest };
     let args = Loopback { rig: Physical::Cable, level_db: -12.0 };
     let opens = |period| -> Box<dyn Capture + Send> { Box::new(FakeInput { sink, period }) };
     loopback(&args, Box::new(output), output_stats, opens, input_stats)
@@ -475,21 +480,43 @@ fn every_way_a_loopback_can_begin_reads_the_same_round_trip_or_is_refused_with_t
 /// granted `period` frames into an input that behaves as `input` says, writing its result to
 /// `write`.
 fn commanded(delay: usize, period: usize, input: Behaves, write: &Path) -> Result<bool, String> {
+    let loopback = Loopback { rig: Physical::Cable, level_db: -12.0 };
+    commanded_as(delay, period, input, loopback, None, Some(write)).0
+}
+
+/// The same, with the loopback's settings, baseline and result file as given, and the loudest
+/// sample the output was handed.
+fn commanded_as(
+    delay: usize,
+    period: usize,
+    input: Behaves,
+    loopback: Loopback,
+    baseline: Option<&Path>,
+    write: Option<&Path>,
+) -> (Result<bool, String>, f32) {
     let sink = Arc::new(Mutex::new(None));
     let (output_stats, input_stats) = (Arc::new(Stats::new()), Arc::new(Stats::new()));
-    let stats = Arc::clone(&output_stats);
-    let output = FakeLoop { delay, period, input, sink: Arc::clone(&sink), stats };
+    let (stats, loudest) = (Arc::clone(&output_stats), Arc::new(AtomicU32::new(0)));
+    let output = FakeLoop {
+        delay,
+        period,
+        input,
+        sink: Arc::clone(&sink),
+        stats,
+        loudest: Arc::clone(&loudest),
+    };
     let args = LoopbackArgs {
-        loopback: Loopback { rig: Physical::Cable, level_db: -12.0 },
+        loopback,
         output: None,
         input: None,
         input_channel: 0,
         period: period as u32,
-        baseline: None,
-        write: Some(write.to_owned()),
+        baseline: baseline.map(Path::to_owned),
+        write: write.map(Path::to_owned),
     };
     let opens = |period| -> Box<dyn Capture + Send> { Box::new(FakeInput { sink, period }) };
-    command(&args, Box::new(output), output_stats, opens, input_stats)
+    let run = command(&args, Box::new(output), output_stats, opens, input_stats);
+    (run, f32::from_bits(loudest.load(Ordering::Relaxed)))
 }
 
 #[test]
@@ -532,4 +559,48 @@ fn the_command_files_every_working_rig_and_refuses_each_broken_one_with_what_to_
         assert!(error.contains(says) && error.ends_with("The run measured nothing"), "{error}");
     }
     let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn the_command_plays_nothing_past_the_cap_and_files_no_number_that_is_not_one() {
+    let cable = |level_db| Loopback { rig: Physical::Cable, level_db };
+    // At the cap: the chirps reach the output at their peak and no further
+    let (run, loudest) = commanded_as(300, BLOCK, LOSSLESS, cable(MAX_LEVEL_DB), None, None);
+    assert_eq!(run, Ok(true));
+    assert!(loudest > 0.9 * crate::loopback::loudest(), "the chirps played: {loudest}");
+    assert!(loudest <= crate::loopback::loudest(), "never past the cap: {loudest}");
+    // Past it, or no number at all, however the settings were built: refused before anything plays
+    for level_db in [12.0, -2.0, f32::NAN, f32::INFINITY] {
+        let (run, loudest) = commanded_as(300, BLOCK, LOSSLESS, cable(level_db), None, None);
+        assert!(run.is_err(), "{level_db} dBFS is refused");
+        assert_eq!(loudest, 0.0, "{level_db} dBFS played nothing");
+    }
+    // A distance that is no number never reaches a printout or a file
+    let file = std::env::temp_dir().join(format!("aeon-bench-{}-nan.json", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let mic = Loopback { rig: Physical::Mic { air_cm: f64::NAN }, level_db: -12.0 };
+    let (run, _) = commanded_as(300, BLOCK, LOSSLESS, mic, None, Some(&file));
+    assert!(run.is_err_and(|error| error.contains("not a number")));
+    assert!(!file.exists(), "nothing was filed");
+}
+
+#[test]
+fn a_result_file_or_baseline_that_is_not_a_scorecard_is_refused_before_the_run() {
+    let file = std::env::temp_dir().join(format!("aeon-bench-{}-song.wav", std::process::id()));
+    std::fs::write(&file, b"RIFF, a song someone cared about").unwrap();
+    let cable = Loopback { rig: Physical::Cable, level_db: -12.0 };
+    let (run, loudest) = commanded_as(300, BLOCK, LOSSLESS, cable, None, Some(&file));
+    assert!(
+        run.is_err_and(|error| error.contains("would overwrite a file that is not a scorecard"))
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"RIFF, a song someone cared about");
+    assert_eq!(loudest, 0.0, "nothing played");
+    let cable = Loopback { rig: Physical::Cable, level_db: -12.0 };
+    let (run, _) = commanded_as(300, BLOCK, LOSSLESS, cable, Some(&file), None);
+    assert!(run.is_err_and(|error| error.starts_with("--baseline is not a scorecard bench wrote")));
+    let folder = std::env::temp_dir().join("aeon-bench-no-such-folder").join("result.json");
+    let cable = Loopback { rig: Physical::Cable, level_db: -12.0 };
+    let (run, _) = commanded_as(300, BLOCK, LOSSLESS, cable, None, Some(&folder));
+    assert!(run.is_err_and(|error| error.ends_with("its folder does not exist")));
+    std::fs::remove_file(&file).unwrap();
 }

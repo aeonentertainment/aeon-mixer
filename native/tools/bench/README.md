@@ -82,3 +82,10 @@ mic. A run that cannot stand for the path is refused, says what to check, and me
 | the chirps disagree by more than 0.75 ms                      | rerun with nothing else playing or recording                               |
 | the input stopped delivering sound while the chirps played    | check the cable or the mic's connection, and that nothing else uses it     |
 | a device went away, a stream failed, or the output stopped    | plug it back in or pick another device, and rerun                          |
+| `--level-db is at most -3`                                    | the chirps would reach the clipper: use the default -12, or up to -3       |
+| a flag `is for play`, or `is for loopback`                    | it belongs to the other command, and that run would not use it             |
+| `--write` would overwrite a file that is not a scorecard      | name a new file, or an earlier result to replace                           |
+| `--baseline is not a scorecard bench wrote`                   | name a file a `--write` wrote                                              |
+| a reading came out as not a number                            | the distance or the level given was not a number                           |
+
+The loopback never hands the output a sample past -3 dBFS, the cap above, whatever it was given.
