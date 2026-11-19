@@ -1228,15 +1228,20 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
 - A voice is a formant move in semitones from the singer's own. Voice names and their settings
   are presets and live with the host. Off, or on at 0, the stage hands the voice over bit for
   bit.
-- A voice that moves pitch will come through the corrector's shifter, which takes the
-  transposition into its own ratio, so a voice and correction cost one delay and not two, and
-  `correctorDelayMs` reports it. Its knob joins the contract with that work, not before.
 - Cleanup's stages are causal, with no lookahead and no frame. The high-pass is a 12 dB per
   octave Butterworth at 80 Hz, whose phase shift delays a fundamental by 1.8 ms at 110 Hz and
   0.4 at 220. The gate follows the room's own level, so it needs no threshold per phone, and
   takes up to 18 dB off between lines. The compressor is 3:1 over -30 dBFS with at most 6 dB of
   makeup, so it never brings a slot more than 6 dB closer to feedback. Off, each fades to unity
   over a block and then costs nothing.
+- The high-pass and a tone section switch a biquad two ways, on purpose. The high-pass crossfades
+  from dry to filtered over one block from a zeroed state, and is dry from the block after it
+  turns off. A tone section glides its coefficients from flat, and after it turns off runs as flat
+  until its ring settles. Side by side on 110 Hz harmonics over rumble, the glide's samples sit up
+  to 0.25 of full scale from the crossfade's in the block it turns on and the six after, up to 0.26
+  from dry for 16 blocks (43 ms) after off, and within 3.0e-8 of the crossfade's once settled. Moving the high-pass to the glide would remove
+  about ten lines and change what a singer hears at the switch, which only a listen and a
+  `measure-latency` run could clear. The crossfade stays.
 - The tone stage is `slot::effects::tone`, Rust biquads of its own with no kernel, run after the
   meter: `Tone::process(params, block)`. In order it is the plosive guard, the bands, the air
   shelf and the de-esser, so the de-esser judges the sibilance that leaves the stage. The match,
@@ -1617,8 +1622,9 @@ slots whose calls left that value out.
 
 Work is split so that agents run in parallel without touching the same files. A workstream
 owns the paths named in the module sections in its row. Shared files are `native/Cargo.toml`,
-`native/engine/src/lib.rs` and `src/index.ts`: add your own line, leave the rest. Each row is a
-GitHub issue, which carries what it is blocked by; each issue is one or more PRs.
+`native/engine/src/lib.rs` and `src/index.ts`: add your own line, leave the rest. The rows were
+the first build's workstreams, each an issue now closed. The table stays as the map of which
+module sections a piece of work owns: a new issue names the rows whose paths it touches.
 
 A measuring tool may add a read-only accessor to a kernel or engine type another workstream owns:
 one function that reports state, with no change to behaviour. That is how a tool reads state
@@ -1681,3 +1687,51 @@ Each is deliberate and here so no one reverts it by accident.
 - Choosing a slot's delay before `start`, from the packets a phone already sends to an armed mixer,
   so the first ten seconds of a song have the chosen delay too. Nothing here measures how long a
   mixer sits armed yet.
+- Higher and lower voices: an octave up with formants +3 semitones, and an octave down with -3,
+  the settings and research in decision 0014. They come through the corrector's shifter, which
+  reads its delay line at the product of the correction and the octave, so a voice with
+  correction costs the corrector's one delay and `correctorDelayMs` reports it. Through the voice
+  stage's own shifter they would cost a second delay, up to 31.5 ms at 82 Hz with correction on.
+  The pitch knob joins the contract with that work, and where it lives (with the corrector's
+  knobs, or only with a guide) is that work's to decide. It starts once the corrector's shifter
+  has settled, since it changes the same kernel, and is about four pull requests: the contract
+  with decision 0014, the kernel, the slot and binding, and a listen set. It is done when tones
+  an octave up and down land within a stated number of cents, `correctorMaxDelayMs` reads the
+  same with a voice and correction as with correction alone, a click leaves where it entered, and
+  a listen keeps them. The faults to listen for are known: an octave down on a 440 Hz voice keeps
+  more of the singer's own formants than the asked ones, and shifting down can drop a short
+  sound. With correction off, an octave voice pays the shifter's delay where today the slot pays
+  none: a cost on the mic path the listen has to justify. Deeper and brighter shipped without
+  them, and the beta's list does not name them.
+- Harmony: up to two voices per slot taken from the corrected voice, each a `VoiceShifter`
+  (decision 0004) at the diatonic interval the guide's note and `keyMask` give, panned off centre.
+  They run beside the dry voice, so the dry voice keeps its path and its delay, and each trails it
+  by decision 0004's bound, up to 15.0 ms at 82 Hz a tritone up and 16.5 ms an octave up; whether
+  that reads as fuller or as late is a listen's to say. No guide, no harmony, and the stage drops
+  a voice on unvoiced sound itself, since the kernel keeps shifting through consonants. On test
+  tones the kernel lands within 5 cents across an octave either way; its formants miss by under
+  2 dB RMS at 6 semitones down and 3 to 5 dB at 12 down on low voices. One voice is about 1.0 %
+  of a core on an M2 Pro, two on four slots about 8 %, of which voices on one slot could share
+  their pitch reading, about 0.2 of each 1 %, if the kernel could take one in. It was parked on
+  15 November 2026, and is best started after the corrector's listen, since it shifts the
+  corrected voice and would carry any warble into two more. Done when each voice lands within
+  10 cents of its interval on a test tone, the dry voice's click row does not move, four slots run
+  under the allocation guard with their CPU quoted, and a blind listen rates it at or above no
+  harmony.
+- `measureSlot(index)`: one call on a mixer that plays a test sound in the mix, finds it in one
+  slot's input, and resolves with the delay to the sample on the engine's clock and a confidence,
+  or with not heard and what was heard (the level, and how much of the sound), so a quiet phone
+  can be told from the wrong microphone. The sound goes out and back the way a voice does, so the
+  loop is the delay a singer hears and no clock is synced between the phone and the engine. The
+  detector is `measure-latency`'s, its chirp and matched filter moved where the engine can use
+  them, not a new one. Where the echo canceller is on, its delay finder and this share one
+  estimate, and the engine could follow the delay through a song from the backing in the mic. The
+  engine measures and reports; when to measure is the host's, which today plays a chime through
+  a short mixer and reads it back from `pitch` events, so a missed chime says nothing. It is a
+  new public method and about four pull requests: the contract in 7.2 and 8.8, the detector
+  shared out of `measure-latency`, the test sound and detection in the engine, and the binding
+  with its tests. Done when, on the offline driver, a slot fed the mix back at a known delay reads
+  it within a block, and one fed silence or the sound 40 dB down resolves as not heard and says
+  what it heard. Two things only hardware answers: whether a phone's noise suppression mangles
+  the sweep, and how the loop splits between the output and the phone, which a `capture` slot
+  with no network in its path can measure. It is not on the beta's list.
