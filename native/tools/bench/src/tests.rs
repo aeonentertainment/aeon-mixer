@@ -562,26 +562,35 @@ fn the_command_files_every_working_rig_and_refuses_each_broken_one_with_what_to_
 }
 
 #[test]
-fn the_command_plays_nothing_past_the_cap_and_files_no_number_that_is_not_one() {
+fn a_level_or_distance_no_one_can_measure_at_is_refused_before_anything_plays() {
     let cable = |level_db| Loopback { rig: Physical::Cable, level_db };
-    // At the cap: the chirps reach the output at their peak and no further
+    let mic = |air_cm| Loopback { rig: Physical::Mic { air_cm }, level_db: -12.0 };
+    let cap = 10f32.powf(MAX_LEVEL_DB / 20.0);
+    // At the cap the chirps play at the cap
     let (run, loudest) = commanded_as(300, BLOCK, LOSSLESS, cable(MAX_LEVEL_DB), None, None);
     assert_eq!(run, Ok(true));
-    assert!(loudest > 0.9 * crate::loopback::loudest(), "the chirps played: {loudest}");
-    assert!(loudest <= crate::loopback::loudest(), "never past the cap: {loudest}");
-    // Past it, or no number at all, however the settings were built: refused before anything plays
-    for level_db in [12.0, -2.0, f32::NAN, f32::INFINITY] {
-        let (run, loudest) = commanded_as(300, BLOCK, LOSSLESS, cable(level_db), None, None);
-        assert!(run.is_err(), "{level_db} dBFS is refused");
-        assert_eq!(loudest, 0.0, "{level_db} dBFS played nothing");
+    assert!(loudest > 0.95 * cap && loudest <= cap, "at the cap: {loudest} of {cap}");
+    // Each bad setting, at the command line and built directly, is refused and nothing plays
+    let file = std::env::temp_dir().join(format!("aeon-bench-{}-bad.json", std::process::id()));
+    let bad = [
+        ("--rig cable --level-db 12", cable(12.0)),
+        ("--rig cable --level-db -2", cable(-2.0)),
+        ("--rig cable --level-db NaN", cable(f32::NAN)),
+        ("--rig cable --level-db inf", cable(f32::INFINITY)),
+        ("--rig mic --air-cm nan", mic(f64::NAN)),
+        ("--rig mic --air-cm inf", mic(f64::INFINITY)),
+        ("--rig mic --air-cm -5", mic(-5.0)),
+    ];
+    for (flags, built) in bad {
+        let line = format!("loopback --open-device {flags} --write {}", file.display());
+        let parsed = crate::cli::parse(line.split_whitespace().map(str::to_owned));
+        assert!(parsed.is_err(), "{flags} is refused at the command line");
+        let _ = std::fs::remove_file(&file);
+        let (run, loudest) = commanded_as(300, BLOCK, LOSSLESS, built, None, Some(&file));
+        assert!(run.is_err(), "{flags}, built directly, is refused");
+        assert_eq!(loudest, 0.0, "{flags} played nothing");
+        assert!(!file.exists(), "{flags} filed nothing");
     }
-    // A distance that is no number never reaches a printout or a file
-    let file = std::env::temp_dir().join(format!("aeon-bench-{}-nan.json", std::process::id()));
-    let _ = std::fs::remove_file(&file);
-    let mic = Loopback { rig: Physical::Mic { air_cm: f64::NAN }, level_db: -12.0 };
-    let (run, _) = commanded_as(300, BLOCK, LOSSLESS, mic, None, Some(&file));
-    assert!(run.is_err_and(|error| error.contains("not a number")));
-    assert!(!file.exists(), "nothing was filed");
 }
 
 #[test]

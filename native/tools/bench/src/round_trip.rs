@@ -84,13 +84,6 @@ pub fn read(
         round_trip.gaps_ms.push((back.frame - out.frame) * 1000.0 / f64::from(RATE) - air_ms);
         round_trip.gains_db.push(20.0 * (back.strength / out.strength).log10());
     }
-    // The spread's own min and max would step over a NaN, and a scorecard cannot hold one
-    let figures = round_trip.gaps_ms.iter().chain(&round_trip.gains_db).chain([&round_trip.snr_db]);
-    if let Some(figure) = figures.copied().find(|figure| !figure.is_finite()) {
-        return Err(format!(
-            "a reading came out as {figure}, not a number: the distance or the level was not one"
-        ));
-    }
     if round_trip.spread_ms() > MAX_MOVED_MS {
         return Err(format!(
             "the chirps disagree by {:.2} ms, over the {MAX_MOVED_MS} ms a reading allows. The \

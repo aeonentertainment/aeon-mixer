@@ -86,6 +86,6 @@ mic. A run that cannot stand for the path is refused, says what to check, and me
 | a flag `is for play`, or `is for loopback`                    | it belongs to the other command, and that run would not use it             |
 | `--write` would overwrite a file that is not a scorecard      | name a new file, or an earlier result to replace                           |
 | `--baseline is not a scorecard bench wrote`                   | name a file a `--write` wrote                                              |
-| a reading came out as not a number                            | the distance or the level given was not a number                           |
 
-The loopback never hands the output a sample past -3 dBFS, the cap above, whatever it was given.
+The loopback plays nothing past -3 dBFS: it refuses any level that could pass it, and any distance
+that is not a number of centimetres, before it opens the output, however its settings were given.
