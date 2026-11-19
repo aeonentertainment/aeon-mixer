@@ -2,12 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BackingStem, type OutputInfo, TRANSPORTS } from "../types.ts";
-import { messageOf, startLive, within } from "./offline-clock.ts";
+import { messageOf, SETTLE_MS, startLive, within } from "./offline-clock.ts";
 import type { ContractMixer, ContractPromise, Trial } from "./contract-subject.ts";
 
 const RATE = 48000;
-/** How long a call the suite awaits may take to settle before it counts as never settling. */
-const SETTLE_MS = 2000;
 
 /** A quarter second of a 440 Hz sine as a mono 16-bit WAV at 48 kHz. */
 function sineWav() {
@@ -95,13 +93,15 @@ export const enginePromises: ReadonlyArray<ContractPromise> = [
       const { engine } = await trial.open();
       const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
       await startLive(engine, mixer);
-      const destroyed = mixer.destroy();
+      // Heard from the moment it is made, since the paths that return before reading it still
+      // leave it to settle; its deadline covers the close's as well as its own
+      const destroyed = within(mixer.destroy(), 2 * SETTLE_MS);
       // One block takes the swap; the fade out runs into the next, which never comes
       engine.pump(1);
       const closed = await within(engine.close(), SETTLE_MS);
       if (closed === "pending") return { found: "close never settled with a destroy in flight" };
       if ("error" in closed) return { found: `close rejected: ${messageOf(closed.error)}` };
-      if ((await within(destroyed, SETTLE_MS)) !== "pending") return undefined;
+      if ((await destroyed) !== "pending") return undefined;
       return { found: "destroy never settled after the engine closed mid-swap" };
     },
   },

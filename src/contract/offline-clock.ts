@@ -5,11 +5,19 @@ export const BLOCK = 128;
 /** The swap fade is 5 ms, under two blocks; the third block is clean. */
 const FADE_BLOCKS = 3;
 
-/** Starts `mixer` on the offline clock, pumping through the swap's fade so its acks arrive. */
+/** How long a call the suite awaits may take to settle before it counts as never settling. */
+export const SETTLE_MS = 2000;
+
+/**
+ * Starts `mixer` on the offline clock, pumping through the swap's fade so its acks arrive. The
+ * start is heard from the moment it is made, so a `pump` that throws leaves no rejection unheard.
+ */
 export async function startLive(engine: ContractEngine, mixer: ContractMixer) {
-  const started = mixer.start();
+  const started = within(mixer.start(), SETTLE_MS);
   engine.pump(FADE_BLOCKS);
-  return started;
+  const outcome = await started;
+  if (outcome === "pending") throw new Error("start never settled");
+  if ("error" in outcome) throw new Error(`start rejected: ${messageOf(outcome.error)}`);
 }
 
 /**

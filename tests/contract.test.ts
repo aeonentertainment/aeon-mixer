@@ -91,3 +91,43 @@ test("a stand-in is told each promise it breaks, in a sentence", async () => {
     },
   ]);
 }, 30_000);
+
+/** The package, except that `close` rejects once it has closed, so a destroy in flight rejects after it. */
+async function openRefusingClose(options: OpenEngineOptions & { output: { offline: true } }) {
+  const engine = await openEngine(options);
+  return {
+    get output() {
+      return engine.output;
+    },
+    pump: (blocks: number) => engine.pump(blocks),
+    on: engine.on.bind(engine),
+    createMixer: (config: Parameters<ContractEngine["createMixer"]>[0]) =>
+      engine.createMixer(config),
+    async close() {
+      await engine.close();
+      throw new Error("the stand-in could not close");
+    },
+  };
+}
+
+test("a stand-in whose close rejects gets its sentence, and the destroy it cut short is heard", async () => {
+  const unheard: unknown[] = [];
+  const hear = (reason: unknown) => unheard.push(reason);
+  process.on("unhandledRejection", hear);
+  try {
+    const report = await checkContract({
+      openEngine: openRefusingClose,
+      outputDevices: testOsOutputs,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(report.broken).toEqual([
+      {
+        promise: "`destroy` settles when the engine closes in the middle of its swap.",
+        found: "close rejected: the stand-in could not close",
+      },
+    ]);
+    expect(unheard).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", hear);
+  }
+}, 30_000);
