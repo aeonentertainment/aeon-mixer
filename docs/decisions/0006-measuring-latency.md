@@ -138,11 +138,11 @@ Offline, 15 ms playout, in ms:
 | push 10 ms           | 10.00          | 0.00           | 2.02 to 2.67   | 12.02 to 12.67 |
 | capture 2.7 ms       | 2.67           | 0.00           | 0.35 to 3.00   | 3.02 to 5.67   |
 
-The engine adds nothing on the mic path beyond the playout delay and the wait for the next block, to
-within 0.02 ms. The range is that wait: the first packet anchors the stream, so where it lands in a
-block sets the delay for the whole stream. Most of what the path spends is the sender's. Going from
-20 ms voice frames to 2.5 ms low-delay frames saves 21.5 ms, far more than anything left in the
-engine.
+On every path a sender takes, the engine adds nothing beyond the playout delay and the wait for the
+next block, to within 0.02 ms. The range is that wait: the first packet anchors the stream, so where
+it lands in a block sets the delay for the whole stream. Most of what the path spends is the
+sender's. Going from 20 ms voice frames to 2.5 ms low-delay frames saves 21.5 ms, far more than
+anything left in the engine.
 
 A house mic captured a block at a time has no jitter buffer and no sender beyond its input's
 period. Its ring holds the sample as decision 0018 sets, so its total is under every path a

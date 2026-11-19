@@ -3,10 +3,7 @@
 
 use std::fmt::Write;
 
-use engine::block::BLOCK;
-
 use crate::cli::DeviceArgs;
-use crate::ingest::Ingest;
 use crate::machine;
 use crate::offline::{Row, ms};
 use crate::opening::Opening;
@@ -89,11 +86,13 @@ pub fn range((least, most): (f64, f64)) -> String {
 }
 
 /// The device tables: one row per opening, then every path with the output's figure added on.
+/// `by_period` holds the offline rows under each output period the openings were granted
+/// (`offline::under_callback`).
 pub fn device(
     args: &DeviceArgs,
     programme: &Programme,
     openings: &[Opening],
-    rows: &[Row],
+    by_period: &[(u32, Vec<Row>)],
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "### measure-latency device, commit {}", machine::commit());
@@ -123,7 +122,8 @@ pub fn device(
         "\n| path | slot's delay | corrector | cleanup | offline total | output at most | mic path at most |\n\
          | --- | --- | --- | --- | ---: | ---: | ---: |"
     );
-    for period in distinct_periods(openings) {
+    for (period, rows) in by_period {
+        let period = *period;
         let readings: Vec<f64> = openings
             .iter()
             .filter(|opening| opening.output_period == period)
@@ -134,16 +134,8 @@ pub fn device(
             continue;
         }
         let output = median(&readings);
-        let block = BLOCK as u32;
         for row in rows {
-            // A longer callback than the block drains packets less often, which the offline run,
-            // whose callback is one block, cannot see. A capture ring holds the whole blocks the
-            // wake pulls after its first, as decision 0018 has it
-            let extra = f64::from(match row.ingest {
-                Ingest::Capture { .. } => (period.div_ceil(block) * block).saturating_sub(block),
-                _ => period.saturating_sub(block),
-            });
-            let (least, most) = (ms(row.lag.0), ms(row.lag.1 + extra));
+            let (least, most) = (ms(row.lag.0), ms(row.lag.1));
             let _ = writeln!(
                 out,
                 "| {}, period {period} | {} | {} | {} | {:.2} to {:.2} | {output:.2} | {:.2} to {:.2} |",
@@ -174,7 +166,10 @@ blank when it reports none. **OS says output**: `StreamInfo`, the figure decisio
 house-mic path's own cost. **Moved**: most to least across the chirps of that opening; over 0.75 means no number. **Render spread**: how far block \
 renders stand from their mean, most to least, so a long callback's bursts show. **Mic path \
 at most**: the offline total plus the output: a sample entering the sender to its leaving the \
-speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer. \
+speaker. It excludes the mouth to the phone's encoder, the network, and the air to the singer. A \
+capture row's offline total is measured under the row's period, with the input a host opens beside \
+that callback, and is absent under a period a capture slot refuses; every other row's adds the \
+period's excess over a block to its latest frame, for packets drained less often. \
 **Corrector**: as in the offline table. An on row's offline total holds the delay the corrector \
 reported for its sweeps there; the output's figure is taken with the corrector off, since it \
 holds nothing past the master.";
@@ -219,7 +214,8 @@ fn distinct<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<&'a String> {
     seen
 }
 
-fn distinct_periods(openings: &[Opening]) -> Vec<u32> {
+/// The output periods the openings were granted, each once.
+pub fn distinct_periods(openings: &[Opening]) -> Vec<u32> {
     let mut periods: Vec<u32> = openings.iter().map(|opening| opening.output_period).collect();
     periods.sort_unstable();
     periods.dedup();

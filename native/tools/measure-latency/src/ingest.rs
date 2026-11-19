@@ -1,6 +1,7 @@
 use std::fmt;
 
 use engine::block::{BLOCK, RATE};
+use engine::ingest::{capture_voice, input_period_for};
 
 /// Which encoder a phone runs. The engine decodes both the same; what differs is the lookahead
 /// the sender pays before a packet leaves.
@@ -13,15 +14,16 @@ pub enum Encoder {
 }
 
 /// One way audio reaches a slot, with the sender's chunk of it in frames. Docs/design.md 8.4 is
-/// the engine's side of each; `Capture` is a house mic on this machine, on the output's clock. A
-/// new ingest kind is one more variant here, and it gets a row of the table and a guard on its
-/// number from there.
+/// the engine's side of each. `Capture` is a house mic on this machine, on the output's clock,
+/// opened as a host opens one under an output whose callback takes `callback` frames a wake. A new
+/// ingest kind is one more variant here, and it gets a row of the table and a guard on its number
+/// from there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ingest {
     Rtp { frame: usize, encoder: Encoder },
     L16 { frame: usize },
     Push { chunk: usize },
-    Capture { period: usize },
+    Capture { callback: u32 },
 }
 
 impl Ingest {
@@ -40,7 +42,7 @@ impl Ingest {
             low_delay(120),
             Self::L16 { frame: HOUSE_MIC_FRAME },
             Self::Push { chunk: RATE as usize / 100 },
-            Self::Capture { period: BLOCK },
+            Self::Capture { callback: BLOCK as u32 },
         ]
     }
 
@@ -49,8 +51,27 @@ impl Ingest {
         match *self {
             Self::Rtp { frame, .. } | Self::L16 { frame } => frame,
             Self::Push { chunk } => chunk,
-            Self::Capture { period } => period,
+            Self::Capture { callback } => input_period_for(callback) as usize,
         }
+    }
+
+    /// The output's callback this path is measured under, in frames. Only a capture slot is
+    /// measured under one longer than a block: a longer one drains every other path's packets less
+    /// often, and device mode adds that to its latest frame.
+    pub fn callback(&self) -> usize {
+        match *self {
+            Self::Capture { callback } => callback as usize,
+            _ => BLOCK,
+        }
+    }
+
+    /// Whether the output wakes at the block that starts on output frame `frame`, so that what has
+    /// arrived reaches the slot there. The engine renders a block at a time and pulls back to back
+    /// what a wake's callback needs, so a wake is the first block at or past each callback's
+    /// start, and every block under a callback of a block or less.
+    pub fn wakes_at(&self, frame: u64) -> bool {
+        let (callback, block) = (self.callback() as u64, BLOCK as u64);
+        callback <= block || (frame + callback) / callback != (frame + callback - block) / callback
     }
 
     /// Frames from the stream's start within which the slot plays it. A capture slot plays silence
@@ -60,6 +81,17 @@ impl Ingest {
         match self {
             Self::Capture { .. } => RATE as usize / 2,
             _ => 0,
+        }
+    }
+
+    /// Whether a host can open this path. A capture slot refuses an output callback its ring
+    /// cannot hold beside the input (decision 0018), past 3712 frames.
+    pub fn opens(&self) -> bool {
+        match *self {
+            Self::Capture { callback } => {
+                capture_voice().1.for_input(input_period_for(callback), 0, callback).is_ok()
+            }
+            _ => true,
         }
     }
 
