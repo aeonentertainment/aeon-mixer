@@ -1497,11 +1497,10 @@ master has the two levels, from
 - **The fixtures.** Its tests score bundles written on the offline driver, with no real voice in
   them, against a committed baseline, so a change that moves one of their numbers past its
   tolerance fails `cargo test`: a short duet for the mic path and the corrector, and a house mic
-  in a room for the echo canceller. The canceller's is a house mic's because a phone's Opus
-  fills noise in where the backing's waveform was, which leaves the canceller little to take
-  out and its numbers moving with the delay.
-- **Not yet.** A fixture that holds `howlCatches` still: over a singer the guard catches the
-  synthetic voice at some delays and not others (#245).
+  in a room for the echo canceller and the howl guard, the room playing back what the master
+  carried. The canceller's is a house mic's because a phone's Opus fills noise in where the
+  backing's waveform was, which leaves the canceller little to take out and its numbers moving
+  with the delay.
 
 **The paired rows** judge the tone stage against a reference vocal mic (decision 0029). A slot `n`
 whose bundle holds `reference/<n>.wav` (8.11) is a paired take. Its rows read audio, not reports:
