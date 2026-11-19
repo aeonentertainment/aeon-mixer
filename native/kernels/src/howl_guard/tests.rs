@@ -327,6 +327,42 @@ fn a_voice_whose_fundamental_stands_alone_is_not_caught_at_any_delay() {
     assert!(caught.len() <= MOST_CAUGHT, "{caught:?}");
 }
 
+/// The first catch, in frames after the howl starts, of a howl at 1.2 kHz from -40 dBFS growing 25
+/// dB a second from 2 s into each `voice`, which sings at -20 dBFS, at five delays; and the howl's
+/// level then, in dBFS. A catch before the howl starts, or none, is `None`.
+fn howls_caught_under(voices: &[Vec<f32>]) -> Vec<Option<(usize, f32)>> {
+    let rate = RATE as usize;
+    let frames = voices[0].len();
+    let starts = 2 * rate;
+    let residual = at_db(pink_noise(frames, 3), -46.0);
+    // In RMS, as `at_db` levels the voice: a sine's peak is 3 dB over its RMS
+    let howl_db = |i: usize| -40.0 + 25.0 * i as f32 / RATE as f32;
+    let howl = sine(1200.0, frames - starts, |i| howl_db(i) + 3.01);
+    let mut caught = Vec::new();
+    for voice in voices {
+        for delay in delays().step_by(8) {
+            let mut heard = residual.clone();
+            for (heard, sung) in heard[delay..].iter_mut().zip(voice) {
+                *heard += sung;
+            }
+            for (heard, howl) in heard[starts..].iter_mut().zip(&howl) {
+                *heard += howl;
+            }
+            let (_, catches) = guarded_catching(heard);
+            let after = catches.first().and_then(|&at| at.checked_sub(starts + 1)).map(|at| at + 1);
+            caught.push(after.map(|after| (after, howl_db(after))));
+        }
+    }
+    caught
+}
+
+/// Whether each of `caught` came within 950 ms of the howl starting and before the howl stood
+/// 3 dB over the singer.
+fn before_it_is_louder(caught: &[Option<(usize, f32)>]) -> bool {
+    let rate = RATE as usize;
+    caught.iter().all(|c| c.is_some_and(|(after, db)| after < 950 * rate / 1000 && db < -17.0))
+}
+
 // A howl under a singer whose fundamental stands alone: 1.2 kHz from -40 dBFS growing 25 dB a
 // second, starting 2 s into the song, under that voice at -20 dBFS, at five delays and three
 // singers. The guard follows the singer's fundamental and the howl as two tones, so the howl is
@@ -335,32 +371,51 @@ fn a_voice_whose_fundamental_stands_alone_is_not_caught_at_any_delay() {
 // caught the howl only about 10 dB over them, 1.2 s in.
 #[test]
 fn a_howl_under_a_singer_is_caught_before_it_is_louder_than_them() {
-    let (rate, frames) = (RATE as usize, 6 * RATE as usize);
-    let starts = 2 * rate;
-    let residual = at_db(pink_noise(frames, 3), -46.0);
-    // In RMS, as `at_db` levels the voice: a sine's peak is 3 dB over its RMS
-    let howl_db = |i: usize| -40.0 + 25.0 * i as f32 / RATE as f32;
-    let howl = sine(1200.0, frames - starts, |i| howl_db(i) + 3.01);
-    for seed in [5, 7, 11] {
-        let voice = at_db(dark_talker(frames, 140.0, seed), -20.0);
-        for delay in delays().step_by(8) {
-            let mut heard = residual.clone();
-            for (heard, sung) in heard[delay..].iter_mut().zip(&voice) {
-                *heard += sung;
+    let frames = 6 * RATE as usize;
+    let voices: Vec<_> =
+        [5, 7, 11].map(|seed| at_db(dark_talker(frames, 140.0, seed), -20.0)).into();
+    let caught = howls_caught_under(&voices);
+    assert!(before_it_is_louder(&caught), "caught at {caught:?}");
+}
+
+/// A singer whose fundamental stands alone, singing legato from C4 with no breath: each note 250 to
+/// 500 ms, then a leap of a third, a fourth or a fifth up or down, kept between G3 and C5.
+fn legato_leaps(frames: usize, seed: u32) -> Vec<f32> {
+    let mut rng = crate::fixtures::Lcg::new(seed);
+    let second = 10f32.powf(-15.0 / 20.0);
+    let (mut midi, mut phase, mut until) = (60.0f32, 0.0f32, 0);
+    (0..frames)
+        .map(|i| {
+            if i == until {
+                if i > 0 {
+                    let leap = [3.0, 4.0, 5.0, 7.0][(rng.sample().abs() * 3.99) as usize];
+                    let up = if rng.sample() > 0.0 { leap } else { -leap };
+                    midi = if (55.0..=72.0).contains(&(midi + up)) { midi + up } else { midi - up };
+                }
+                until = i + ((0.25 + 0.25 * rng.sample().abs()) * RATE as f32) as usize;
             }
-            for (heard, howl) in heard[starts..].iter_mut().zip(&howl) {
-                *heard += howl;
-            }
-            let (_, catches) = guarded_catching(heard);
-            let first = catches.first().copied();
-            let caught = first.filter(|&at| at > starts).map(|at| at - starts);
-            assert!(
-                caught.is_some_and(|after| after < 950 * rate / 1000 && howl_db(after) < -17.0),
-                "seed {seed} at {} ms: first catch at {first:?}",
-                delay / 48
-            );
-        }
-    }
+            let hz = 440.0 * 2f32.powf((midi - 69.0) / 12.0);
+            phase = (phase + hz / RATE as f32).fract();
+            let partials: f32 = (1..=12)
+                .map(|h| {
+                    let gain = if h == 1 { 1.0 } else { second * 2.0 / h as f32 };
+                    gain * (std::f32::consts::TAU * h as f32 * phase).sin()
+                })
+                .sum();
+            partials * (i as f32 / (0.02 * RATE as f32)).min(1.0)
+        })
+        .collect()
+}
+
+// The same howl under that singer singing legato leaps, a new note every 250 to 500 ms with no
+// breath between them, held to the same bar. A leap takes the singer past the reach of the tone
+// that followed them, and the new note must not take the place of the howl that is growing.
+#[test]
+fn a_howl_under_a_singer_leaping_legato_is_caught_before_it_is_louder_than_them() {
+    let frames = 6 * RATE as usize;
+    let voices: Vec<_> = [5, 7, 11].map(|seed| at_db(legato_leaps(frames, seed), -20.0)).into();
+    let caught = howls_caught_under(&voices);
+    assert!(before_it_is_louder(&caught), "caught at {caught:?}");
 }
 
 // A note's edge can cost the guard a sight of the tone just as it settles. A whistle at 1.2 kHz

@@ -56,7 +56,9 @@ pub struct Track {
     anchor: f32,
     held: u32,
     /// The note of a fast run it holds now: where it sits, for how many sightings, and the level
-    /// it came in at.
+    /// it came in at. The rings hold the same sightings, but a fixed window of the last few of them
+    /// judges a different thing from the whole note: read that way, a run up 1 dB a note was
+    /// ducked, and a howl a corrector moves a semitone at a time was caught at 725 ms, not 299.
     note_at: f32,
     note_sightings: u32,
     note_db: f32,
@@ -106,6 +108,11 @@ impl Track {
     pub fn keep(&mut self, peak: &Peak) {
         self.bin = peak.bin;
         self.missed = 0;
+    }
+
+    /// Analyses since it was last seen, 0 when it was seen in the latest.
+    pub fn missed(&self) -> u32 {
+        self.missed
     }
 
     /// The bin it was last seen at.

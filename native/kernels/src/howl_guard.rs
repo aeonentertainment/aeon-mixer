@@ -109,7 +109,7 @@ impl HowlGuard {
     }
 
     /// Follows each tone to the nearest of the `found` peaks that continues it, and starts tones on
-    /// the loudest of the rest that stand alone, in place of the quietest tone when it has no room.
+    /// the loudest of the rest that stand alone.
     /// True when a tone runs away while standing alone.
     fn follow(&mut self, found: usize) -> bool {
         let peaks = &self.peaks[..found];
@@ -144,9 +144,20 @@ impl HowlGuard {
             if taken[i] || !peak.alone {
                 continue;
             }
+            // An empty slot first, then the tone unseen longest: a singer who leaps leaves their
+            // old note unseen, and it is that, not a tone seen growing, that makes room. A tone
+            // seen this analysis gives way only to a louder peak, and only when every tone was seen
+            let unseen = |slot: &Option<Track>| slot.map_or(u32::MAX, |track| track.missed());
             let level = |slot: &Option<Track>| slot.map_or(f32::MIN, |track| track.level());
-            let quietest = self.tracks.iter_mut().min_by(|a, b| level(a).total_cmp(&level(b)));
-            if let Some(slot) = quietest.filter(|slot| level(slot) < peak.db) {
+            let slot = match self.tracks.iter_mut().max_by_key(|slot| unseen(slot)) {
+                Some(slot) if unseen(slot) > 0 => Some(slot),
+                _ => self
+                    .tracks
+                    .iter_mut()
+                    .min_by(|a, b| level(a).total_cmp(&level(b)))
+                    .filter(|slot| level(slot) < peak.db),
+            };
+            if let Some(slot) = slot {
                 *slot = Some(Track::new(peak));
             }
         }
