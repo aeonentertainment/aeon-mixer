@@ -6,12 +6,13 @@ use crate::pitch::{Pitch, PitchClassMask};
 /// Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 5 ms it reads
 /// the input, from the shortest window that can vouch for the voice; the distance from where the
 /// voice is now to the nearest class in the target, scaled by the strength and eased in over the
-/// retune time, becomes a transposition a time-domain shifter applies. Once the voice swings
-/// around a held note, the ease slows to 120 ms, so the note's centre is corrected and the vibrato
-/// is the singer's. The output trails the input by at most one period of the voice and 0.25 ms,
-/// 1.3 ms when shifting six semitones up, and a rest moves it down. At strength 0 the output is the
-/// input itself with no delay, and turning the strength up from or down to 0 crossfades over
-/// 20 ms; it reads either way. Decisions 0010, 0013 and 0021 in docs/decisions say why.
+/// retune time, becomes a transposition a time-domain shifter applies. Once the voice swings around
+/// a held note, the ease slows to 120 ms, so the note's centre is corrected and the vibrato is the
+/// singer's. The output trails the input by at most one period of the voice and 0.25 ms, 1.3 ms
+/// when shifting six semitones up, and a rest under -50 dBFS moves it down. At strength 0 the
+/// output is the input itself with no delay, and turning the strength up from or down to 0
+/// crossfades over 20 ms; it reads either way. Decisions 0010, 0013 and 0021 in docs/decisions say
+/// why.
 ///
 /// The audio thread calls `process`, and `set_target` between calls. Nothing allocates after
 /// `new`.

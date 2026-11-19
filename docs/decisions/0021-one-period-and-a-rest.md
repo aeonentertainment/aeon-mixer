@@ -182,8 +182,8 @@ rows: 0.963 before. It is the only artefact measure here that reads the splices 
 
 - How any of it sounds. The blind listen in #116 holds off, the corrector before #112 and this one.
 - Mouth to speaker with correction on, which needs `measure-latency` on hardware (#116).
-- Whether a rest move is heard. It is a splice inside silence or unvoiced sound, a breath or a
-  consonant's tail, where there is no pitch to break.
+- Whether a rest move is heard. It is a splice inside sound under -50 dBFS at both ends, near
+  silence, since an audible breath or consonant's tail now stops it.
 - A period jump after the voice moved a note under bleed, the 15 cases above. Reading the period
   sounding at the splice, robustly for a low voice with vibrato, is the work left.
 - A rest that begins with the delay already under the quarter period settles there, and the

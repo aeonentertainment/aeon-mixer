@@ -7,13 +7,13 @@
 namespace aeon::dsp {
 
 /**
- * Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 5 ms
- * PitchReader reads the input; the distance from where the voice is now to the nearest class in
- * the target, scaled by the strength and eased in over the retune time, becomes a transposition
- * that PitchShifter applies. Once NoteCentre hears the voice swing around a held note, the ease
- * slows to the centre's 120 ms, so the note is corrected and the vibrato is left alone. The output
- * trails the input by at most one period of the voice and 0.25 ms, 1.3 ms when shifting six
- * semitones up, and a rest moves it down. At strength 0 the output is the input itself with no
+ * Pulls one mono voice from 82 Hz up toward the nearest allowed pitch class. Every 5 ms PitchReader
+ * reads the input; the distance from where the voice is now to the nearest class in the target,
+ * scaled by the strength and eased in over the retune time, becomes a transposition that
+ * PitchShifter applies. Once NoteCentre hears the voice swing around a held note, the ease slows to
+ * the centre's 120 ms, so the note is corrected and the vibrato is left alone. The output trails
+ * the input by at most one period of the voice and 0.25 ms, 1.3 ms when shifting six semitones up,
+ * and a rest under -50 dBFS moves it down. At strength 0 the output is the input itself with no
  * delay, and turning the strength up from or down to 0 crossfades over 20 ms; the reader runs
  * either way.
  *

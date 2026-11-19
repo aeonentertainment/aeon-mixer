@@ -355,8 +355,8 @@ mod tests {
 
     // Whatever a voice leaves the delay at, the audio is that late: a click in the rest after a
     // phrase arrives where stats said it would, to within the one frame the shifter's fractional
-    // read point can round to. A rest moves the read point down to a quarter period above the
-    // floor unless it already sits lower, so the phrase lengths and two voices an octave apart
+    // read point can round to. A silent rest moves the read point down to a quarter period above
+    // the floor unless it already sits lower, so the phrase lengths and two voices an octave apart
     // leave it at different heights.
     #[test]
     fn stats_reads_the_delay_the_audio_has() {

@@ -69,9 +69,9 @@ pub struct Row {
 }
 
 /// The voice a corrected row sang, and the delay the slot's corrector reported as each chirp went
-/// through, least and most, in frames. A rest moves the delay down to a quarter period above the
-/// shifter's floor unless it already sits lower, so this is the span a line's start meets, not the
-/// most it can reach: a budget counts `correctorMaxDelayMs`.
+/// through, least and most, in frames. The rest, silent here, moves the delay down to a quarter
+/// period above the shifter's floor unless it already sits lower, so this is the span a line's
+/// start meets, not the most it can reach: a budget counts `correctorMaxDelayMs`.
 #[derive(Clone, Copy, Debug)]
 pub struct Correction {
     pub hz: f64,
@@ -409,9 +409,10 @@ mod tests {
     /// The corrector delays the voice by what the slot reports and nothing else on the path moves:
     /// stream by stream, each chirp after a phrase leaves when the same chirp left with no phrase
     /// and the corrector off, plus the delay the slot reported as it went through. To within a
-    /// frame on raw PCM, the shifter's fractional read point, and 3 on Opus. A rest moves the
-    /// delay down to a quarter period of the voice above the shifter's floor, so the two voices, an
-    /// octave apart, leave it over a millisecond apart, and the run checks more than one height.
+    /// frame on raw PCM, the shifter's fractional read point, and 3 on Opus. A silent rest moves
+    /// the delay down to a quarter period of the voice above the shifter's floor, so the two
+    /// voices, an octave apart, leave it over a millisecond apart, and the run checks more than one
+    /// height.
     #[test]
     fn a_corrected_chirp_leaves_late_by_what_the_corrector_reports() {
         let [low, middle, _] = voices();
