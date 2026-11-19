@@ -1,3 +1,4 @@
+import { types } from "node:util";
 import type {
   BackingInput,
   NativeBackingRender,
@@ -6,7 +7,7 @@ import type {
   StemGainsInput,
 } from "./native.ts";
 import type { SettingsProfile } from "./profile/settings-profile.ts";
-import type { MixerConfig, StemKind } from "./types.ts";
+import type { BackingStem, MixerConfig, StemKind } from "./types.ts";
 import { msToFrames } from "./units.ts";
 import { finiteIn, integerIn, RANGES } from "./validate.ts";
 
@@ -159,23 +160,23 @@ export class Backing {
 /** Half to double speed: what a speed control offers a singer. */
 const SPEED_RANGE = [0.5, 2] as const;
 
+type StemInput = BackingInput["instrumental"];
+
 function toInput(config: BackingConfig): BackingInput {
-  let instrumental: string | undefined;
-  let guide: string | undefined;
-  for (const { kind, path } of config.stems) {
-    if (typeof path !== "string" || path.length === 0) {
-      throw new TypeError(`backing.stems: the ${kind} stem needs a path`);
-    }
-    switch (kind) {
+  let instrumental: StemInput | undefined;
+  let guide: StemInput | undefined;
+  for (const stem of config.stems) {
+    const source = stemInput(stem);
+    switch (stem.kind) {
       case "instrumental":
         if (instrumental !== undefined) {
           throw new RangeError("backing.stems holds two instrumental stems");
         }
-        instrumental = path;
+        instrumental = source;
         break;
       case "guideVocals":
         if (guide !== undefined) throw new RangeError("backing.stems holds two guideVocals stems");
-        guide = path;
+        guide = source;
         break;
     }
   }
@@ -186,4 +187,21 @@ function toInput(config: BackingConfig): BackingInput {
     semitones: integerIn("key", config.key, -12, 12),
     speed: finiteIn("speed", config.speed, ...SPEED_RANGE),
   };
+}
+
+/** A stem's path, or its bytes, which the binding copies as the render starts. */
+function stemInput({ kind, path, bytes }: BackingStem): StemInput {
+  // Named before the checks narrow the stem, since a stem with both narrows to `never`
+  const stem = `backing.stems: the ${kind} stem`;
+  if (bytes === undefined) {
+    if (typeof path !== "string" || path.length === 0) {
+      throw new TypeError(`${stem} needs a path or bytes`);
+    }
+    return path;
+  }
+  if (path !== undefined) throw new TypeError(`${stem} has a path and bytes; give one`);
+  // Any realm's: a test runner's `vm` context hands in Buffers whose Uint8Array is not this one
+  if (!types.isUint8Array(bytes)) throw new TypeError(`${stem}'s bytes must be a Uint8Array`);
+  if (bytes.length === 0) throw new RangeError(`${stem}'s bytes are empty`);
+  return bytes;
 }

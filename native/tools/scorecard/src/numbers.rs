@@ -74,7 +74,7 @@ pub fn of(played: &Played) -> Numbers {
 fn errors_cents(slot: &PlayedSlot, error: impl Fn(&Reading) -> f32) -> Vec<f64> {
     slot.readings
         .iter()
-        .filter(|r| r.target_midi.is_some())
+        .filter(|r| r.note.is_some())
         .filter(|r| r.confidence >= VOICED_CONFIDENCE && r.hz >= LOWEST_CORRECTED_HZ)
         .map(|r| f64::from(error(r).abs()) * 100.0)
         .collect()
@@ -86,8 +86,9 @@ fn errors_cents(slot: &PlayedSlot, error: impl Fn(&Reading) -> f32) -> Vec<f64> 
 /// `None` when no reading had a guide note to pull toward.
 pub(crate) fn let_goes(readings: &[Reading]) -> Option<u32> {
     let mut gaps = None;
-    for note in readings.chunk_by(|a, b| a.target_start_ms == b.target_start_ms) {
-        if note[0].target_start_ms.is_none() {
+    let start = |r: &Reading| r.note.map(|note| note.start_frame);
+    for note in readings.chunk_by(|a, b| start(a) == start(b)) {
+        if note[0].note.is_none() {
             continue;
         }
         let pulls = note.chunk_by(|a, b| a.pulling == b.pulling).filter(|run| run[0].pulling);

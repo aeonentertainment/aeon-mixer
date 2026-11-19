@@ -27,7 +27,7 @@ impl OutputSeen {
 
 #[cfg(test)]
 mod tests {
-    use devices::{Output, Refused};
+    use devices::{Output, Refused, Transport};
     use engine::driver::StreamInfo;
 
     use super::*;
@@ -36,7 +36,12 @@ mod tests {
     const NONE: (Duration, Duration) = (Duration::ZERO, Duration::ZERO);
 
     fn playing(moves: u32, refused: Option<&str>) -> Playing {
-        let output = |id: &str| Output { id: id.into(), name: id.into(), is_default: true };
+        let output = |id: &str| Output {
+            id: id.into(),
+            name: id.into(),
+            is_default: true,
+            transport: Transport::BuiltIn,
+        };
         Playing {
             info: StreamInfo { sample_rate: 48_000, period_frames: 128, output_latency_frames: 0 },
             output: output("speakers"),

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use assert_no_alloc::assert_no_alloc;
 use engine::audio_thread::{AudioThread, Controls};
-use engine::backing::{Backing, RenderJob, StemFiles};
+use engine::backing::{Backing, RenderJob, StemSources};
 use engine::block::{BLOCK, RATE};
 use engine::command::Command;
 use engine::driver::OfflineDriver;
@@ -105,7 +105,7 @@ impl LiveSong {
         }
         let mut graph = Box::new(Graph::new(slots));
         let backing = instrumental.map(|path| {
-            let files = StemFiles { instrumental: path.to_owned(), guide: None };
+            let files = StemSources { instrumental: path.to_owned().into(), guide: None };
             graph.set_backing(Backing::new(RenderJob::start(files, 0, 1.0).finish().unwrap(), 0));
             json!({
                 "stems": [{ "kind": "instrumental", "sha256": sha256(path).unwrap() }],

@@ -20,7 +20,7 @@ const USAGE: &str = "\
 usage: measure-sink [--list] [--state] [--device ID] [--period FRAMES] [--seconds N] [--tone]
                     [--shared | --exclusive]   (Windows only)
 
-  --list        print the outputs and their ids, then exit
+  --list        print the outputs, ids and transports, then exit
   --state       macOS: print what the HAL says of the device, then exit without opening it
   --device ID   an id from --list; the default output otherwise
   --period N    the hardware period to ask for, in frames (default 128)
@@ -56,7 +56,7 @@ fn main() -> ExitCode {
     };
     if args.list {
         for output in &outputs {
-            println!("{}", describe(output));
+            println!("{output}");
         }
         return ExitCode::SUCCESS;
     }
@@ -113,7 +113,7 @@ fn main() -> ExitCode {
         std::env::consts::ARCH,
         args.seconds
     );
-    println!("output     {}", chosen.map(describe).unwrap_or_else(|| "?".into()));
+    println!("output     {}", chosen.map(Output::to_string).unwrap_or_else(|| "?".into()));
     println!("opened     {}", stats.opened().unwrap_or("?"));
     println!("start      {} ms, until the backend's start returned", ms(start));
     println!("rate       {} Hz", info.sample_rate);
@@ -199,9 +199,4 @@ fn render(tone: bool) -> Render {
             phase = (phase + step) % std::f32::consts::TAU;
         }
     })
-}
-
-fn describe(output: &Output) -> String {
-    let default = if output.is_default { " (default)" } else { "" };
-    format!("{}  {}{default}", output.id, output.name)
 }

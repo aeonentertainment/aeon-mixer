@@ -14,7 +14,9 @@ detector.
 - **Offline mode measures the engine's share.** The chirp goes through a sender, the real jitter
   buffer, decoder, slot and master on the offline driver, for every Opus frame size, l16 and push. It
   opens nothing, and a test holds its numbers: adding 64 frames to the jitter buffer's anchor fails
-  that test.
+  that test. Offline there is one path and no reflection to outdo it, so the detector takes the
+  strongest peak: Opus leaves noise within 20 dB ahead of a short chirp. Each path is also measured
+  with the corrector on, on decision 0009's signal.
 - **Device mode measures the output's share.** The chirp goes through a real slot and a real output,
   and a real input records it. The two streams are compared on the host clock, each through a line
   fitted to its own wakes. It refuses to open anything without `device --open-device`.

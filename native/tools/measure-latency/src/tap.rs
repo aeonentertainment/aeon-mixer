@@ -55,7 +55,8 @@ mod tests {
         let programme = Programme::offline();
         let signal = programme.signal();
         let ingest = Ingest::L16 { frame: 240 };
-        let plain = pump(Rig::new(ingest, Delay::Pinned(720), &signal, 0).unwrap(), signal.len());
+        let (plain, _) =
+            pump(Rig::new(ingest, Delay::Pinned(720), &signal, 0).unwrap(), signal.len());
 
         let Rig { render, controls: _controls, .. } =
             Rig::new(ingest, Delay::Pinned(720), &signal, 0).unwrap();

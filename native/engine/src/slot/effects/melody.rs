@@ -4,7 +4,7 @@
 
 use kernels::{EVERY_PITCH_CLASS, PitchClassMask, pitch_class_of};
 
-use crate::slot::effects::Target;
+use crate::slot::effects::{Target, TargetNote};
 use crate::slot::guide::Guide;
 
 /// The latest-starting note sounding at `frame`, so an overlap favours the newer note; the key's
@@ -21,13 +21,10 @@ pub fn target_at(guide: &Guide, frame: i64, semitones: i8) -> Target {
             let midi = i16::from(note.midi) + i16::from(semitones);
             Target {
                 mask: pitch_class_of(midi.into()),
-                midi: Some(midi),
-                start_frame: Some(note.start_frame),
+                note: Some(TargetNote { midi, start_frame: note.start_frame }),
             }
         }
-        None => {
-            Target { mask: transpose(guide.key_mask, semitones), midi: None, start_frame: None }
-        }
+        None => Target { mask: transpose(guide.key_mask, semitones), note: None },
     }
 }
 
@@ -72,16 +69,12 @@ mod tests {
     }
 
     fn key() -> Target {
-        Target { mask: A_MINOR, midi: None, start_frame: None }
+        Target { mask: A_MINOR, note: None }
     }
 
     /// The note at `midi` that starts on `start_frame`.
     fn melody(midi: i16, start_frame: u64) -> Target {
-        Target {
-            mask: pitch_class_of(midi.into()),
-            midi: Some(midi),
-            start_frame: Some(start_frame),
-        }
+        Target { mask: pitch_class_of(midi.into()), note: Some(TargetNote { midi, start_frame }) }
     }
 
     #[test]
@@ -98,8 +91,16 @@ mod tests {
     #[test]
     fn an_overlap_favours_the_newer_note() {
         let guide = guide(&[(60, 0, 1000), (64, 500, 700)]);
-        assert_eq!(target_at(&guide, 600, 0).midi, Some(64), "the overlap kept the older note");
-        assert_eq!(target_at(&guide, 800, 0).midi, Some(60), "the older note did not resume");
+        assert_eq!(
+            target_at(&guide, 600, 0).note.map(|n| n.midi),
+            Some(64),
+            "the overlap kept the older note"
+        );
+        assert_eq!(
+            target_at(&guide, 800, 0).note.map(|n| n.midi),
+            Some(60),
+            "the older note did not resume"
+        );
     }
 
     #[test]

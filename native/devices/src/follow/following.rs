@@ -65,11 +65,13 @@ enum State<M> {
         running: Running,
         dock: Dock<M>,
     },
-    /// Stopped since the wake at `since`, with nowhere yet to play; `holds` when the stop held
-    /// a playhead, so the gap counts against it.
+    /// Stopped since the wake at `since`, with nowhere yet to play. The room has heard nothing
+    /// since `silent`, where the gap starts; `holds` when the stop held a playhead, so the gap
+    /// counts against it.
     Waiting {
         movable: M,
         since: Instant,
+        silent: Instant,
         holds: bool,
     },
     /// Faulted: a torn render, or nothing that would start within `GIVE_UP`.
@@ -186,10 +188,11 @@ impl<M: Movable, S: System> Following<M, S> {
             self.stats.take_lost();
             let Some(mut movable) = dock.take() else { return self.give_up() };
             let holds = movable.moved();
-            self.state = State::Waiting { movable, since: woke_at, holds };
+            let silent = self.called_back().unwrap_or(self.started).min(woke_at);
+            self.state = State::Waiting { movable, since: woke_at, silent, holds };
         }
 
-        let State::Waiting { mut movable, since, holds } =
+        let State::Waiting { mut movable, since, silent, holds } =
             mem::replace(&mut self.state, State::Gone)
         else {
             return;
@@ -208,7 +211,7 @@ impl<M: Movable, S: System> Following<M, S> {
         for output in candidates {
             match start(&self.system, &self.request, &self.stats, output, movable) {
                 Ok((running, dock)) => {
-                    let gap = since.elapsed();
+                    let gap = silent.elapsed();
                     self.current.set(Playing {
                         info: running.info,
                         output: output.clone(),
@@ -231,7 +234,7 @@ impl<M: Movable, S: System> Following<M, S> {
                 Err((_, None)) => return self.give_up(),
             }
         }
-        self.state = State::Waiting { movable, since, holds };
+        self.state = State::Waiting { movable, since, silent, holds };
     }
 
     // Whether the playing stream has asked for no audio for its whole patience. Its device may
@@ -243,11 +246,17 @@ impl<M: Movable, S: System> Following<M, S> {
     // How long the playing stream has asked for no audio: since its last callback, or since it
     // started if it has not called back yet. A callback ends a run of stalls.
     fn silence(&mut self) -> Duration {
-        let heard = self.stats.last_callback().filter(|at| *at >= self.started);
+        let heard = self.called_back();
         if heard.is_some() {
             self.quiet = 0;
         }
         heard.unwrap_or(self.started).elapsed()
+    }
+
+    // The playing stream's last callback. One before it started was an earlier stream's, inside
+    // the gap the last move already reported.
+    fn called_back(&self) -> Option<Instant> {
+        self.stats.last_callback().filter(|at| *at >= self.started)
     }
 
     fn patience(&self) -> Duration {

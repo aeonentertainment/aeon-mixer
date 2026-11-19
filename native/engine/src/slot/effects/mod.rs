@@ -16,6 +16,7 @@ mod reading;
 mod reverb;
 mod shift_trail;
 mod target;
+mod target_note;
 pub mod tone;
 mod voice;
 
@@ -28,5 +29,6 @@ pub use howl_guard::HowlGuard;
 pub use reading::Reading;
 pub use reverb::Reverb;
 pub use target::Target;
+pub use target_note::TargetNote;
 pub use tone::{Tone, ToneFindings};
 pub use voice::Voice;

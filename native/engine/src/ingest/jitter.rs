@@ -577,7 +577,7 @@ impl Stream {
             return 0;
         }
         let window = std::mem::replace(&mut self.skew, SkewWindow::new(now + SKEW_WINDOW));
-        let fallen = self.chooser.as_ref().is_some_and(|chooser| chooser.fallen() > 0);
+        let fallen = self.chooser.as_ref().is_some_and(DelayChooser::has_fallen);
         let by = window.correction(playout_delay, self.frame as i64, fallen);
         if let Some(held) = &mut self.held {
             let window = std::mem::replace(&mut held.skew, SkewWindow::new(now + SKEW_WINDOW));

@@ -8,8 +8,8 @@ use rustfft::num_complex::Complex64;
 /// from a speaker can be weaker than a reflection off a nearby wall.
 const ONSET_RATIO: f64 = 0.1;
 
-/// How far ahead of the strongest arrival the direct sound may be: 10 m of extra path.
-const ONSET_REACH: usize = RATE as usize * 30 / 1000;
+/// How far ahead of the strongest arrival the direct sound may be in a room: 10 m of extra path.
+pub const ONSET_REACH: usize = RATE as usize * 30 / 1000;
 
 /// A sound found in a recording: where it starts, to a fraction of a frame, and how strong.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,10 +61,12 @@ impl MatchedFilter {
 }
 
 /// The first sound in `window` of an envelope: the earliest peak within 20 dB of the strongest
-/// and at most 30 ms ahead of it, placed between frames by a parabola through its log. None when
-/// the window holds nothing, or the strongest peak sits on the window's edge, which says the sound
-/// lies outside it.
-pub fn first_arrival(envelope: &[f64], window: Range<usize>) -> Option<Arrival> {
+/// and at most `reach` frames ahead of it, placed between frames by a parabola through its log.
+/// A room passes `ONSET_REACH`. A path with no room passes 0, so the strongest peak is the sound:
+/// there is no reflection to outdo it, and a codec's noise near it is never taken for it. None
+/// when the window holds nothing, or the strongest peak sits on the window's edge, which says the
+/// sound lies outside it.
+pub fn first_arrival(envelope: &[f64], window: Range<usize>, reach: usize) -> Option<Arrival> {
     let window = window.start.max(1)..window.end.min(envelope.len().saturating_sub(1));
     let strongest = window.clone().max_by(|a, b| envelope[*a].total_cmp(&envelope[*b]))?;
     let strength = envelope[strongest];
@@ -73,7 +75,7 @@ pub fn first_arrival(envelope: &[f64], window: Range<usize>) -> Option<Arrival> 
     }
     let is_peak =
         |at: &usize| envelope[*at] >= envelope[at - 1] && envelope[*at] > envelope[at + 1];
-    let at = (strongest.saturating_sub(ONSET_REACH).max(window.start)..=strongest)
+    let at = (strongest.saturating_sub(reach).max(window.start)..=strongest)
         .find(|at| envelope[*at] >= ONSET_RATIO * strength && is_peak(at))?;
     let [before, peak, after] =
         [at - 1, at, at + 1].map(|at| envelope[at].max(f64::MIN_POSITIVE).ln());
@@ -109,7 +111,8 @@ mod tests {
     fn find(recording: &[f32]) -> (Arrival, Vec<f64>) {
         let filter = MatchedFilter::new(Chirp::voice_band(0.25).samples());
         let envelope = filter.envelope(recording);
-        let arrival = first_arrival(&envelope, 0..recording.len()).expect("an arrival");
+        let arrival =
+            first_arrival(&envelope, 0..recording.len(), ONSET_REACH).expect("an arrival");
         (arrival, envelope)
     }
 
@@ -161,9 +164,13 @@ mod tests {
         let chirp = Chirp::voice_band(0.25);
         let recording: Vec<f32> = (0..FRAMES).map(|i| chirp.at(i as f64 - 5000.0)).collect();
         let (_, envelope) = find(&recording);
-        assert_eq!(first_arrival(&envelope, 0..5000), None, "the true peak lies past the window");
+        assert_eq!(
+            first_arrival(&envelope, 0..5000, ONSET_REACH),
+            None,
+            "the true peak lies past the window"
+        );
         let silence = vec![0.0; FRAMES];
         let filter = MatchedFilter::new(chirp.samples());
-        assert_eq!(first_arrival(&filter.envelope(&silence), 0..FRAMES), None);
+        assert_eq!(first_arrival(&filter.envelope(&silence), 0..FRAMES, ONSET_REACH), None);
     }
 }

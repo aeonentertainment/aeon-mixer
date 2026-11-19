@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::graph::Graph;
+use crate::slot::effects::Reading;
 use crate::slot::guide::Guide;
 
 pub const COMMAND_CAPACITY: usize = 64;
@@ -57,18 +58,11 @@ pub enum Event {
         rms_db: f32,
         peak_db: f32,
     },
+    /// The binding does not carry the reading's shift, pull or note start; the scorecard reads
+    /// them (docs/design.md 8.9).
     Pitch {
         slot: u8,
-        position_ms: f64,
-        hz: f32,
-        confidence: f32,
-        target_midi: Option<i16>,
-        target_start_ms: Option<f64>,
-        error_semitones: f32,
-        /// What the voice at the reading's centre came out shifted by. The binding does not carry
-        /// it, `pulling` or `target_start_ms`; the scorecard reads them (docs/design.md 8.9).
-        shift_semitones: f32,
-        pulling: bool,
+        reading: Reading,
     },
     Position {
         frames: u64,

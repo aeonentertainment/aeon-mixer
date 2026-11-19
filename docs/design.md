@@ -111,14 +111,15 @@ What the engine reports so the rest of the device can follow:
   that frame leaving the speaker; and `speedFactor`.
 - A move to another output (section 5) changes the output latency, and holds a playing backing
   for the gap. `outputChanged` carries the new `latencyMs`, the gap, and `heldMs`, how long the
-  move held the playhead: the gap when the backing was playing or fading to a pause as the old
-  stream stopped, 0 when it was paused, not started, ended or absent. A host that keeps a lyric
-  clock from `startedAt` moves it by `heldMs` and the change in latency, or re-anchors it on the
-  next `position` event. A pause or resume still in flight at the move counts on the side of it
-  where the audio thread took it, so the host keeps no paused state of its own to tell whether a
-  gap counts. The guide clock moves by the new latency itself: from the first block after the new
-  stream's `start` returns, every pitch reading and every note edge the corrector follows is on the
-  new output's clock.
+  move held the playhead: the gap when the backing was playing or fading out to a pause or a seek
+  as the old stream stopped, 0 when it was paused, not started, ended or absent. The gap starts
+  no later than the old stream's last callback, so after a stall it counts the stall (section 8.3).
+  A host that keeps a lyric clock from `startedAt` moves it by `heldMs` and the change in
+  latency, or re-anchors it on the next `position` event. A pause or resume still in flight at
+  the move counts on the side of it where the audio thread took it, so the host keeps no paused
+  state of its own to tell whether a gap counts. The guide clock moves by the new latency itself:
+  from the first block after the new stream's `start` returns, every pitch reading and every note
+  edge the corrector follows is on the new output's clock.
 - Every ack carries the backing position at the block the command landed. `seek`, `resume` and
   `start` return it. A `position` event also fires once a second.
 - When a live key shifter is engaged, its latency is subtracted from the reported position, so
@@ -353,7 +354,8 @@ pub struct TimerDriver;
 /// What a device follower moves from one output to the next: the engine's `AudioThread`, or a
 /// test's render. `moved` is called between streams, never on the audio thread: the next block
 /// starts every slot's stream again and fades in over 5 ms. It returns whether the live graph's
-/// backing was playing or fading to a pause as the stream stopped, so the gap held its playhead.
+/// backing was playing or fading out to a pause or a seek as the stream stopped, so the gap held
+/// its playhead.
 pub trait Movable: Send + 'static { fn render(&mut self, out: Stereo<'_>); fn moved(&mut self) -> bool; fn callback_frames(&self) -> Arc<AtomicU32>; fn output_latency_frames(&self) -> Arc<AtomicU32>; }   // where the follower writes each stream's StreamInfo.period_frames and StreamInfo.output_latency_frames as its start returns
 /// The test clock. Its caller pumps it, so it is not a `Driver`. `pump_into(&mut [f32])` is
 /// allocation-free and is what tests guard; `pump(blocks) -> Vec<f32>` is the binding's convenience.
@@ -576,8 +578,8 @@ export interface Engine {
   on(event: "fault", listener: (error: Error) => void): () => void;
   /** Whenever `output` changes: after every move, the fallback from a refused output included,
    * with `gapMs` how long the room heard nothing and `heldMs` how long that held the backing's
-   * playhead, `gapMs` when it was playing or fading to a pause and 0 when not (section 3); both 0
-   * when a refusal clears alone. */
+   * playhead, `gapMs` when it was playing or fading out to a pause or a seek and 0 when not
+   * (section 3); both 0 when a refusal clears alone. */
   on(
     event: "outputChanged",
     listener: (output: OutputInfo, gapMs: number, heldMs: number) => void,
@@ -872,8 +874,19 @@ pub struct Wake;           // raise(): never blocks; wakes already pending fold 
   stream with it on the same `Stats`. What `moved` returns sets the move's `held`: the gap when
   it held a playhead, zero when not. As every stream's `start` returns, the first one's too, the
   follower writes its `StreamInfo.period_frames` into the movable's `callback_frames` cell and its
-  `StreamInfo.output_latency_frames` into its `output_latency_frames` cell. The gap is from the wake
-  to the new stream running.
+  `StreamInfo.output_latency_frames` into its `output_latency_frames` cell.
+- The gap runs from the earlier of the wake and the old stream's last callback to the new stream
+  running. The engine renders nothing after that callback, so the room hears silence from there
+  and the playhead stands still. For a default change the two are within a period of each other.
+  For a stall the callback comes first by the stall's 200 ms or more, and for a loss by however
+  late the OS reports it. A callback counts only from the old stream's start, which ended the
+  last move's gap, so a stream that never called back counts from its start and no stretch of
+  silence lands in two gaps. Nothing else bounds it: a stream with no callback rendered nothing,
+  so a move after a 6.4 s stall reports 6.4 s and more, because the room heard that much
+  silence. Every backend the follower runs marks its callbacks with `Stats::callback`, so
+  `Stats::last_callback` and the wake are read from one clock, `std::time::Instant`, the one the
+  stall wait reads. Whether a gap counts time the machine slept is that clock's call on each OS.
+  The second the follower waits for an output before it gives up still counts from the wake.
 - A move whose output will not start starts the output it left again, if the OS still lists it,
   and failing that the default, which only a pinned engine has not tried yet, and sets
   `Playing.refused`. No output is tried twice in one attempt. The fallback counts as a move:
@@ -970,15 +983,19 @@ should reach that slot.
   15 ms. Every half second the buffer notes the slack of the half second's latest and earliest
   packets against their due times. Once 20 notes, ten seconds, leave at least a block of room,
   the anchor moves earlier, once, until the latest of them would have a millisecond and a quarter
-  of the spread over the block to spare, and never under 3.67 ms: a block a packet can wait to be
-  drained, and a millisecond. After that fall, three late notes out of the last 20 move it later
-  to cover them, at most back to where it opened. A move waits for the slot to be under -30 dBFS
-  for 21 ms, happens at the head of what waits to play, drops only samples that are quiet too, and
-  counts as a resync. The echo moves by what the move drops or delays, but the new delay also
-  takes up the slack the stream had drifted into, so the part of the new delay the echo did not
-  move by is a splice in the source's `delay()`, and the latency and splices together move by
-  what the echo did. A delay means how long the stream's earliest packets wait, and
-  `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
+  of the spread over the block to spare. After that fall, three late notes out of the last 20 move
+  it later to cover them. No move leaves a delay under 3.67 ms, a block a packet can wait to be
+  drained and a millisecond, nor over 15 ms, the delay it opened at, with no exception: a fall goes
+  at least to 15 ms even when some of what it saw is then late, and a rise stops there. Before its
+  first move a stream's earliest packets can wait longer, since its first packet anchors it: 15 ms
+  plus how late that packet came, and up to a block for the drain. A pinned stream keeps that for
+  good; a chosen one gives it up at the fall. A move waits for the slot
+  to be under -30 dBFS for 21 ms, happens at the head of what waits to play, drops only samples
+  that are quiet too, and counts as a resync. The echo moves by what the move drops or delays, but
+  the new delay also takes up the slack the stream had drifted into, so the part of the new delay
+  the echo did not move by is a splice in the source's `delay()`, and the latency and splices
+  together move by what the echo did. A delay means how long the stream's earliest packets wait,
+  and `stats()` reports it. Decision [0007](decisions/0007-choosing-the-playout-delay.md) has the
   reasons and the numbers.
 - Skew moves the anchor one step at a time. Once a second the buffer looks at how early the
   last second's packets arrived against their due times. A step is a frame, or as many whole
@@ -1125,8 +1142,8 @@ than the frame it missed; a stream that pauses for two seconds resumes without a
 pause under a second with its sequence numbers contiguous loses nothing and every packet after it
 plays at the stream's delay; a slot left to choose falls to the floor on a clean link on every
 frame size, stays exactly where a pinned slot plays on a link that needs all 15 ms, moves only in a
-quiet moment, and loses at most 0.1 percent more of its packets to lateness than the same song at
-the opening delay.
+quiet moment, and, when its first packet came on time, loses at most 0.1 percent more of its
+packets to lateness than the same song at the opening delay.
 
 ### 8.5 Backing: `engine/src/backing/`
 

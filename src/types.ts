@@ -12,6 +12,32 @@ export type Capability =
   | "pause"
   | "level";
 export type IngestKind = "rtp" | "l16" | "push" | "capture";
+
+/**
+ * How a device reaches the machine, as its OS or driver reports it; decision 0025 maps each OS.
+ * `virtual` has no hardware behind it (BlackHole, ZoomAudioDevice, a virtual cable): it starts
+ * and plays to nobody. `network` plays somewhere else, seconds late. `other` is hardware on a bus
+ * not named here; `unknown` is a device the OS or driver did not say. A new OS transport maps into
+ * one of these, so the union does not grow.
+ */
+export type Transport =
+  | "builtIn"
+  | "usb"
+  | "bluetooth"
+  | "display"
+  | "network"
+  | "aggregate"
+  | "virtual"
+  | "other"
+  | "unknown";
+
+/** One device as `outputDevices()` and `inputDevices()` list it. */
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  transport: Transport;
+}
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
@@ -64,10 +90,19 @@ export type SlotConfig =
   | { kind: Exclude<IngestKind, "capture"> }
   | { kind: "capture"; device?: string; channel?: number };
 
+/**
+ * A stem is the encoded file at `path`, or the whole encoded file in `bytes`, decoded the same way:
+ * docs/design.md 8.5. `createMixer` reads `bytes` until it settles, so leave them unchanged until
+ * then. Either keeps every capability: seek, key and speed work on the decoded stem.
+ */
+export type BackingStem =
+  | { kind: StemKind; path: string; bytes?: never }
+  | { kind: StemKind; bytes: Uint8Array; path?: never };
+
 export interface MixerConfig {
   slots: ReadonlyArray<SlotConfig>;
   backing?: {
-    stems: ReadonlyArray<{ kind: StemKind; path: string }>;
+    stems: ReadonlyArray<BackingStem>;
     /** Semitones, rendered before start. */
     key: number;
     /** A factor, rendered before start. */
@@ -193,8 +228,9 @@ export type EngineEvents = {
   /**
    * Whenever `output` changes: after every move, `gapMs` how long the room heard nothing and
    * `heldMs` how long that held the backing's playhead, `gapMs` while it was playing or fading out
-   * to a pause or a seek and 0 while it was not; both 0 when `refused` clears with no move. A
-   * host's lyric clock moves by `heldMs` and the change in `latencyMs`.
+   * to a pause or a seek and 0 while it was not; both 0 when `refused` clears with no move. The
+   * gap starts no later than the old output last asked for audio, so after a stall it counts the
+   * stall. A host's lyric clock moves by `heldMs` and the change in `latencyMs`.
    */
   outputChanged: (output: OutputInfo, gapMs: number, heldMs: number) => void;
   /** The mix after the clipper, reactions included, between songs too. */

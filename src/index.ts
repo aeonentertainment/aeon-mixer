@@ -6,7 +6,9 @@ export { defaultProfile } from "./profile/default-profile.ts";
 export { parseProfile } from "./profile/parse-profile.ts";
 export type { SettingsProfile } from "./profile/settings-profile.ts";
 export type {
+  BackingStem,
   Capability,
+  DeviceInfo,
   EngineEvents,
   IngestKind,
   MelodyGuide,
@@ -20,4 +22,5 @@ export type {
   SlotStats,
   StemKind,
   ToneBand,
+  Transport,
 } from "./types.ts";

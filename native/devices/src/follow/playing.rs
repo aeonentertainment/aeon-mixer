@@ -12,7 +12,8 @@ pub struct Playing {
     pub output: Output,
     /// Moves since the engine opened; 0 on the output it opened on.
     pub moves: u32,
-    /// The last move's gap, from the wake that started it to the new stream running.
+    /// The last move's gap, from the old stream's last callback, or the wake that started the
+    /// move if that came first, to the new stream running.
     pub gap: Duration,
     /// How long the last move held the backing's playhead: the gap when the stop caught it
     /// moving on, as `Movable::moved` says, and zero when it was paused, ended or absent.
