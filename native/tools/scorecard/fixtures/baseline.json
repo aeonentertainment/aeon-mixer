@@ -47,7 +47,7 @@
         "tolerance": 5.0
       },
       "slot0.playoutDelayMs": {
-        "value": 15.0,
+        "value": 17.67,
         "tolerance": 0.0
       },
       "slot1.concealed": {
@@ -71,7 +71,7 @@
         "tolerance": 1.0
       },
       "slot1.playoutDelayMs": {
-        "value": 15.0,
+        "value": 19.0,
         "tolerance": 0.0
       }
     },
@@ -113,7 +113,7 @@
         "tolerance": 1.0
       },
       "slot0.playoutDelayMs": {
-        "value": 15.0,
+        "value": 17.38,
         "tolerance": 0.0
       }
     }
