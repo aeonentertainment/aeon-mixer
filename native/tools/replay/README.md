@@ -64,8 +64,9 @@ landed on a block's edge.
 
 A `push` or `capture` slot has nothing recorded and plays as silence. A bundle with no `end` line
 was cut short, and plays to its last line or packet. An output move in the song replays as none.
-A bundle of a format other than 1 is refused by its number. A tone effect the live engine would
-refuse, which only a bundle written by hand can hold, is refused with the engine's own reason.
+A bundle of a format other than 1 is refused by its number. A tone effect the live mixer would
+refuse, a value out of its range or bands past the engine's caps, which only a bundle written by
+hand can hold, is refused in the mixer's own words.
 
 ## Recording a real session
 

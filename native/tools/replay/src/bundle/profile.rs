@@ -145,8 +145,16 @@ impl Profile {
     }
 }
 
-fn within(name: &str, value: f64, min: f64, max: f64) -> Result<(), String> {
-    if value.is_finite() && (min..=max).contains(&value) {
+/// Refuses `value` outside `min` to `max` in `src/validate.ts`'s `finiteIn` words, the value
+/// printed as its own type prints it, so an `f32` 0.1 reads 0.1 as JavaScript prints it.
+pub(super) fn within<T: Into<f64> + Copy + std::fmt::Display>(
+    name: &str,
+    value: T,
+    min: f64,
+    max: f64,
+) -> Result<(), String> {
+    let number: f64 = value.into();
+    if number.is_finite() && (min..=max).contains(&number) {
         Ok(())
     } else {
         Err(format!("{name} must be between {min} and {max}, got {value}"))
