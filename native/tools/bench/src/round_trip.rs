@@ -7,7 +7,7 @@ use measure_latency::matched_filter::{
     MatchedFilter, ONSET_REACH, first_arrival, signal_to_noise_db,
 };
 use measure_latency::programme::Programme;
-use measure_latency::reading::{MAX_MOVED_MS, MIN_SNR_DB, median};
+use measure_latency::reading::{MAX_MOVED_MS, MIN_SNR_DB, SILENT_DB, median, peak_db};
 
 /// Each chirp's figures, in programme order.
 pub struct RoundTrip {
@@ -47,6 +47,14 @@ pub fn read(
     programme: &Programme,
     air_ms: f64,
 ) -> Result<RoundTrip, String> {
+    let peak_db = peak_db(heard);
+    if peak_db < SILENT_DB {
+        return Err(format!(
+            "the input is silent, its loudest at {peak_db:.0} dBFS: on macOS let this terminal use \
+             the microphone in System Settings, Privacy & Security; elsewhere check --input, \
+             --input-channel and the cable"
+        ));
+    }
     let filter = MatchedFilter::new(programme.chirp.samples());
     let (played, heard) = (filter.envelope(played), filter.envelope(heard));
     let interval = programme.interval();
@@ -79,7 +87,8 @@ pub fn read(
     if round_trip.spread_ms() > MAX_MOVED_MS {
         return Err(format!(
             "the chirps disagree by {:.2} ms, over the {MAX_MOVED_MS} ms a reading allows. The \
-             output or the input dropped audio, or the first sound changed between chirps",
+             output or the input dropped audio, or the first sound changed between chirps: rerun \
+             with nothing else playing or recording",
             round_trip.spread_ms()
         ));
     }
