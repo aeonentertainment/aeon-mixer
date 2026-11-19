@@ -18,6 +18,7 @@ const SILENT_PUSH_STATS = {
   echo: null,
   playoutDelayMs: 0,
   howlCatches: 0,
+  tone: null,
 };
 
 /** Interleaved stereo at one level, which folds to that level. */

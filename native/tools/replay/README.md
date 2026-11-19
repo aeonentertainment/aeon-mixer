@@ -1,9 +1,9 @@
 # replay
 
 A slot's recording through the real packet ring, jitter buffer and slot on the offline driver,
-beside libopus's own decode of the same packets. It opens no device and no socket, and the same
-file replays to the same samples every time. docs/design.md 8.4 and 8.9 and decision 0017 have
-the reasons.
+beside libopus's own decode of the same packets, or a session bundle's whole song. It opens no
+device and no socket, and the same input replays to the same samples every time. docs/design.md
+8.4, 8.9 and 8.11 and decisions 0017 and 0026 have the reasons.
 
 ```
 cargo run --release -p replay -- RECORDING.pcap [--port N] [--codec opus|l16] [--playout-delay-ms MS] [--wav DIR]
@@ -43,6 +43,28 @@ slot - libopus           0.0     -0.2       0.0
 
 A slot that reads well under libopus has lost the voice in the engine. A meter that reads under
 the slot's output is a meter fault. Both near libopus, and quiet, is a quiet phone.
+
+## Replaying a session bundle
+
+```
+cargo run --release -p replay -- BUNDLE_DIR [--profile FILE] [--backing STEMS] [--wav DIR] [--json]
+```
+
+A bundle is the directory `createMixer({ bundle: { dir } })` writes. `replay` builds the mixer its
+manifest describes, applies each call at the frame it was made, and pushes each packet before the
+block it reached the slot in, so the song plays as it did live, to within a block where a packet
+landed on a block's edge.
+
+- `--profile` replays under another settings profile. A value a call named is kept; a value it
+  left out comes from the profile, so only what nobody chose changes.
+- `--backing` names a directory holding the song's stems, found by their SHA-256. Without it the
+  slots play with no backing.
+- `--wav DIR` writes `mix.wav`, what the room heard.
+- `--json` prints each slot's counters and meter levels and the master's, for a scorer to read.
+
+A `push` or `capture` slot has nothing recorded and plays as silence. A bundle with no `end` line
+was cut short, and plays to its last line or packet. An output move in the song replays as none.
+A bundle of a format other than 1 is refused by its number.
 
 ## Recording a real session
 

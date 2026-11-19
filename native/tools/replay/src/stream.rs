@@ -54,7 +54,7 @@ impl Stream {
         let arrivals: Vec<Arrival> = on_port
             .iter()
             .filter_map(|datagram| {
-                let packet = packet_from(&datagram.bytes)?;
+                let packet = packet_from(&datagram.bytes, datagram.source.into())?;
                 Some(Arrival { at: frames_of_micros(datagram.at_micros - first), packet })
             })
             .collect();

@@ -43,6 +43,12 @@ impl Source for PacketSource {
         self.pulled = false;
     }
 
+    /// The stream goes as a reset's does, and the slot keeps its sender.
+    fn restart(&mut self) {
+        self.jitter.restart();
+        self.pulled = false;
+    }
+
     fn latency_frames(&self) -> u32 {
         self.jitter.latency_frames()
     }
@@ -95,10 +101,10 @@ mod tests {
         assert_eq!(source.latency_frames(), DELAY + 960, "anchored on the fresh packet");
     }
 
-    /// A move to another output stops the clock while packets keep coming. The reset that follows
-    /// drops what waited, so the stream anchors on the next packet and plays at its delay.
+    /// A move to another output stops the clock while packets keep coming. The restart that
+    /// follows drops what waited, so the stream anchors on the next packet and plays at its delay.
     #[test]
-    fn a_reset_drops_what_waited_in_the_ring() {
+    fn a_move_drops_what_waited_in_the_ring() {
         let (mut producer, consumer) = packet_ring(RING_CAPACITY);
         let mut source = PacketSource::new(consumer, JitterBuffer::new(DELAY, Codec::L16));
         let stats = source.jitter().shared_stats();
@@ -113,13 +119,41 @@ mod tests {
         for seq in 1..40 {
             producer.push(&packet(seq));
         }
-        assert_no_alloc(|| source.reset());
+        assert_no_alloc(|| source.restart());
         assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 1, "the gap's packets are dropped unseen");
         producer.push(&packet(40));
         assert_no_alloc(|| source.pull(&mut out));
         assert_eq!(stats.read().pushed, 2);
         assert_eq!(source.latency_frames(), DELAY + 960, "anchored on the packet after the gap");
+    }
+
+    /// An output move ends the stream and keeps the slot's sender, so no other address takes the
+    /// slot while the singer re-anchors. `ResetSlot` releases the sender, and turns it away so
+    /// the next singer can take the slot.
+    #[test]
+    fn a_move_keeps_the_sender_and_a_reset_releases_it() {
+        let (mut producer, consumer) = packet_ring(RING_CAPACITY);
+        let mut source = PacketSource::new(consumer, JitterBuffer::new(DELAY, Codec::L16));
+        let payload = [0u8; 4 * 240];
+        let phone = ([192, 168, 1, 20], 50_000).into();
+        let laptop = ([192, 168, 1, 77], 41_000).into();
+        let mut out = [0.0; BLOCK];
+        // Each step pulls once first: the first pull after a move or a reset discards the ring
+        let mut send = |source: &mut PacketSource, seq: u16, ssrc: u32, from| {
+            assert_no_alloc(|| source.pull(&mut out));
+            let packet = Packet::new(seq, u32::from(seq) * 240, ssrc, false, &payload).unwrap();
+            producer.push(&Packet { from, ..packet });
+            assert_no_alloc(|| source.pull(&mut out));
+            source.jitter().stats().pushed
+        };
+        assert_eq!(send(&mut source, 0, 7, phone), 1, "the singer anchors");
+        assert_no_alloc(|| source.restart());
+        assert_eq!(send(&mut source, 1, 7, laptop), 1, "another address is refused after a move");
+        assert_eq!(send(&mut source, 2, 7, phone), 2, "the singer re-anchors");
+        assert_no_alloc(|| source.reset());
+        assert_eq!(send(&mut source, 3, 7, phone), 2, "the released sender is turned away");
+        assert_eq!(send(&mut source, 4, 9, laptop), 3, "the next singer takes the slot");
     }
 
     /// 8.4's done-when: reordering, 30 ms spikes and 5 percent loss on every frame size. The
@@ -393,28 +427,29 @@ mod tests {
     }
 
     /// A new SSRC or `ResetSlot` is a new singer: the stream re-anchors at the next packet, and
-    /// what the old stream still had in hand, under a playout delay's worth, goes with it.
+    /// what the old stream still had in hand, under a playout delay's worth, goes with it. The
+    /// singer after the reset is another phone, since the one released is turned away.
     #[test]
     fn a_new_ssrc_or_reset_slot_starts_a_new_stream() {
         let signal = quantized(&source(3 * RATE as usize));
         let (parts, _) = signal.as_chunks::<{ RATE as usize }>();
         let mut a = L16Sender::new(240, 11);
         let mut b = L16Sender::new(240, 12);
+        let mut c = L16Sender::new(240, 13);
         let mut arrivals = a.send_all(&parts[0], 0, 1.0);
         arrivals.extend(b.send_all(&parts[1], SECOND, 1.0));
-        arrivals.extend(b.send_all(&parts[2], 2 * SECOND, 1.0));
+        let next_phone = ([192, 168, 1, 21], 50_000).into();
+        arrivals.extend(c.send_all(&parts[2], 2 * SECOND, 1.0).into_iter().map(|arrival| {
+            Arrival { packet: Packet { from: next_phone, ..arrival.packet }, ..arrival }
+        }));
         let arrivals = impair(&arrivals, Impairment::NONE, 4);
         let mut rig = Rig::new(Codec::L16);
         let reset_at = 2 * SECOND;
         rig.run(&arrivals, reset_at);
         rig.reset_slot();
-        // The first packet to land after the reset anchors the new stream; part two follows it
-        let first = arrivals.iter().position(|a| a.at >= reset_at).unwrap();
-        let anchors = [
-            anchor_of(&arrivals),
-            anchor_of(&arrivals[200..]),
-            anchor_of(&arrivals[first..]) + (400 - first as i64) * 240,
-        ];
+        let first = arrivals.iter().position(|a| a.packet.ssrc == 13).unwrap();
+        let anchors =
+            [anchor_of(&arrivals), anchor_of(&arrivals[200..]), anchor_of(&arrivals[first..])];
         rig.run(&arrivals, anchors[2] + SECOND);
         for (k, part) in parts.iter().enumerate() {
             // The last 30 ms of a part are in hand when the next stream or the reset drops it

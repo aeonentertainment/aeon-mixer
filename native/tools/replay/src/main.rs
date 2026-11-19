@@ -1,16 +1,4 @@
-//! replay: a slot's recording through the real chain on the offline driver, beside libopus's
-//! own decode of the same packets (docs/design.md 8.9, decision 0017). It opens no device and
-//! no socket. The same file replays to the same samples every time.
-
-mod capture;
-mod levels;
-mod reference;
-mod slot_replay;
-mod stream;
-mod wav;
-
-#[cfg(test)]
-mod round_trip;
+//! `replay`: prints what a slot's recording or a session bundle's song played as (lib.rs).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,18 +6,26 @@ use std::process::ExitCode;
 use engine::block::RATE;
 use engine::ingest::Codec;
 
-use crate::levels::Levels;
-use crate::reference::Kind;
-use crate::stream::Stream;
+use replay::levels::Levels;
+use replay::reference::Kind;
+use replay::stream::Stream;
+use replay::{bundle, capture, reference, slot_replay, wav};
 
 const USAGE: &str = "\
 usage: replay RECORDING.pcap [--port N] [--codec opus|l16] [--playout-delay-ms MS] [--wav DIR]
+       replay BUNDLE_DIR [--profile FILE] [--backing STEMS] [--wav DIR] [--json]
 
   RECORDING.pcap      what Mixer.recordSlot wrote, or any classic pcap of one RTP stream
   --port N            the UDP port the stream was sent to; needed when the capture has several
   --codec             opus (default) for a phone or mediasoup, l16 for a house mic
   --playout-delay-ms  the jitter buffer's delay, pinned as Aeon Karaoke pins it (default 15)
-  --wav DIR           also write slot.wav and reference.wav into DIR";
+  --wav DIR           also write slot.wav and reference.wav, or a bundle's mix.wav, into DIR
+
+  BUNDLE_DIR          a session bundle, as createMixer({ bundle }) writes it
+  --profile FILE      replay under this settings profile, not the bundle's own
+  --backing STEMS     a directory holding the song's stems, found by hash; without it the mic
+                      path plays alone
+  --json              print the replay's stats and levels as JSON";
 
 /// How long the slot plays on after the last packet: past its delay and its longest frame.
 const TAIL_FRAMES: i64 = RATE as i64 / 4;
@@ -40,6 +36,10 @@ struct Options {
     kind: Kind,
     playout_delay_ms: f64,
     wav: Option<PathBuf>,
+    bundle: bundle::report::Options,
+    json: bool,
+    /// The single-recording flags given, which a bundle refuses.
+    recording_flags: Vec<String>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -50,9 +50,15 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         kind: Kind::Opus,
         playout_delay_ms: 15.0,
         wav: None,
+        bundle: bundle::report::Options::default(),
+        json: false,
+        recording_flags: Vec::new(),
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
+        if matches!(arg.as_str(), "--port" | "--codec" | "--playout-delay-ms") {
+            options.recording_flags.push(arg.clone());
+        }
         match arg.as_str() {
             "--port" => options.port = Some(value()?.parse().map_err(|_| "--port takes a port")?),
             "--codec" => {
@@ -67,6 +73,9 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                     value()?.parse().map_err(|_| "--playout-delay-ms takes milliseconds")?;
             }
             "--wav" => options.wav = Some(PathBuf::from(value()?)),
+            "--profile" => options.bundle.profile = Some(PathBuf::from(value()?)),
+            "--backing" => options.bundle.backing = Some(PathBuf::from(value()?)),
+            "--json" => options.json = true,
             flag if flag.starts_with("--") => return Err(format!("no flag {flag}")),
             path => recording = Some(PathBuf::from(path)),
         }
@@ -76,6 +85,20 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
 }
 
 fn run(options: &Options) -> Result<(), String> {
+    if options.recording.is_dir() {
+        if let Some(flag) = options.recording_flags.first() {
+            return Err(format!("{flag} is for a single recording; a bundle says its own"));
+        }
+        return bundle::report::run(
+            &options.recording,
+            &options.bundle,
+            options.json,
+            options.wav.as_deref(),
+        );
+    }
+    if options.json || options.bundle != bundle::report::Options::default() {
+        return Err("--profile, --backing and --json are for a bundle's directory".into());
+    }
     let bytes = std::fs::read(&options.recording)
         .map_err(|e| format!("{}: {e}", options.recording.display()))?;
     let stream = Stream::of(&capture::read(&bytes)?, options.port)?;
@@ -103,6 +126,13 @@ fn run(options: &Options) -> Result<(), String> {
     let senders: Vec<String> =
         stream.senders.iter().map(|(ip, port)| format!("{ip}:{port}")).collect();
     println!("from {}", senders.join(", "));
+    if senders.len() > 1 {
+        // Decision 0028: the slot takes one address at a time, and the capture holds no resetSlot
+        println!(
+            "several senders: the slot plays one at a time and libopus alone decodes them all, so \
+             their levels can differ by what the slot refused"
+        );
+    }
     let s = replayed.stats;
     println!(
         "slot stats: pushed {} lost {} late {} concealed {} resyncs {} jitter {:.2} ms, ring full {}",
@@ -132,8 +162,8 @@ fn run(options: &Options) -> Result<(), String> {
     );
 
     if let Some(dir) = &options.wav {
-        wav::write_mono(&dir.join("slot.wav"), &replayed.out)?;
-        wav::write_mono(&dir.join("reference.wav"), &reference)?;
+        wav::write(&dir.join("slot.wav"), &replayed.out, 1)?;
+        wav::write(&dir.join("reference.wav"), &reference, 1)?;
         println!("\nwrote slot.wav and reference.wav in {}", dir.display());
     }
     Ok(())
@@ -148,8 +178,3 @@ fn main() -> ExitCode {
         }
     }
 }
-
-// Tests wrap every pump in `assert_no_alloc`; this allocator is what makes it panic.
-#[cfg(test)]
-#[global_allocator]
-static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;

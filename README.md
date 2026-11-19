@@ -15,7 +15,7 @@ Each [release](https://github.com/aeonentertainment/aeon-mixer/releases) carries
 Depend on its URL, and the lockfile pins its hash:
 
 ```bash
-npm install https://github.com/aeonentertainment/aeon-mixer/releases/download/v0.7.1/aeonentertainment-mixer-0.7.1.tgz
+npm install https://github.com/aeonentertainment/aeon-mixer/releases/download/v0.9.0/aeonentertainment-mixer-0.9.0.tgz
 ```
 
 ## Use
@@ -55,6 +55,9 @@ await engine.close();
   a pitch reading, a melody guide and pitch correction toward it, whose delay `stats()` reports.
   A slot can also take the room's echo of the mix out of its input and duck itself when its loop
   through the speakers starts to howl; both add no delay, and `stats()` reports what they found.
+  A tone stage takes the host's bands for the mic it knows, an air shelf, a de-esser and a
+  plosive guard. Its filters hold no sample, and `setSlotEffects` refuses bands and air that would
+  leave any frequency from 80 Hz over 0.2 ms late or lift one over 6 dB.
 - **The backing** is any format Symphonia decodes, resampled to 48 kHz. The armed key and speed
   are rendered before `start` resolves. Live, it supports seek, pause, resume, a key change and
   stem gains, and `start`, `seek` and `resume` report the position the lyric clock follows.
@@ -64,6 +67,13 @@ await engine.close();
   `engine.profile` reads back the one in force. An effect parameter or a stem gain a call leaves
   out takes the profile's; one it names is the caller's choice. `parseProfile` reads one from
   JSON and refuses a missing field, an unknown field or a value out of range by name.
+- **A session bundle** is one song in a directory: `createMixer({ bundle: { dir } })` writes it
+  into a new directory from then until `destroy`. It holds `manifest.json`, the `profile.json`
+  in force, a pcap of what reached each `rtp` and `l16` slot, `events.jsonl` with every call that
+  changed what was heard, `stats.jsonl` with `stats()` once a second, and an empty `host/` for
+  the host's own files. Every line carries the engine's frame count and the wall clock. A stem is
+  named by its hash, and a sender by a port of its own at 0.0.0.0, never its address. A bundle holds every singer's voice: nothing here
+  sends it anywhere, and the host owns it and answers for each singer's consent.
 - **`rtpReturn`** sends the mix to mediasoup's PlainTransport as 10 ms Opus with in-band FEC.
   `host` is an IP address, never a name.
 - **Reactions** play through `engine.reactions.play` between songs and during them.
@@ -75,8 +85,11 @@ await engine.close();
   from `outputDevices()`. When the default changes, or the output goes away, the song
   moves to the new output after a short gap, a pinned engine moving back when its output
   returns. `engine.output` names the output playing and its latency, and `outputChanged` fires
-  after each move with both and the gap. When the new output will not start, the song goes back
-  to the output it left, or failing that to the default, as a move with its own gap.
+  after each move with both, the gap, and how long the gap held the backing: the gap while it
+  plays, 0 while it is paused. Both count from the last audio the old output asked for, so an
+  output that stalled first counts the stall. A lyric clock moves by that hold and the change in
+  latency. When the new output will not start, the song goes back to the output it left, or
+  failing that to the default, as a move with its own gap.
   `engine.output.refused` names the one that would not start, with what the OS said, until the
   pin or default rule picks another output, as when the default changes or the refused output
   leaves the list.
@@ -84,7 +97,8 @@ await engine.close();
 - **An output that will not start** makes `openEngine` reject with `OutputUnavailableError`,
   whose `code` is `"output-unavailable"` and whose `device` names it. `outputDevices()` and
   `inputDevices()` list the OS's devices with no engine open, so a host can open another; they
-  open no stream and change no setting. An engine's own `outputDevices()` lists the same on a
+  open no stream and change no setting. Each entry's `transport` says how the device reaches the
+  machine, so a host can pass over a `virtual` one that plays to nobody. An engine's own `outputDevices()` lists the same on a
   device engine and none on the timer and offline clocks, which play on no output.
 - **The offline engine**, `openEngine({ output: { offline: true } })`, opens no device and
   renders only when its caller runs `engine.pump(blocks)`. The tests run on it.

@@ -7,9 +7,11 @@
 //! A packet arriving after its time is counted late and dropped, and the stream plays on. Clock
 //! skew is corrected one frame at a time, by moving the anchor a frame and dropping or concealing
 //! the frame that makes. A new SSRC, a gap over a second on either clock, or `reset` starts a new
-//! stream.
+//! stream. The slot takes packets from one address, its sender, until that address has been quiet
+//! a second or `reset` releases it (decision 0028).
 //! A buffer made with `chosen` lets each stream move its own delay, as `DelayChooser` decides.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use super::codec::Codec;
@@ -66,8 +68,20 @@ pub struct JitterBuffer {
     streams: u32,
     /// Output frames pulled since the buffer was made: the clock every due time is on.
     now: i64,
+    /// The one address with a claim on the slot, until it has been quiet a second: decision 0028.
+    /// It holds the slot, and once `reset` releases it, it is turned away instead, so a packet
+    /// still in flight from it cannot take the slot from the next singer.
+    holder: Option<Heard>,
     stats: SlotStats,
     shared: Arc<SharedStats>,
+}
+
+/// An address, the output frame it last sent at, and whether `reset` released it.
+#[derive(Clone, Copy)]
+struct Heard {
+    from: SocketAddr,
+    at: i64,
+    released: bool,
 }
 
 struct Stream {
@@ -139,6 +153,7 @@ impl JitterBuffer {
             spliced: 0,
             streams: 0,
             now: 0,
+            holder: None,
             stats,
             shared,
         }
@@ -172,8 +187,18 @@ impl JitterBuffer {
         self.streams
     }
 
-    /// `ResetSlot`: forget the stream. The next packet is a new singer and re-anchors.
+    /// `ResetSlot`: forget the stream and release its sender. The next packet is a new singer
+    /// and re-anchors.
     pub fn reset(&mut self) {
+        if let Some(holder) = &mut self.holder {
+            holder.released = true;
+        }
+        self.restart();
+    }
+
+    /// A move to another output: forget the stream, which the stopped clock paced, and keep its
+    /// sender, whose next packet re-anchors.
+    pub fn restart(&mut self) {
         self.stream = None;
         self.playout_delay = self.opening;
         self.fifo.clear();
@@ -181,9 +206,13 @@ impl JitterBuffer {
 
     /// Takes one packet from the ring, on the audio thread.
     pub fn push(&mut self, packet: &Packet) {
+        if self.refuses(packet) {
+            return;
+        }
+        self.holder = Some(Heard { from: packet.from, at: self.now, released: false });
         self.stats.pushed += 1;
         let Some(stream) = &mut self.stream else { return self.anchor(packet) };
-        if packet.ssrc != stream.ssrc || self.now - stream.last_arrival > REANCHOR_GAP {
+        if packet.ssrc != stream.ssrc {
             return self.anchor(packet);
         }
         let ahead = packet.seq.wrapping_sub(stream.next_seq) as i16;
@@ -214,12 +243,6 @@ impl JitterBuffer {
     pub fn pull(&mut self, out: &mut [f32]) {
         let now = self.now;
         let end = now + out.len() as i64;
-        if let Some(stream) = &self.stream
-            && now - stream.last_arrival > REANCHOR_GAP
-        {
-            // Nothing for a second: stop concealing and wait for a new stream
-            self.reset();
-        }
         if let Some(stream) = &mut self.stream {
             self.spliced +=
                 stream.correct_skew(now, self.playout_delay, self.opening, &mut self.stats);
@@ -272,10 +295,38 @@ impl JitterBuffer {
             chooser.hear(out);
         }
         self.now = end;
+        self.end_what_went_quiet();
         self.stats.jitter_ms =
             self.stream.as_ref().map_or(0.0, |stream| stream.jitter * 1000.0 / RATE as f32);
         self.stats.playout_delay_ms = frames_to_ms(self.playout_delay);
         self.shared.publish(&self.stats);
+    }
+
+    /// Another address than the holder's, or the holder's once it is released: decision 0028. A
+    /// refused packet from a released holder starts its second of quiet again.
+    fn refuses(&mut self, packet: &Packet) -> bool {
+        let Some(holder) = &mut self.holder else { return false };
+        if holder.from != packet.from {
+            return !holder.released;
+        }
+        if holder.released {
+            holder.at = self.now;
+        }
+        holder.released
+    }
+
+    /// Nothing for a second ends the stream, so an idle slot stops concealing and costs no
+    /// decodes, and ends an address's hold on the slot. At the end of a block, so the next
+    /// block's packets never meet a stream that is over.
+    fn end_what_went_quiet(&mut self) {
+        let now = self.now;
+        let quiet = |since: i64| now - since > REANCHOR_GAP;
+        if self.stream.as_ref().is_some_and(|stream| quiet(stream.last_arrival)) {
+            self.restart();
+        }
+        if self.holder.is_some_and(|holder| quiet(holder.at)) {
+            self.holder = None;
+        }
     }
 
     fn anchor(&mut self, packet: &Packet) {
@@ -526,7 +577,7 @@ impl Stream {
             return 0;
         }
         let window = std::mem::replace(&mut self.skew, SkewWindow::new(now + SKEW_WINDOW));
-        let fallen = self.chooser.as_ref().is_some_and(|chooser| chooser.fallen() > 0);
+        let fallen = self.chooser.as_ref().is_some_and(DelayChooser::has_fallen);
         let by = window.correction(playout_delay, self.frame as i64, fallen);
         if let Some(held) = &mut self.held {
             let window = std::mem::replace(&mut held.skew, SkewWindow::new(now + SKEW_WINDOW));
@@ -804,6 +855,64 @@ mod tests {
         let fit = compare(&signal, 0, &out, anchor_of(&arrivals[200..]), 0);
         assert!(fit.error < 1e-6, "{fit:?}");
         assert_eq!(jitter.stats().resyncs, 1);
+    }
+
+    const PHONE: SocketAddr = SocketAddr::V4(std::net::SocketAddrV4::new(
+        std::net::Ipv4Addr::new(192, 168, 1, 20),
+        50_000,
+    ));
+    const LAPTOP: SocketAddr = SocketAddr::V4(std::net::SocketAddrV4::new(
+        std::net::Ipv4Addr::new(192, 168, 1, 77),
+        41_000,
+    ));
+
+    fn sent_from(arrivals: Vec<Arrival>, from: SocketAddr) -> Vec<Arrival> {
+        arrivals.into_iter().map(|a| Arrival { packet: Packet { from, ..a.packet }, ..a }).collect()
+    }
+
+    /// A second sender on the singer's port mid-song, with its own sound and either its own SSRC
+    /// or the singer's: the room hears only the singer, and the stream is never re-anchored.
+    #[test]
+    fn another_sender_never_takes_a_playing_stream() {
+        let song = quantized(&source(2 * RATE as usize));
+        let singer = sent_from(L16Sender::new(240, 40).send_all(&song, 0, 1.0), PHONE);
+        let sound = quantized(&voice(RATE as usize));
+        for ssrc in [41, 40] {
+            let intruder = L16Sender::new(240, ssrc).send_all(&sound, SECOND / 2, 1.0);
+            let mut arrivals = [singer.clone(), sent_from(intruder, LAPTOP)].concat();
+            arrivals.sort_by_key(|a| a.at);
+            let mut rig = Rig::new(Codec::L16);
+            rig.run(&arrivals, 2 * SECOND + 4800);
+            let fit = compare(&song, 0, &rig.out, anchor_of(&singer), 0);
+            assert!(fit.error < 1e-6, "SSRC {ssrc}: {fit:?}");
+            let stats = rig.stats();
+            assert_eq!(stats.resyncs, 0, "SSRC {ssrc}: {stats:?}");
+            assert_eq!(stats.pushed, singer.len() as u32, "the intruder's packets count nowhere");
+        }
+    }
+
+    /// The slot is free again once its stream ends: a new singer on another address after
+    /// `resetSlot`, though the old phone sends on for half a second after it, then the first
+    /// singer back from a new address after a second's quiet, as a phone that changed networks
+    /// is.
+    #[test]
+    fn the_slot_takes_a_new_sender_once_its_stream_ends() {
+        let roamed = SocketAddr::from(([10, 0, 0, 20], 50_002));
+        let verse = quantized(&source(RATE as usize));
+        let sung_on = quantized(&source(3 * RATE as usize / 2));
+        let first = sent_from(L16Sender::new(240, 50).send_all(&sung_on, 0, 1.0), PHONE);
+        let next = sent_from(L16Sender::new(240, 51).send_all(&verse, SECOND + 4800, 1.0), LAPTOP);
+        let back = sent_from(L16Sender::new(240, 52).send_all(&verse, 7 * SECOND / 2, 1.0), roamed);
+        let mut arrivals = [first, next.clone(), back.clone()].concat();
+        arrivals.sort_by_key(|a| a.at);
+        let mut rig = Rig::new(Codec::L16);
+        rig.run(&arrivals, SECOND + 2400);
+        rig.reset_slot();
+        rig.run(&arrivals, 5 * SECOND);
+        for (who, sent) in [("after resetSlot", &next), ("after a second's quiet", &back)] {
+            let fit = compare(&verse, 0, &rig.out, anchor_of(sent), 0);
+            assert!(fit.error < 1e-6, "{who}: {fit:?}");
+        }
     }
 
     #[test]

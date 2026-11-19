@@ -11,10 +11,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use super::pcap;
 use super::tap::{Record, Tap};
+use super::wall_clock::WallClock;
 use crate::receive::DATAGRAM;
 
 /// Records in flight between the tap and the writer: five seconds of 20 ms frames, 0.64 s of
@@ -40,22 +41,21 @@ pub struct Recording {
 }
 
 impl Recording {
-    /// A new pcap file at `path`, never over an existing one, for datagrams sent to `port`. A
+    /// A new pcap file at `path`, never over an existing one, for datagrams sent to `port`, each
+    /// stamped with `clock`'s time of its arrival. A
     /// recording holds a singer's voice and their phone's address, so on Unix only its owner can
     /// read it, whatever the process's umask. On Windows it takes the folder's access list.
-    pub fn create(path: &Path, port: u16) -> io::Result<(Self, Tap)> {
+    pub fn create(path: &Path, port: u16, clock: WallClock) -> io::Result<(Self, Tap)> {
         let mut options = File::options();
         options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         let mut file = options.open(path)?;
         file.write_all(&pcap::global_header())?;
-        let started = Instant::now();
-        let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let (mut records, mut inbox) = rtrb::RingBuffer::new(CAPACITY);
         // Every slot written once here, so the network thread never takes the page faults
         let blank = Record {
-            at: started,
+            at: Instant::now(),
             from: SocketAddr::from(([0; 4], 0)),
             len: 0,
             datagram: [0; DATAGRAM],
@@ -67,8 +67,8 @@ impl Recording {
         let dropped = Arc::new(AtomicU32::new(0));
         let writer = thread::Builder::new()
             .name("aeon-mixer-record".into())
-            .spawn(move || write_all(file, inbox, port, started, since_epoch))?;
-        let tap = Tap { records, dropped: Arc::clone(&dropped) };
+            .spawn(move || write_all(file, inbox, port, clock))?;
+        let tap = Tap { records, dropped: Arc::clone(&dropped), stand_in: None };
         Ok((Self { writer, dropped }, tap))
     }
 
@@ -83,8 +83,7 @@ fn write_all(
     mut file: File,
     mut inbox: rtrb::Consumer<Record>,
     port: u16,
-    started: Instant,
-    since_epoch: Duration,
+    clock: WallClock,
 ) -> io::Result<u64> {
     let mut bytes = Vec::with_capacity(pcap::FRAMING_LEN + DATAGRAM);
     let mut written = 0;
@@ -96,7 +95,7 @@ fn write_all(
                 SocketAddr::V4(v4) => (*v4.ip(), v4.port()),
                 SocketAddr::V6(v6) => (Ipv4Addr::UNSPECIFIED, v6.port()),
             };
-            let at = since_epoch + record.at.saturating_duration_since(started);
+            let at = clock.at(record.at);
             bytes.clear();
             let datagram = &record.datagram[..usize::from(record.len)];
             pcap::append_record(&mut bytes, at, source, port, datagram);
@@ -129,7 +128,7 @@ mod tests {
     #[test]
     fn a_tap_records_without_allocating_and_the_file_holds_every_datagram() {
         let path = scratch("tap");
-        let (recording, mut tap) = Recording::create(&path, 40_000).unwrap();
+        let (recording, mut tap) = Recording::create(&path, 40_000, WallClock::now()).unwrap();
         let from = SocketAddr::from(([10, 0, 0, 7], 50_000));
         let base = Instant::now();
         assert_no_alloc(|| {
@@ -160,12 +159,57 @@ mod tests {
         }
     }
 
+    /// A session bundle's recording holds each datagram, when it came and which sender it came
+    /// from, and not who that sender was: each address becomes a port of its own at 0.0.0.0, so a
+    /// replay refuses who the live slot refused (decision 0028) and learns no address.
+    #[test]
+    fn a_tap_that_hides_senders_keeps_them_apart_and_writes_no_address() {
+        let path = scratch("hidden");
+        let (recording, mut tap) = Recording::create(&path, 40_000, WallClock::now()).unwrap();
+        tap.hide_senders();
+        let phone = SocketAddr::from(([10, 0, 0, 7], 50_000));
+        let other = SocketAddr::from(([10, 0, 0, 8], 50_000));
+        let same_host = SocketAddr::from(([10, 0, 0, 7], 50_002));
+        assert_no_alloc(|| {
+            for (payload, from) in [(1, phone), (2, other), (3, phone), (4, same_host)] {
+                tap.record(&[payload; 40], from, Instant::now());
+            }
+        });
+        drop(tap);
+        assert_eq!(recording.finish().unwrap(), Written { records: 4, dropped: 0 });
+
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let ip = pcap::RECORD_HEADER_LEN + pcap::ETHERNET_LEN;
+        let udp = ip + pcap::IPV4_LEN;
+        let record = pcap::FRAMING_LEN + 40;
+        let senders: Vec<u16> = bytes[pcap::GLOBAL_HEADER_LEN..]
+            .chunks(record)
+            .enumerate()
+            .map(|(k, r)| {
+                assert_eq!(&r[ip + 12..ip + 16], &[0; 4], "record {k}'s source address");
+                assert_eq!(&r[udp + 2..udp + 4], &40_000u16.to_be_bytes(), "the slot's port stays");
+                assert_eq!(&r[udp + pcap::UDP_LEN..], &[k as u8 + 1; 40], "record {k}'s datagram");
+                u16::from_be_bytes([r[udp], r[udp + 1]])
+            })
+            .collect();
+        let [phone, other, again, same_host] = senders[..] else { panic!("{senders:?}") };
+        assert_eq!(phone, again, "one sender, one port");
+        assert!(phone != other && phone != same_host && other != same_host, "{senders:?}");
+        assert!(senders.iter().all(|&port| port != 0 && port != 50_000), "{senders:?}");
+        let addresses = [[10, 0, 0, 7], [10, 0, 0, 8]];
+        assert!(
+            !bytes.windows(4).any(|w| addresses.iter().any(|a| a == w)),
+            "no address is anywhere in it"
+        );
+    }
+
     /// A writer that falls behind costs the recording records, never the network thread a wait:
     /// a burst far past the ring returns at once and every record is written or counted.
     #[test]
     fn a_burst_past_the_ring_drops_records_and_never_blocks() {
         let path = scratch("burst");
-        let (recording, mut tap) = Recording::create(&path, 40_000).unwrap();
+        let (recording, mut tap) = Recording::create(&path, 40_000, WallClock::now()).unwrap();
         let from = SocketAddr::from(([10, 0, 0, 7], 50_000));
         let now = Instant::now();
         for _ in 0..20 * CAPACITY {
@@ -183,7 +227,7 @@ mod tests {
     fn only_its_owner_can_read_a_recording() {
         use std::os::unix::fs::PermissionsExt;
         let path = scratch("private");
-        let (recording, tap) = Recording::create(&path, 40_000).unwrap();
+        let (recording, tap) = Recording::create(&path, 40_000, WallClock::now()).unwrap();
         drop(tap);
         recording.finish().unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -195,7 +239,7 @@ mod tests {
     fn a_recording_never_overwrites_a_file() {
         let path = scratch("exists");
         std::fs::write(&path, b"keep me").unwrap();
-        let refused = Recording::create(&path, 40_000);
+        let refused = Recording::create(&path, 40_000, WallClock::now());
         assert_eq!(refused.err().map(|e| e.kind()), Some(io::ErrorKind::AlreadyExists));
         assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
         std::fs::remove_file(&path).unwrap();

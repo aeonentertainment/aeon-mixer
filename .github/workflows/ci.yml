@@ -76,6 +76,13 @@ jobs:
       # The engine's share of the mic path, in the log for any PR to quote. Opens no device
       - run: cargo run -p measure-latency
         working-directory: native
+      # The committed fixture's scorecard against its baseline, in the log for any PR to quote.
+      # cargo test fails a number moved past its tolerance; this prints every number that moved
+      - run: >-
+          cargo run -p scorecard -- tools/scorecard/fixtures/bundles
+          --backing tools/scorecard/fixtures/stems
+          --baseline tools/scorecard/fixtures/baseline.json
+        working-directory: native
       - run: vp run build:native
       - run: vp check
       - run: vp test

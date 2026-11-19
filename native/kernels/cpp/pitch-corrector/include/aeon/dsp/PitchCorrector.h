@@ -43,6 +43,8 @@ class PitchCorrector {
   bool correcting() const;
   /** How far the output trails the input now, in samples; 0 while bypassed. */
   int latencySamples() const;
+  /** The transposition the newest output got, in semitones; 0 while bypassed. */
+  float shiftSemitones() const;
 
  private:
   struct State;

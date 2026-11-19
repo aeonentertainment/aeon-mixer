@@ -33,6 +33,7 @@ pub struct EffectParams {
     pub echo_cancel: EchoCancelParams,
     pub cleanup: CleanupParams,
     pub howl_guard: HowlGuardParams,
+    pub tone: ToneParams,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -74,6 +75,87 @@ pub struct EchoCancelParams {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HowlGuardParams {
     pub enabled: bool,
+}
+
+/// The most bands a tone stage takes: a low shelf, a high shelf and six peaks.
+pub const TONE_BANDS: usize = 8;
+
+/// Makes a phone sound like a good vocal mic: the plosive guard, the bands, the air shelf and the
+/// de-esser, in that order. An amount at 0 leaves its part out of the path, and `check`, on the
+/// control thread, refuses bands that would cost the mic path phase (docs/design.md 8.6).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ToneParams {
+    pub enabled: bool,
+    pub bands: ToneBands,
+    /// 0 to 12: the most the guard takes off a pop.
+    pub plosive_db: f32,
+    /// 0 to 6: the lift of the 10 kHz shelf.
+    pub air_db: f32,
+    /// 0 to 12: the most the de-esser takes off an s.
+    pub de_ess_db: f32,
+}
+
+/// A host's correction for the mic it knows. The blind match joins as a variant once it has a
+/// target to aim at (decision 0029).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ToneBands {
+    #[default]
+    None,
+    Given {
+        count: u8,
+        bands: [ToneBand; TONE_BANDS],
+    },
+}
+
+impl ToneBands {
+    /// `bands` as `Params` holds them, or `None` past `TONE_BANDS`.
+    pub fn given(bands: &[ToneBand]) -> Option<Self> {
+        let mut held = [ToneBand::default(); TONE_BANDS];
+        held.get_mut(..bands.len())?.copy_from_slice(bands);
+        Some(match bands.len() {
+            0 => Self::None,
+            count => Self::Given { count: count as u8, bands: held },
+        })
+    }
+
+    pub fn as_slice(&self) -> &[ToneBand] {
+        match self {
+            Self::None => &[],
+            Self::Given { count, bands } => &bands[..usize::from(*count)],
+        }
+    }
+}
+
+/// One of the Audio EQ Cookbook's biquads at 48 kHz, a shelf at slope 1: the same curve a host's
+/// fitting tool draws from the same numbers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ToneBand {
+    Peak { hz: f32, gain_db: f32, q: f32 },
+    LowShelf { hz: f32, gain_db: f32 },
+    HighShelf { hz: f32, gain_db: f32 },
+}
+
+impl ToneBand {
+    pub fn hz(&self) -> f32 {
+        match *self {
+            Self::Peak { hz, .. } | Self::LowShelf { hz, .. } | Self::HighShelf { hz, .. } => hz,
+        }
+    }
+}
+
+/// Flat: the filler past a stage's last band.
+impl Default for ToneBand {
+    fn default() -> Self {
+        Self::Peak { hz: 1000.0, gain_db: 0.0, q: 1.0 }
+    }
+}
+
+/// What `ToneParams::check` refuses: the frequency the bands and the air treat worst, and by
+/// how much.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ToneRefusal {
+    Late { hz: f32, delay_ms: f32 },
+    Lifted { hz: f32, lift_db: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

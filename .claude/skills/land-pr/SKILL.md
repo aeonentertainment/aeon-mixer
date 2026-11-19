@@ -22,8 +22,13 @@ the line the comment sits on, and prefer the fix that removes code. A fix that a
 than it removes says in the reply why no existing code could change instead. A **second patch**
 is a stop sign: when a review finds a bug in code you added to answer an earlier finding, patch
 nothing more. Rewrite the approach so neither finding can occur, or reply with why the approach
-is right and the test that proves it. A finding larger than the PR becomes an issue titled
-`pattern: <the shape>` and no change here.
+is right and the test that proves it. A finding larger than the PR goes as a comment on the
+area's `pattern:` issue (open one titled `pattern: <the shape>` only when the area has none) and
+makes no change here.
+
+**Two rounds** is the budget. Before a push that changes code, go through the three review skills
+on the fix, as before the PR opened. A third round of findings is the same stop sign as a second
+patch: the slice is too large or the approach is wrong, so split it or rethink it.
 
 `babysit-pr` and `leaving-pr-comments` are user-level skills on the developer's machines. Without
 them: watch through the harness instead of polling, check every bot finding against the source,
@@ -36,12 +41,22 @@ The engine's own suites ran in step 1. This step runs the PR's engine where it s
 Karaoke's device service. When the PR changes nothing the engine does (docs, CI), the PR comment
 says so and why, and step 2 is done.
 
-- Build the PR head (`pnpm install`, `vp run build:native`) and install that build into an Aeon
-  Karaoke worktree off its `origin/main`.
-- Run the device service's protocol suite on it: `MIXER_ENGINE=aeon npx vitest run` in
-  `app/device/service/test/e2e/protocol`. Its README names the six tests that assert
-  GStreamer's own behaviour; every other test passes. The suite keeps the engine on its offline
-  clock, so it never opens the developer's audio device.
+- Pack the PR head: `pnpm install`, `pnpm exec vp run build:native`, `pnpm exec vp pack`, then
+  `pnpm pack --pack-destination <scratch>`. The lockfile needs the pnpm that `devEngines` in
+  `package.json` pins. An older global pnpm fails with `ERR_PNPM_BROKEN_LOCKFILE`, so run each
+  pnpm command as `pnpm dlx pnpm@<that version>`.
+- Install the tarball into a temporary Aeon Karaoke worktree. In the host's checkout:
+  `git fetch origin main`, `git worktree add --detach <scratch>/host origin/main`. In that
+  worktree: `npm ci`, `npm rebuild mediasoup --ignore-scripts=false`, then
+  `npm install --no-save <tarball>`, which replaces the version the host pins. The host's
+  `.npmrc` turns install scripts off, so mediasoup has no worker until the rebuild.
+- Run the device service's protocol suite there:
+  `npx nx run @aeon-karaoke/device-service:e2e:protocol`. It builds the service first and takes
+  about 20 minutes. A pass is every test passing and the command exiting 0. The suite opens the
+  engine on its timer clock, so it never opens the developer's audio device. A run that goes
+  silent writes `STALL.txt`, with stacks, beside the device logs in its run folder under the
+  suite's `.result/`; a failed or stalled run keeps that folder, so quote it in the PR comment.
+  Then `git worktree remove --force <scratch>/host` from the host's checkout.
 - **Then hunt edge cases** the change is most likely to break, on the offline driver: a slot
   added or removed mid-song, a mixer swap during playback, packet loss, a DTX pause and late
   packets, every parameter at its limits, a ramp interrupted by another. Run the five most
@@ -57,7 +72,9 @@ and the numbers. A failing row is a bug: fix it, push, return to step 1.
 Check the stop list below. If nothing on it applies: `git fetch`, confirm the head is still the
 one you proved and green, then `gh pr merge <n> --squash --match-head-commit <sha>` with that
 head, so a push that slipped in fails the merge and sends you back to step 1. Then close the
-issue the PR finishes, with a comment naming the PRs and where any leftover went.
+issue the PR finishes, with a comment naming the PRs and where any leftover went. In the same
+turn, remove the PR's worktree and mark the agent that built it as finished in the harness, so
+nothing is left open.
 
 ### Stop and ask instead of merging
 

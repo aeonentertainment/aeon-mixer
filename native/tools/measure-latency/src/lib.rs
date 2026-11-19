@@ -14,6 +14,7 @@ pub mod matched_filter;
 pub mod offline;
 pub mod opening;
 pub mod packets;
+pub mod phrases;
 pub mod physical;
 pub mod programme;
 pub mod reading;

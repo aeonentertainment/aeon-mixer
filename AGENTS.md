@@ -59,6 +59,7 @@ a decision record and the developer's agreement.
    telemetry. Anything the cloud needs to know is Aeon Karaoke's job.
 4. **The public API is versioned.** A breaking change to an exported type or behaviour is a
    deliberate major bump with a note in the decision log, never a side effect of a refactor.
+   Before 1.0 the minor number is the major: decision 0024.
 5. **No `any`.** Inferred types first, annotations where inference cannot reach.
 
 ## Ways to hurt yourself
@@ -81,6 +82,11 @@ a decision record and the developer's agreement.
   tests load the addon it builds. With a global `vp`, `vp install` and `vp run build:native` do the
   same. pnpm, a Rust toolchain and cmake are the things to install yourself: `opusic-sys`
   builds libopus from source with cmake.
+- `rustup update stable` when cargo says the addon needs a newer Rust. `native/rust-toolchain.toml`
+  follows `stable`, and the addon crate's `rust-version` is 1.98: up to 1.97, the `rust-objcopy`
+  that strips the release build leaves an addon that dyld on macOS 27 refuses
+  (`mis-aligned LINKEDIT string pool`). Cargo refuses any build that includes the addon below
+  1.98, on every platform, so `cargo test` in `native/` needs it too.
 - `vp check` formats, lints and type-checks the TypeScript. `vp test` runs its suite.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` in
   `native/` do the same for Rust.
@@ -98,13 +104,22 @@ a decision record and the developer's agreement.
 - Timing claims need a number. A latency change ships with the measurement that justifies it,
   taken with `measure-latency` or `measure-sink`.
 - Never wait on sleeps or polling in tests. Await the event or promise that marks the milestone.
+- Before a PR opens, read the `bug-review`, `shape-review` and `pr-review` skills and follow each
+  against your own diff (`git diff origin/main...HEAD`, since there is no PR number yet). Fix
+  what they find and go through them again on the fix, so the first review on CI finds nothing.
 
 ## Pull requests
 
 - Never open a PR unless the developer asks.
-- One concern per PR. If the description needs "also", split it.
-- One thread is one PR. A thread starts in its own worktree from `main`, carries one issue to
-  one merged PR, and ends. More work is a new thread, so a review of either stays small.
+- One concern per PR, about 400 changed lines, able to merge alone. If the description needs
+  "also", split it. A branch never stacks on one that has not merged, except a contract and the
+  code that needs it.
+- One agent is one PR. An agent, a subagent of the session that runs the work and never a new
+  thread, starts in its own worktree from `main`, carries one issue to one merged PR, and ends,
+  so each review stays small. PRs land one at a time: the branch rule keeps each up to
+  date, so merging two at once only sends one back through CI.
+- A small thing found on the way is fixed where it is found, and named in the PR body and on
+  the issue. A new issue is for work that needs a slot of its own.
 - Titles are conventional commits in plain language: `fix(rtp): jitter buffer no longer drops
   late frames`.
 - Body: the problem in a sentence or two, how it was fixed, then a "Verified" paragraph naming

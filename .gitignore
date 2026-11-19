@@ -20,3 +20,4 @@ CLAUDE.local.md
 # Native build output; `vp run build:native` regenerates it
 native/target/
 native/binding/*.node
+native/binding/index.js
