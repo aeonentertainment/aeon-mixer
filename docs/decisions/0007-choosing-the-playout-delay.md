@@ -210,8 +210,9 @@ something a breath already solves. If a slot is never quiet it stays where it op
   host builds its latency budget on. On the offline driver, silent Opus over 12 s of a clean link
   and then a 25 ms stall every 400 ms for 48 s, 20 ms frames whose first packet came 7 ms late lose
   66 packets to lateness. A stream pinned at 15 ms loses 24, since its earliest packets wait about
-  22 ms, and the old rise, back to the anchor it opened at and so to 23 ms, lost 26. That is 40 more
-  concealed frames in 48 s, 1.4 percent of packets, against the 0.1 percent bar. At 4 ms late it is
+  22 ms, and the old rise, back to the anchor it opened at and so to 23 ms, lost 26. That is 42 more
+  late packets than the pinned stream, 1.4 percent of the 3000 sent, against the 0.1 percent bar,
+  which is measured against a stream held at the opening delay. At 4 ms late it is
   67 against 36 pinned and 38 under the old rise. With a first packet on time the chosen delay loses
   what the pinned stream does, 68 against 66. The fall pays too: a first packet 20 ms late with 12 ms
   stalls in the first ten seconds falls to 15 ms and loses 11 packets in 22 s, where the old fall
