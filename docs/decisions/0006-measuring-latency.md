@@ -12,7 +12,8 @@ detector.
   matched filter's envelope. It takes the earliest peak within 20 dB of the strongest and at most
   30 ms ahead of it, placed between frames by a parabola through the log.
 - **Offline mode measures the engine's share.** The chirp goes through a sender, the real jitter
-  buffer, decoder, slot and master on the offline driver, for every Opus frame size, l16 and push. It
+  buffer, decoder, slot and master on the offline driver, for every Opus frame size, l16, push and
+  a house mic's capture ring. It
   opens nothing, and a test holds its numbers: adding 64 frames to the jitter buffer's anchor fails
   that test. Offline there is one path and no reflection to outdo it, so the detector takes the
   strongest peak: Opus leaves noise within 20 dB ahead of a short chirp. Each path is also measured
@@ -136,12 +137,17 @@ Offline, 15 ms playout, in ms:
 | rtp 2.5 ms low-delay | 2.50           | 2.50           | 15.02 to 17.67 | 20.02 to 22.67 |
 | l16 7.3 ms           | 7.29           | 0.00           | 15.02 to 17.67 | 22.31 to 24.96 |
 | push 10 ms           | 10.00          | 0.00           | 2.02 to 2.67   | 12.02 to 12.67 |
+| capture 2.7 ms       | 2.67           | 0.00           | 0.35 to 3.00   | 3.02 to 5.67   |
 
 The engine adds nothing on the mic path beyond the playout delay and the wait for the next block, to
 within 0.02 ms. The range is that wait: the first packet anchors the stream, so where it lands in a
 block sets the delay for the whole stream. Most of what the path spends is the sender's. Going from
 20 ms voice frames to 2.5 ms low-delay frames saves 21.5 ms, far more than anything left in the
 engine.
+
+A house mic captured a block at a time has no jitter buffer and no sender beyond its input's
+period. Its ring holds the sample as decision 0018 sets, so its total is under every path a
+sender takes, `l16` and the fastest phone included, which a test holds.
 
 Hardware numbers go here when they exist. The rig is a mic at the speaker where possible, since a
 powered speaker's own processing is delay the room hears and a cable never sees.

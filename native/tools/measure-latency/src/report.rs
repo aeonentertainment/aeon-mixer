@@ -3,7 +3,10 @@
 
 use std::fmt::Write;
 
+use engine::block::BLOCK;
+
 use crate::cli::DeviceArgs;
+use crate::ingest::Ingest;
 use crate::machine;
 use crate::offline::{Row, ms};
 use crate::opening::Opening;
@@ -37,20 +40,24 @@ pub fn offline(rows: &[Row]) -> String {
     }
     let _ = writeln!(
         out,
-        "\nAll in ms, a range where it depends on where in a block the stream began. No device, no \
-         socket, no network, on the offline driver. **Sender gathers**: the frame or chunk a \
+        "\nAll in ms, a range where it depends on where in a block the stream began. No device, \
+         no socket, no network, on the offline driver. **Sender gathers**: the frame or chunk a \
          sender fills before any of it can leave. **Sender encoder**: Opus's lookahead, which the \
          phone pays. **Slot's delay**: what the slot reports, pinned by the host or chosen by the \
-         slot. A chosen row is what a slot comes to with no jitter to cover, the least it can hold \
-         on any network. **Corrector**: on, a voice 40 cents sharp sings phrases of 0.2 to 0.475 \
-         s, each followed by a rest and a 50 ms sweep from 2 to 7.5 kHz, and the slot corrects it \
-         to the nearest semitone at once with no guide. What it reports is the delay the corrector \
-         held as each sweep went through, which engine holds includes. The phrases leave that \
-         delay at different heights, so it is the span they found; a budget counts \
-         `correctorMaxDelayMs`, 15 ms. **Engine holds**: from the packet's arrival to the master's output: the \
-         wait for the next block, the slot's delay on the jitter-buffered paths, decode, slot and \
-         master. **Total**: a sample entering the sender to its leaving the master; it excludes \
-         the mouth to the phone's encoder, the network, and everything after the master.",
+         slot. A chosen row is what a slot comes to with no jitter to cover, the least it can \
+         hold on any network. A ring row is a capture slot's own: the wait it holds a sample for, \
+         its input's period included, and no jitter buffer. **Corrector**: on, a voice 40 cents \
+         sharp sings phrases of 0.2 to 0.475 s, each followed by a rest and a 50 ms sweep from 2 \
+         to 7.5 kHz, and the slot corrects it to the nearest semitone at once with no guide. What \
+         it reports is the delay the corrector held as each sweep went through, which engine \
+         holds includes. The phrases leave that delay at different heights, so it is the span \
+         they found; a budget counts `correctorMaxDelayMs`, 15 ms. **Engine holds**: from the \
+         packet's arrival to the master's output: the wait for the next block, the slot's delay \
+         on the jitter-buffered paths, decode, slot and master. **Total**: a sample entering the \
+         sender to its leaving the master; it excludes the mouth to the phone's encoder, the \
+         network, and everything after the master. **Capture**: a house mic on the output's \
+         clock, whose sender is its input: it gathers a period before the OS wakes anyone, engine \
+         holds runs from that wake, and total excludes what the input's hardware and driver hold.",
     );
     out
 }
@@ -59,6 +66,7 @@ pub fn offline(rows: &[Row]) -> String {
 fn slot_delay(row: &Row) -> String {
     match (row.slot_delay_ms, row.delay) {
         (None, _) => "none".into(),
+        (Some(ms), _) if !row.ingest.has_playout_delay() => format!("ring {ms:.2}"),
         (Some(ms), Delay::Pinned(_)) => format!("pinned {ms:.2}"),
         (Some(ms), Delay::Chosen) => format!("chosen {ms:.2}"),
     }
@@ -126,10 +134,15 @@ pub fn device(
             continue;
         }
         let output = median(&readings);
-        // A longer callback than the block drains packets less often, which the offline run, whose
-        // callback is one block, cannot see
-        let extra = f64::from(period.saturating_sub(engine::block::BLOCK as u32));
+        let block = BLOCK as u32;
         for row in rows {
+            // A longer callback than the block drains packets less often, which the offline run,
+            // whose callback is one block, cannot see. A capture ring holds the whole blocks the
+            // wake pulls after its first, as decision 0018 has it
+            let extra = f64::from(match row.ingest {
+                Ingest::Capture { .. } => (period.div_ceil(block) * block).saturating_sub(block),
+                _ => period.saturating_sub(block),
+            });
             let (least, most) = (ms(row.lag.0), ms(row.lag.1 + extra));
             let _ = writeln!(
                 out,

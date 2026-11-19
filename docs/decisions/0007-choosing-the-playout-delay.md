@@ -251,6 +251,10 @@ narrows the range, because the fall measures from the earliest packet.
 | rtp 5 ms low-delay   |     15.02 to 17.67 | 22.52 to 25.17 |         3.69 to 4.00 | 11.19 to 11.50 |
 | rtp 2.5 ms low-delay |     15.02 to 17.67 | 20.02 to 22.67 |         3.69 to 3.83 |   8.69 to 8.83 |
 | l16 7.3 ms           |     15.02 to 17.67 | 22.31 to 24.96 |         3.69 to 3.71 | 10.98 to 11.00 |
+| capture 2.7 ms       |       0.35 to 3.00 |   3.02 to 5.67 |         0.35 to 3.00 |   3.02 to 5.67 |
+
+The capture row came later, on eb753e1 with the capture variant. A capture slot has no jitter
+buffer, so it reads the same pinned or chosen.
 
 ## Not measured
 

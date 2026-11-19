@@ -99,6 +99,8 @@ fn measure_with(
     programme: Programme,
     cleanup: bool,
 ) -> Result<Row, String> {
+    let preroll = programme.preroll.max(ingest.settles_within());
+    let programme = Programme { preroll, ..programme };
     let mut lag = (f64::INFINITY, f64::NEG_INFINITY);
     let mut reported = (f64::INFINITY, f64::NEG_INFINITY);
     let mut last = None;
@@ -260,6 +262,40 @@ mod tests {
             assert!(
                 least >= floor - 3.0 && most <= floor + BLOCK as f64 + 3.0,
                 "{ingest}: held {least}..{most} frames"
+            );
+        }
+    }
+
+    /// A 128-frame house mic on the output's clock has no jitter buffer: decision 0018 has its
+    /// sample out 3 to 5.67 ms after it entered the mic, the ring's target of a block and 16 frames
+    /// with up to the input's period over it, and the whole of that span is where a block's wait
+    /// can fall. The ring splices nothing on one clock, so the chirp leaves as raw PCM does, within
+    /// half a frame. The slot reports the middle of the span as its delay. A new buffer on this
+    /// path fails here.
+    #[test]
+    fn a_capture_slot_holds_a_sample_for_its_ring_and_nothing_more() {
+        let period = BLOCK as f64;
+        let target = period + 16.0;
+        let row = measure(Ingest::Capture { period: BLOCK }, PLAYOUT, false).unwrap();
+        let (least, most) = row.lag;
+        assert!(least >= target - 0.5 && most <= target + period + 0.5, "lag {least}..{most}");
+        assert!(most - least > period - 2.0, "lag {least}..{most} frames");
+        let reported = f64::from(row.slot_delay_ms.unwrap()) * f64::from(RATE) / 1000.0;
+        assert!((reported - (target + period / 2.0)).abs() < 0.5, "reported {reported}");
+    }
+
+    /// #52's claim: a house mic captured on the machine reaches the master sooner than through
+    /// today's l16 sender, or from any phone, at the playout delay the host pins.
+    #[test]
+    fn a_house_mic_is_sooner_captured_than_sent_as_l16_or_from_a_phone() {
+        let capture = measure(Ingest::Capture { period: BLOCK }, PLAYOUT, false).unwrap();
+        for ingest in Ingest::every().into_iter().filter(Ingest::has_playout_delay) {
+            let sent = measure(ingest, PLAYOUT, false).unwrap();
+            assert!(
+                capture.lag.1 < sent.lag.0,
+                "{ingest}: {:?} against {:?}",
+                sent.lag,
+                capture.lag
             );
         }
     }

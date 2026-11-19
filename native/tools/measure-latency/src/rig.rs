@@ -7,7 +7,7 @@ use engine::driver::Render;
 use engine::graph::Graph;
 use engine::ingest::packet::RING_CAPACITY;
 use engine::ingest::push::{DEFAULT_CAPACITY_FRAMES, push_voice_with_depth};
-use engine::ingest::{Codec, JitterBuffer, PacketSource, SharedStats, packet_ring};
+use engine::ingest::{Codec, JitterBuffer, PacketSource, SharedStats, capture_voice, packet_ring};
 use engine::slot::Slot;
 use engine::slot::corrector_delay::CorrectorDelay;
 use engine::slot::source::Source;
@@ -26,10 +26,10 @@ pub enum Delay {
     Chosen,
 }
 
-/// The real mic path around one slot: its ingest, jitter buffer and decoder, the slot's chain and
-/// the master, on a real `AudioThread`. The slot is panned hard left at unit gain, so the left
-/// channel is the slot's mono output. `render` feeds the slot and renders, so whichever clock
-/// calls it, the offline driver or a device, is the clock the whole path runs on.
+/// The real mic path around one slot: its ingest, jitter buffer and decoder or capture ring, the
+/// slot's chain and the master, on a real `AudioThread`. The slot is panned hard left at unit gain,
+/// so the left channel is the slot's mono output. `render` feeds the slot and renders, so whichever
+/// clock calls it, the offline driver or a device, is the clock the whole path runs on.
 pub struct Rig {
     pub render: Render,
     /// The control thread's ends, kept alive as long as the render is.
@@ -102,6 +102,16 @@ fn wire(ingest: Ingest, delay: Delay, signal: &[f32], phase: u64) -> Result<Wire
             let stereo = signal.iter().flat_map(|sample| [*sample, *sample]).collect();
             let feed = Feed::Push { producer, stereo, chunk, from: phase, next: 0 };
             (Box::new(voice), feed, 0, None)
+        }
+        Ingest::Capture { period } => {
+            let (producer, voice) = capture_voice();
+            let voice = voice
+                .for_input(period as u32, 0, BLOCK as u32)
+                .expect("a capture slot takes a block's period under a block's callback");
+            let stats = voice.shared_stats();
+            let feed =
+                Feed::Capture { producer, mono: signal.to_vec(), period, from: phase, next: 0 };
+            (Box::new(voice), feed, 0, Some(stats))
         }
     })
 }

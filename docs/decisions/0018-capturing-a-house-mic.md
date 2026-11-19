@@ -153,9 +153,10 @@ slower clock slips a whole wake at a time and settles at 19.67 to 29.67 ms, befo
 own 20 ms. A Windows house mic at shared 480-frame periods does not fit the 20 to 30 ms budget; it
 wants a driver with short shared periods as much as its output does (0003).
 
-`measure-latency` (#61) gives the phone path's engine share offline. With a capture variant in its
-rig it would give this one. Its device mode (#70) gives the sum through a real mic and speaker,
-the number this table cannot.
+`measure-latency` gives this path's engine share offline beside the phone's and the `l16`
+sender's: a 128-frame mic on the output's clock, 3.02 to 5.67 ms from the mic's frame to the
+master, against 22.31 to 24.96 ms for `l16` at a 15 ms playout delay. Its device mode (#70) gives
+the sum through a real mic and speaker, the number this table cannot.
 
 ## Echo cancelling
 
