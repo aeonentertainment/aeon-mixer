@@ -1156,7 +1156,7 @@ frame size, stays exactly where a pinned slot plays on a link that needs all 15 
 quiet moment, and, when its first packet came on time, loses at most 0.1 percent more of its
 packets to lateness than the same song at the opening delay; and a stream whose first packet came
 late reports what its earliest packets wait, pinned or chosen, while one whose first packet came
-on time reports the opening delay.
+on time reports the opening delay until a move.
 
 ### 8.5 Backing: `engine/src/backing/`
 
