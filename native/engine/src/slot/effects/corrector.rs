@@ -134,6 +134,7 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use kernels::YinDetector;
+    use kernels::fixtures::{BUZZ, harmonic_voice, midi_hz};
 
     use super::*;
     use crate::slot::guide::Note;
@@ -146,19 +147,6 @@ mod tests {
         Cue { frame, semitones: 0, advancing: true }
     }
 
-    /// Twelve harmonics at `midi`, the buzz of a sung vowel.
-    fn tone(midi: f64, frames: usize) -> Vec<f32> {
-        let hz = 440.0 * 2f64.powf((midi - 69.0) / 12.0);
-        (0..frames)
-            .map(|i| {
-                let t = i as f64 / f64::from(RATE);
-                let sample: f64 =
-                    (1..=12).map(|h| (2.0 * PI * hz * h as f64 * t).sin() / h as f64).sum();
-                (0.25 * sample) as f32
-            })
-            .collect()
-    }
-
     // The done-when: a voice between A and B flat is pulled to A in C major's key and to B flat
     // while the guide's B flat sounds. Each block is checked after it renders, so the block that
     // holds an edge must already have turned to the new target.
@@ -169,7 +157,7 @@ mod tests {
         let guide = Guide { notes: vec![note], key_mask: C_MAJOR };
         let mut corrector = Corrector::new();
 
-        let mut voice = tone(69.3, 90_000);
+        let mut voice = harmonic_voice(90_000, &BUZZ, |_| midi_hz(69.3));
         let mut errors = Vec::with_capacity(voice.len() / BLOCK);
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
@@ -197,9 +185,9 @@ mod tests {
     #[test]
     fn readings_come_every_10_ms_at_their_centre() {
         let mut corrector = Corrector::new();
-        let mut voice = tone(57.0, 19_200);
+        let mut voice = harmonic_voice(19_200, &BUZZ, |_| midi_hz(57.0));
         voice.resize(24_000, 0.0);
-        voice.extend(tone(69.0, RATE as usize - 24_000));
+        voice.extend(harmonic_voice(RATE as usize - 24_000, &BUZZ, |_| midi_hz(69.0)));
         let mut readings = Vec::with_capacity(200);
         let start = 4_800;
         assert_no_alloc(|| {
@@ -234,17 +222,9 @@ mod tests {
             key_mask: 0,
         };
         let mut corrector = Corrector::new();
-        let mut phase = 0.0f64;
-        let mut voice: Vec<f32> = (0..RATE as usize)
-            .map(|i| {
-                let t = i as f64 / f64::from(RATE);
-                let midi = 57.2 + 0.5 * (2.0 * PI * 5.5 * t).sin();
-                phase += 440.0 * 2f64.powf((midi - 69.0) / 12.0) / f64::from(RATE);
-                let sample: f64 =
-                    (1..=12).map(|h| (2.0 * PI * h as f64 * phase).sin() / h as f64).sum();
-                (0.25 * sample) as f32
-            })
-            .collect();
+        let mut voice = harmonic_voice(RATE as usize, &BUZZ, |i| {
+            midi_hz(57.2 + 0.5 * (2.0 * PI * 5.5 * i as f64 / f64::from(RATE)).sin())
+        });
         let mut readings = Vec::with_capacity(100);
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
@@ -276,16 +256,8 @@ mod tests {
     fn a_step_with_no_guide_keeps_each_errors_class_on_its_reading() {
         let mut corrector = Corrector::new();
         let step = RATE as usize / 2 + 60;
-        let mut phase = 0.0f64;
-        let mut voice: Vec<f32> = (0..RATE as usize)
-            .map(|i| {
-                let midi = if i < step { 60.0 } else { 62.0 };
-                phase += 440.0 * 2f64.powf((midi - 69.0) / 12.0) / f64::from(RATE);
-                let sample: f64 =
-                    (1..=12).map(|h| (2.0 * PI * h as f64 * phase).sin() / h as f64).sum();
-                (0.25 * sample) as f32
-            })
-            .collect();
+        let mut voice =
+            harmonic_voice(RATE as usize, &BUZZ, |i| midi_hz(if i < step { 60.0 } else { 62.0 }));
         let mut readings = Vec::with_capacity(100);
         assert_no_alloc(|| {
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
@@ -312,7 +284,7 @@ mod tests {
                 key_mask: 0,
             };
             let mut corrector = Corrector::new();
-            let mut voice = tone(40.04, 96_000);
+            let mut voice = harmonic_voice(96_000, &BUZZ, |_| midi_hz(40.04));
             for (index, block) in voice.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
                 let frame = (index * BLOCK) as i64;
                 assert_no_alloc(|| {
@@ -335,19 +307,8 @@ mod tests {
     #[test]
     fn a_readings_error_less_its_shift_is_the_corrected_voice() {
         let frames = RATE as usize;
-        let voice: Vec<f32> = {
-            let mut phase = 0.0f64;
-            (0..frames)
-                .map(|i| {
-                    let midi = 67.5 + 4.0 * i as f64 / f64::from(RATE);
-                    phase =
-                        (phase + 440.0 * 2f64.powf((midi - 69.0) / 12.0) / f64::from(RATE)) % 1.0;
-                    let buzz: f64 =
-                        (1..=12).map(|h| (2.0 * PI * h as f64 * phase).sin() / h as f64).sum();
-                    (0.25 * buzz) as f32
-                })
-                .collect()
-        };
+        let voice =
+            harmonic_voice(frames, &BUZZ, |i| midi_hz(67.5 + 4.0 * i as f64 / f64::from(RATE)));
         let guide = Guide {
             notes: vec![Note { midi: 69, start_frame: 0, end_frame: frames as u64 }],
             key_mask: 0,
@@ -396,7 +357,7 @@ mod tests {
             key_mask: 0,
         };
         let pulls = |gap_ms: usize| {
-            let mut voice = tone(57.3, 96_000);
+            let mut voice = harmonic_voice(96_000, &BUZZ, |_| midi_hz(57.3));
             let gap = 48_000..48_000 + gap_ms * 48;
             voice[gap].fill(0.0);
             let mut corrector = Corrector::new();
@@ -420,7 +381,7 @@ mod tests {
     #[test]
     fn off_is_the_voice_itself_and_still_reads() {
         let mut corrector = Corrector::new();
-        let input = tone(69.4, 120 * BLOCK);
+        let input = harmonic_voice(120 * BLOCK, &BUZZ, |_| midi_hz(69.4));
         let mut voice = input.clone();
         let mut read = 0;
         let off = CorrectorParams { enabled: false, ..ON };

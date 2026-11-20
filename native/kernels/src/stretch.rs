@@ -103,7 +103,8 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
-    use crate::test_support::{RATE, cents_between, harmonic_tone, median_pitch};
+    use crate::fixtures::{BUZZ, harmonic_voice};
+    use crate::test_support::{RATE, cents_between, median_pitch};
 
     /// A stereo tone through a stretcher in engine blocks, under the allocation guard.
     fn transposed(preset: Preset, semitones: f32, tone: &[f32]) -> [Vec<f32>; 2] {
@@ -124,7 +125,7 @@ mod tests {
     // The backing path's live key: a tone moves by what is asked, on both channels
     #[test]
     fn moves_a_tone_by_the_asked_semitones() {
-        let tone = harmonic_tone(220.0, 2.0);
+        let tone = harmonic_voice(2 * RATE as usize, &BUZZ, |_| 220.0);
         for preset in [Preset::Default, Preset::Cheaper] {
             for semitones in [-5.0f32, 3.0, 7.0] {
                 let expected = 220.0 * 2f64.powf(f64::from(semitones) / 12.0);
@@ -145,7 +146,7 @@ mod tests {
     fn a_tone_comes_out_latency_frames_late() {
         let onset = RATE as usize / 2;
         let mut input = vec![0.0; onset];
-        input.extend(harmonic_tone(220.0, 1.0));
+        input.extend(harmonic_voice(RATE as usize, &BUZZ, |_| 220.0));
         for preset in [Preset::Default, Preset::Cheaper] {
             let latency = Stretch::new(2, RATE, preset).latency_frames();
             let [output, _] = transposed(preset, 0.0, &input);

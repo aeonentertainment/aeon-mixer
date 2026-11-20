@@ -1,6 +1,4 @@
-use std::f64::consts::TAU;
-
-use engine::block::RATE;
+use kernels::fixtures::{BUZZ, harmonic_voice};
 
 /// A sung vowel ahead of each chirp, each phrase `step` longer than the last, then a rest. The
 /// corrector moves its delay through a phrase, and early in the rest, silent here, moves it down
@@ -20,10 +18,8 @@ impl Phrases {
         self.shortest + k * self.step
     }
 
-    /// Twelve harmonics at `hz`, the buzz of a sung vowel, `frame` into a phrase.
-    pub fn at(&self, frame: usize) -> f32 {
-        let t = frame as f64 / f64::from(RATE);
-        let sample: f64 = (1..=12).map(|h| (TAU * self.hz * h as f64 * t).sin() / h as f64).sum();
-        (0.25 * sample) as f32
+    /// The `k`th phrase: the fixtures' sung vowel at `hz`.
+    pub fn sung(&self, k: usize) -> Vec<f32> {
+        harmonic_voice(self.length(k), &BUZZ, |_| self.hz)
     }
 }

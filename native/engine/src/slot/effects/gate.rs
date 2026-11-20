@@ -143,9 +143,8 @@ impl Default for Gate {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::consts::TAU;
-
     use assert_no_alloc::assert_no_alloc;
+    use kernels::fixtures::{BUZZ, harmonic_voice};
 
     use super::*;
     use crate::block::BLOCK;
@@ -169,15 +168,14 @@ mod tests {
         noise.iter().map(|s| s * amplitude(db) / rms).collect()
     }
 
-    /// Twelve harmonics of 220 Hz, a sung vowel, at `db` dBFS RMS from `start` to `end` ms.
+    /// A sung vowel at 220 Hz, at `db` dBFS RMS from `start` to `end` ms.
     fn sing(voice: &mut [f32], start: usize, end: usize, db: f32) {
-        let norm: f64 = (1..=12).map(|h| 0.5 / f64::from(h * h)).sum::<f64>().sqrt();
+        // The buzz's RMS: each harmonic's half its level squared, a quarter of the sum
+        let norm = 0.25 * BUZZ.iter().map(|level| 0.5 * level * level).sum::<f64>().sqrt();
         let scale = f64::from(amplitude(db)) / norm;
-        for (i, sample) in voice[start * MS..end * MS].iter_mut().enumerate() {
-            let t = i as f64 / f64::from(RATE);
-            let vowel: f64 =
-                (1..=12).map(|h| (TAU * 220.0 * f64::from(h) * t).sin() / f64::from(h)).sum();
-            *sample += (scale * vowel) as f32;
+        let vowel = harmonic_voice((end - start) * MS, &BUZZ, |_| 220.0);
+        for (sample, vowel) in voice[start * MS..end * MS].iter_mut().zip(vowel) {
+            *sample += (scale * f64::from(vowel)) as f32;
         }
     }
 

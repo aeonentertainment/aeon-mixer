@@ -1,5 +1,5 @@
-//! Synthetic signals for testing and measuring the echo stages, the same in every crate that
-//! asks for them: noise, a voice-shaped talker, a room and a mic on its own clock. Built with the
+//! Synthetic signals for testing and measuring, the same in every crate that asks for them: a sung
+//! vowel, noise, a voice-shaped talker, a room and a mic on its own clock. Built with the
 //! `fixtures` feature.
 
 use std::f64::consts::TAU;
@@ -16,6 +16,51 @@ impl Lcg {
         self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         (f64::from(self.0) / 4_294_967_296.0 * 2.0 - 1.0) as f32
     }
+}
+
+/// The pitch of MIDI note `midi` in Hz, with A4 = 69 at 440: what a sung vowel is usually pitched with.
+pub fn midi_hz(midi: f64) -> f64 {
+    440.0 * 2f64.powf((midi - 69.0) / 12.0)
+}
+
+/// The harmonics of a sung vowel's buzz for `harmonic_voice`, the fundamental first, falling as 1/h.
+pub const BUZZ: [f64; 12] = [
+    1.0,
+    1.0 / 2.0,
+    1.0 / 3.0,
+    1.0 / 4.0,
+    1.0 / 5.0,
+    1.0 / 6.0,
+    1.0 / 7.0,
+    1.0 / 8.0,
+    1.0 / 9.0,
+    1.0 / 10.0,
+    1.0 / 11.0,
+    1.0 / 12.0,
+];
+
+/// A sung vowel whose pitch follows `hz_at(frame)` with no break in phase: its harmonics at
+/// `levels`, the fundamental first, summed and scaled by a quarter, so `BUZZ` peaks near 0.5. The
+/// phase moves before each sample, and a frame where `hz_at` is 0 or less is silent, so a voice
+/// can rest. What a detector, a shifter and every test, bench and tool that sings work on.
+pub fn harmonic_voice(frames: usize, levels: &[f64], hz_at: impl Fn(usize) -> f64) -> Vec<f32> {
+    let rate = 48_000.0;
+    let mut phase = 0.0f64;
+    (0..frames)
+        .map(|i| {
+            let hz = hz_at(i);
+            phase = (phase + hz / rate) % 1.0;
+            if hz <= 0.0 {
+                return 0.0;
+            }
+            let sample: f64 = levels
+                .iter()
+                .enumerate()
+                .map(|(h, level)| (TAU * (h + 1) as f64 * phase).sin() * level)
+                .sum();
+            (0.25 * sample) as f32
+        })
+        .collect()
 }
 
 /// Paul Kellet's pink noise, as `aec:measure` makes its backing bed.

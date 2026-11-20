@@ -141,11 +141,11 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
-    use crate::fixtures::{Lcg, at_db, pink_noise, rms, room, through};
-    use crate::pitch::{EVERY_PITCH_CLASS, pitch_class_of};
-    use crate::test_support::{
-        RATE, buzz, cents_between, cents_track, harmonic_tone, median_pitch, midi_hz, sung,
+    use crate::fixtures::{
+        BUZZ, Lcg, at_db, harmonic_voice, midi_hz, pink_noise, rms, room, through,
     };
+    use crate::pitch::{EVERY_PITCH_CLASS, pitch_class_of};
+    use crate::test_support::{RATE, cents_between, cents_track, median_pitch};
 
     /// `input` through `corrector` in runs of `block` frames, as a host's buffers would arrive,
     /// under the allocation guard.
@@ -174,7 +174,11 @@ mod tests {
                 }
                 let mut corrector = PitchCorrector::new(RATE);
                 corrector.set_target(pitch_class_of(target), 1.0, 0.0);
-                let output = corrected(&mut corrector, &harmonic_tone(input_hz, 2.0), 128);
+                let output = corrected(
+                    &mut corrector,
+                    &harmonic_voice(2 * RATE as usize, &BUZZ, |_| input_hz),
+                    128,
+                );
 
                 let cents = cents_between(median_pitch(&output, 0.5, 2.0), midi_hz(target.into()));
                 assert!(
@@ -211,7 +215,7 @@ mod tests {
                 }
                 let mut corrector = PitchCorrector::new(RATE);
                 corrector.set_target(EVERY_PITCH_CLASS, 1.0, 0.0);
-                let input = harmonic_tone(input_hz, 2.0);
+                let input = harmonic_voice(2 * RATE as usize, &BUZZ, |_| input_hz);
                 let mut output = vec![0.0; input.len()];
                 let mut most = 0;
                 assert_no_alloc(|| {
@@ -249,7 +253,8 @@ mod tests {
             let mut corrector = PitchCorrector::new(RATE);
             corrector.set_target(pitch_class_of(midi), 1.0, 0.0);
             // 441 frames: runs that never line up with the detector's 480-frame hop
-            let output = corrected(&mut corrector, &harmonic_tone(flat, 2.0), 441);
+            let output =
+                corrected(&mut corrector, &harmonic_voice(2 * RATE as usize, &BUZZ, |_| flat), 441);
 
             let detected = f64::from(corrector.detected().hz);
             assert!(
@@ -267,7 +272,7 @@ mod tests {
     fn correcting_is_a_heard_voice_and_a_pull() {
         let mut corrector = PitchCorrector::new(RATE);
         corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
-        corrected(&mut corrector, &harmonic_tone(220.0, 0.5), 128);
+        corrected(&mut corrector, &harmonic_voice(RATE as usize / 2, &BUZZ, |_| 220.0), 128);
         assert!(corrector.correcting(), "a sung tone at strength 1");
         corrector.set_target(EVERY_PITCH_CLASS, 0.0, 40.0);
         assert!(!corrector.correcting(), "strength 0");
@@ -305,7 +310,7 @@ mod tests {
         ] {
             let mut corrector = PitchCorrector::new(RATE);
             corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
-            corrected(&mut corrector, &harmonic_tone(hz, 0.5), 128);
+            corrected(&mut corrector, &harmonic_voice(RATE as usize / 2, &BUZZ, |_| hz), 128);
 
             let read = corrector.detected();
             assert_eq!(corrector.reading_lag_samples(), lag, "{hz} Hz");
@@ -325,7 +330,7 @@ mod tests {
         let step_at = 24_000;
         for (hz, bound_ms) in [(440.0, 15.0), (220.0, 15.0), (110.0, 20.0), (82.5, 35.0)] {
             let up = hz * 2f64.powf(2.0 / 12.0);
-            let voice = sung(48_000, &buzz(), |i| if i < step_at { hz } else { up });
+            let voice = harmonic_voice(48_000, &BUZZ, |i| if i < step_at { hz } else { up });
             let readings = every_reading(&mut PitchCorrector::new(RATE), &voice);
             let last_astray = readings
                 .iter()
@@ -342,7 +347,7 @@ mod tests {
     fn an_octave_leap_is_believed_within_the_longest_window() {
         let step_at = 24_000;
         for (from, to) in [(220.0, 440.0), (440.0, 220.0), (110.0, 220.0)] {
-            let voice = sung(48_000, &buzz(), |i| if i < step_at { from } else { to });
+            let voice = harmonic_voice(48_000, &BUZZ, |i| if i < step_at { from } else { to });
             let readings = every_reading(&mut PitchCorrector::new(RATE), &voice);
             let last_astray = readings
                 .iter()
@@ -358,8 +363,8 @@ mod tests {
     #[test]
     fn a_moment_of_loud_second_harmonic_does_not_pass_for_an_octave() {
         let (moment, frames) = (24_000..25_440, 48_000);
-        let plain = sung(frames, &buzz(), |_| 220.0);
-        let loud_second = sung(frames, &[0.15, 1.0], |_| 220.0);
+        let plain = harmonic_voice(frames, &BUZZ, |_| 220.0);
+        let loud_second = harmonic_voice(frames, &[0.15, 1.0], |_| 220.0);
         let voice: Vec<f32> = (0..frames)
             .map(|i| if moment.contains(&i) { loud_second[i] } else { plain[i] })
             .collect();
@@ -378,7 +383,7 @@ mod tests {
         for midi in [69, 57, 45] {
             let centre = midi_hz(f64::from(midi));
             // Five semitones either side of the note, which the shifter can reach all the way
-            let voice = sung(RATE as usize, &buzz(), |i| {
+            let voice = harmonic_voice(RATE as usize, &BUZZ, |i| {
                 let cents_per_frame = 1.0 / 48.0;
                 centre * 2f64.powf((i as f64 * cents_per_frame - 500.0) / 1200.0)
             });
@@ -397,13 +402,7 @@ mod tests {
         let hz = |i: usize| {
             cents_at(i as f64 / f64::from(RATE)).map_or(0.0, |c| a3 * 2f64.powf(c / 1200.0))
         };
-        let voice = sung(frames, &buzz(), hz);
-        // `sung` keeps its phase running through silence; the silence itself is zero
-        voice
-            .into_iter()
-            .enumerate()
-            .map(|(i, sample)| if hz(i) > 0.0 { sample } else { 0.0 })
-            .collect()
+        harmonic_voice(frames, &BUZZ, hz)
     }
 
     fn vibrato(depth: f64, rate: f64, seconds: f64) -> f64 {
@@ -494,7 +493,7 @@ mod tests {
     fn reset_forgets_the_last_voice() {
         let mut corrector = PitchCorrector::new(RATE);
         corrector.set_target(pitch_class_of(57), 1.0, 0.0);
-        corrected(&mut corrector, &harmonic_tone(215.0, 1.0), 480);
+        corrected(&mut corrector, &harmonic_voice(RATE as usize, &BUZZ, |_| 215.0), 480);
         assert_no_alloc(|| corrector.reset());
         let output = corrected(&mut corrector, &[0.0; 4800], 480);
         assert!(output.iter().all(|s| *s == 0.0), "the last voice came out after a reset");
@@ -510,7 +509,11 @@ mod tests {
         let f4 = midi_hz(65.0);
         let mut corrector = PitchCorrector::new(RATE);
         corrector.set_target(c_major, 1.0, 20.0);
-        let output = corrected(&mut corrector, &harmonic_tone(midi_hz(65.8), 1.5), 480);
+        let output = corrected(
+            &mut corrector,
+            &harmonic_voice(3 * RATE as usize / 2, &BUZZ, |_| midi_hz(65.8)),
+            480,
+        );
         let cents = cents_between(median_pitch(&output, 0.8, 1.5), f4);
         assert!(cents.abs() < 10.0, "output {cents:+.1} cents from F4");
         let error = corrector.error_semitones();
@@ -520,7 +523,7 @@ mod tests {
     // Off is the input untouched and undelayed, while the detector keeps reading
     #[test]
     fn strength_zero_is_the_input_itself() {
-        let input = harmonic_tone(220.0, 0.5);
+        let input = harmonic_voice(RATE as usize / 2, &BUZZ, |_| 220.0);
         let mut corrector = PitchCorrector::new(RATE);
         corrector.set_target(pitch_class_of(70), 0.0, 40.0);
         let output = corrected(&mut corrector, &input, 480);
@@ -627,7 +630,7 @@ mod tests {
                 let cents = vibrato(depth, 5.5, i as f64 / f64::from(RATE));
                 midi_hz(centre) * 2f64.powf(cents / 1200.0)
             };
-            let voice = sung((seconds * f64::from(RATE)) as usize, &buzz(), hz);
+            let voice = harmonic_voice((seconds * f64::from(RATE)) as usize, &BUZZ, hz);
             let name = format!("MIDI {centre} with {depth} c vibrato");
             assert_eq!(report(&name, &splices(&voice, hz), seconds), 0, "{name}");
         }
@@ -642,7 +645,7 @@ mod tests {
         let frames = (seconds * f64::from(RATE)) as usize;
         let mut rng = Lcg::new(0x2545_f491);
         let noise: Vec<f32> = (0..frames).map(|_| 0.45 * rng.sample()).collect();
-        let voice: Vec<f32> = harmonic_tone(hz, seconds)
+        let voice: Vec<f32> = harmonic_voice((seconds * f64::from(RATE)) as usize, &BUZZ, |_| hz)
             .into_iter()
             .enumerate()
             .map(|(i, sample)| {
@@ -682,7 +685,7 @@ mod tests {
     /// drum-like bed, through a small room.
     fn bleed(frames: usize) -> Vec<f32> {
         let chord = [48.07, 55.0, 63.9]
-            .map(|midi| sung(frames, &buzz(), |_| midi_hz(midi)))
+            .map(|midi| harmonic_voice(frames, &BUZZ, |_| midi_hz(midi)))
             .into_iter()
             .fold(vec![0.0f32; frames], |mix, tone| {
                 mix.iter().zip(&tone).map(|(a, b)| a + b).collect()
@@ -724,7 +727,7 @@ mod tests {
                 }
                 let off = if index % 2 == 0 { 0.4 } else { -0.4 };
                 let hz = |i: usize| midi_hz(if i < leap_at { from } else { to } + off);
-                let voice = sung(frames, &buzz(), hz);
+                let voice = harmonic_voice(frames, &BUZZ, hz);
                 let level = rms(&voice);
                 for doubt in doubts {
                     let (noise, start): (Vec<f32>, usize) = match doubt {

@@ -48,7 +48,8 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
-    use crate::test_support::{RATE, cents_between, harmonic_tone};
+    use crate::fixtures::{BUZZ, harmonic_voice};
+    use crate::test_support::{RATE, cents_between};
 
     // Both windows Aeon Karaoke measured: the corrector's 2048 across a singing range, and 1024
     // above the low voices, where little of its short window is left to compare
@@ -59,7 +60,7 @@ mod tests {
         {
             let mut yin = YinDetector::new(RATE, window);
             for &hz in tones {
-                let tone = harmonic_tone(hz, 0.1);
+                let tone = harmonic_voice(RATE as usize / 10, &BUZZ, |_| hz);
                 let pitch = assert_no_alloc(|| yin.analyze(&tone[tone.len() - window..]));
                 let cents = cents_between(f64::from(pitch.hz), hz);
                 assert!(cents.abs() < 3.0, "window {window} read {} Hz for {hz} Hz", pitch.hz);
@@ -85,7 +86,7 @@ mod tests {
         ] {
             let mut yin = YinDetector::new(RATE, window);
             for &hz in tones {
-                let tone = harmonic_tone(hz, 0.3);
+                let tone = harmonic_voice(3 * RATE as usize / 10, &BUZZ, |_| hz);
                 for start in (3000..7000).step_by(97) {
                     let read = yin.analyze(&tone[start..start + window]);
                     let cents = cents_between(f64::from(read.hz), hz);

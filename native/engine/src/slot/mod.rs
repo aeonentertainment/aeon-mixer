@@ -261,10 +261,9 @@ fn target_gains(params: &SlotParams, any_solo: bool) -> [f32; 2] {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::consts::TAU;
-
     use assert_no_alloc::assert_no_alloc;
     use kernels::YinDetector;
+    use kernels::fixtures::{BUZZ, harmonic_voice};
 
     use super::*;
     use crate::backing::{Backing, Planar, Stems, Transport};
@@ -280,13 +279,6 @@ mod tests {
 
     const CORRECTING: CorrectorParams =
         CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
-
-    /// Twelve harmonics at `hz`, the buzz of a sung vowel.
-    fn voice(hz: f64, frame: usize) -> f32 {
-        let t = frame as f64 / f64::from(RATE);
-        let sample: f64 = (1..=12).map(|h| (TAU * hz * h as f64 * t).sin() / h as f64).sum();
-        (0.25 * sample) as f32
-    }
 
     /// Hands over `samples`, then silence.
     struct Clip {
@@ -344,7 +336,7 @@ mod tests {
             CorrectorParams { enabled: false, strength: 1.0, retune_ms: 0.0 },
             CorrectorParams { enabled: true, strength: 0.0, retune_ms: 40.0 },
         ];
-        let input: Vec<f32> = (0..RATE as usize).map(|frame| voice(226.0, frame)).collect();
+        let input = harmonic_voice(RATE as usize, &BUZZ, |_| 226.0);
         for corrector in off {
             let output = through_slot(input.clone(), corrector, |delay| assert_eq!(delay, 0));
             for (frame, (out, sample)) in output.iter().zip(&input).enumerate() {
@@ -365,7 +357,7 @@ mod tests {
         let phrases = (RATE as usize / 5..RATE as usize / 2).step_by(RATE as usize / 40);
         // 40 cents above A2 and A3, so the shift keeps the read point moving
         for (phrase, hz) in phrases.zip([112.6, 225.2].into_iter().cycle()) {
-            let mut input: Vec<f32> = (0..phrase).map(|frame| voice(hz, frame)).collect();
+            let mut input = harmonic_voice(phrase, &BUZZ, |_| hz);
             input.resize(phrase + REST, 0.0);
             let click = input.len();
             input.push(0.5);
@@ -421,7 +413,7 @@ mod tests {
             graph.render(&params, out, &mut events);
         }));
 
-        let input: Vec<f32> = (0..frames).map(|frame| voice(a3_sharp, frame)).collect();
+        let input = harmonic_voice(frames, &BUZZ, |_| a3_sharp);
         let mut sender = L16Sender::new(PACKET, 1);
         let mut left = Vec::with_capacity(frames);
         let (mut sent, mut most) = (0, 0);
@@ -514,7 +506,7 @@ mod tests {
     /// guide's B flat the voice is 0.7 flat.
     fn a3_sharp(seconds: f64) -> Vec<f32> {
         let hz = 220.0 * 2f64.powf(30.0 / 1200.0);
-        (0..(seconds * f64::from(RATE)) as usize).map(|frame| voice(hz, frame)).collect()
+        harmonic_voice((seconds * f64::from(RATE)) as usize, &BUZZ, |_| hz)
     }
 
     // The tuning panel's reading: during the note it names the note and how far flat the voice

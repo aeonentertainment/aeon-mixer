@@ -4,27 +4,26 @@
 //!
 //! `cargo run --release -p engine --example tone_bench` from `native/`.
 
-use std::f64::consts::TAU;
 use std::time::Instant;
 
 use engine::block::{BLOCK, RATE};
 use engine::params::{ToneBand, ToneBands, ToneParams};
 use engine::slot::effects::Tone;
+use kernels::fixtures::{BUZZ, harmonic_voice};
 
 const SECONDS: f64 = 60.0;
 const RUNS: usize = 3;
 
-/// Twelve harmonics of 180 Hz, and `hiss` of white noise over them.
+/// A sung vowel at 180 Hz, and `hiss` of white noise over it.
 fn voice_like(hiss: f64) -> Vec<f32> {
     let mut seed = 7_u32;
-    (0..(SECONDS * f64::from(RATE)) as usize)
-        .map(|i| {
-            let t = i as f64 / f64::from(RATE);
-            let voice: f64 =
-                (1..=12).map(|h| (TAU * 180.0 * f64::from(h) * t).sin() / f64::from(h)).sum();
+    harmonic_voice((SECONDS * f64::from(RATE)) as usize, &BUZZ, |_| 180.0)
+        .into_iter()
+        .map(|voice| {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let noise = f64::from(seed) / 4_294_967_296.0 - 0.5;
-            (0.1 * voice + hiss * noise) as f32
+            // The buzz's quarter scale, raised to the tenth this bench has always used
+            (0.4 * f64::from(voice) + hiss * noise) as f32
         })
         .collect()
 }

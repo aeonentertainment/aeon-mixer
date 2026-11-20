@@ -13,6 +13,7 @@ hardware = ["dep:devices", "devices/hardware"]
 [dependencies]
 devices = { workspace = true, optional = true }
 engine = { workspace = true }
+kernels = { workspace = true, features = ["fixtures"] }
 opus = "0.4.0"
 rtrb = "0.4.1"
 rustfft = "6.4.1"

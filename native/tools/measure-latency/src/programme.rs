@@ -81,10 +81,7 @@ impl Programme {
         for (k, start) in self.starts().enumerate() {
             if let Some(phrases) = self.phrases {
                 let end = start - phrases.rest;
-                let phrase = &mut signal[end - phrases.length(k)..end];
-                for (frame, sample) in phrase.iter_mut().enumerate() {
-                    *sample = phrases.at(frame);
-                }
+                signal[end - phrases.length(k)..end].copy_from_slice(&phrases.sung(k));
             }
             signal[start..start + chirp.len()].copy_from_slice(&chirp);
         }

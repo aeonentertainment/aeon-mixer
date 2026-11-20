@@ -7,6 +7,7 @@
 use std::f64::consts::PI;
 use std::time::Instant;
 
+use kernels::fixtures::{BUZZ, harmonic_voice};
 use kernels::{EVERY_PITCH_CLASS, PitchCorrector, VoiceShifter};
 
 const RATE: u32 = 48_000;
@@ -18,15 +19,17 @@ const RUNS: usize = 3;
 /// tone with 5.5 Hz vibrato and a little noise. `hz` is 180 for that row and 82 for a low voice.
 fn voice_like(hz: f64) -> Vec<f32> {
     let mut seed = 7_u32;
-    let mut phase = 0.0;
-    (0..(SECONDS * f64::from(RATE)) as usize)
-        .map(|i| {
-            let t = i as f64 / f64::from(RATE);
-            phase += 2.0 * PI * hz * 2f64.powf(0.03 * (2.0 * PI * 5.5 * t).sin()) / f64::from(RATE);
-            let voice: f64 = (1..=12).map(|h| (f64::from(h) * phase).sin() / f64::from(h)).sum();
+    let vibrato = |i: usize| {
+        let t = i as f64 / f64::from(RATE);
+        hz * 2f64.powf(0.03 * (2.0 * PI * 5.5 * t).sin())
+    };
+    harmonic_voice((SECONDS * f64::from(RATE)) as usize, &BUZZ, vibrato)
+        .into_iter()
+        .map(|voice| {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let noise = f64::from(seed) / 4_294_967_296.0 - 0.5;
-            (0.3 * voice + 0.02 * noise) as f32
+            // 1.2 times the fixture's quarter scale is the 0.3 the core's bench sings at
+            (1.2 * f64::from(voice) + 0.02 * noise) as f32
         })
         .collect()
 }
