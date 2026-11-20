@@ -102,7 +102,6 @@ struct PitchCorrector::State {
     } else if (!reader.voiced()) {
       note.lose();
     }
-    shifter.setVoiced(reader.voiced());
     if (toPublish) published = reader.longest();
     retarget();
     if (toPublish) {

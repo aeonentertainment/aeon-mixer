@@ -46,10 +46,7 @@ struct PitchShifter::State {
   double rate;
   /** A jump ahead found the waveform still matching better further on, and waits until the delay reaches this. */
   double waitUntil = 0;
-  bool voiced = false;
-  /** Whether this rest has already moved the read point down. */
-  bool settled = false;
-  /** Samples until a rest that found the input still audible looks again. */
+  /** Samples until the rest move looks again: once a crossfade, so its level checks cost little. */
   int restCheckIn = 0;
 
   explicit State(double sampleRate)
@@ -163,22 +160,20 @@ struct PitchShifter::State {
 
   /**
    * Jumps a period back when the read point closes on the floor, or ahead once it has fallen a
-   * period behind and the waveform matches there. In a rest there is nothing to keep whole, so the
-   * read point moves down to a quarter period above the floor, once. The detector also lets go of
-   * a voice it doubts or one under 82 Hz, which still sounds at any period, so the move waits until
-   * both ends of its splice are too quiet to hear, looking again every crossfade until they are.
+   * period behind and the waveform matches there. Where both ends of a splice down to a quarter
+   * period above the floor are too quiet to hear, there is nothing to keep whole, so the read point
+   * goes there, and is kept there for as long as the input stays that quiet, looking again every
+   * crossfade. That is a rest, whatever the detector makes of the voice; anything audible holds
+   * the delay where it is.
    */
   void keepInRange() {
     const double floor = floorFor(ratio);
     const double delay = double(written) - read;
-    if (!voiced && !settled && --restCheckIn <= 0) {
+    if (--restCheckIn <= 0) {
+      restCheckIn = int(fadeIn.size());
       const double resting = floor + kRestingPeriods * period;
-      const bool high = delay > resting + 1;
-      if (high && (audibleAt(read) || audibleAt(read + delay - resting))) {
-        restCheckIn = int(fadeIn.size());
-      } else {
-        settled = true;
-        if (high) return startJump(delay - resting);
+      if (delay > resting + 1 && !audibleAt(read) && !audibleAt(read + delay - resting)) {
+        return startJump(delay - resting);
       }
     }
     if (delay < floor) return startJump(-bestJump(-1, floor).lag);
@@ -205,8 +200,6 @@ void PitchShifter::reset() {
   s.ratio = 1;
   s.period = float(s.rate * kStartingPeriodSeconds);
   s.waitUntil = 0;
-  s.voiced = false;
-  s.settled = false;
   s.restCheckIn = 0;
 }
 
@@ -217,15 +210,6 @@ void PitchShifter::setSemitones(float semitones) {
 void PitchShifter::setPeriod(float samples) {
   State &s = *state_;
   s.period = std::clamp(samples, s.shortestPeriod, s.longestPeriod);
-}
-
-void PitchShifter::setVoiced(bool voiced) {
-  State &s = *state_;
-  if (voiced) {
-    s.settled = false;
-    s.restCheckIn = 0;
-  }
-  s.voiced = voiced;
 }
 
 void PitchShifter::process(const float *in, float *out, int frames) {
