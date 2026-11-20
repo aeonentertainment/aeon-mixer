@@ -50,6 +50,27 @@ pub(crate) mod fixtures {
     use super::Source;
     use crate::block::RATE;
 
+    /// Hands over `samples`, then silence.
+    pub struct Clip {
+        samples: Vec<f32>,
+        at: usize,
+    }
+
+    impl Clip {
+        pub fn new(samples: Vec<f32>) -> Self {
+            Self { samples, at: 0 }
+        }
+    }
+
+    impl Source for Clip {
+        fn pull(&mut self, out: &mut [f32]) {
+            for sample in out {
+                *sample = self.samples.get(self.at).copied().unwrap_or(0.0);
+                self.at += 1;
+            }
+        }
+    }
+
     /// A DC level, for asserting exact gains.
     pub struct Constant(pub f32);
 

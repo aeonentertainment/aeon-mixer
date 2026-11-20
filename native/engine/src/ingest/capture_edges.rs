@@ -20,6 +20,7 @@ use crate::graph::Graph;
 use crate::params::{EchoCancelParams, Params};
 use crate::slot::Slot;
 use crate::slot::source::Source;
+use crate::slot::source::fixtures::Clip;
 
 const SECOND: u64 = RATE as u64;
 
@@ -43,20 +44,6 @@ impl Source for Tone {
 }
 
 /// Hands over `samples`, then silence: the far end an echo test plays.
-struct Clip {
-    samples: Vec<f32>,
-    at: usize,
-}
-
-impl Source for Clip {
-    fn pull(&mut self, out: &mut [f32]) {
-        for sample in out {
-            *sample = self.samples.get(self.at).copied().unwrap_or(0.0);
-            self.at += 1;
-        }
-    }
-}
-
 /// A fake input, `ppm` off the output's clock, that starts at output frame `start` and delivers
 /// `period` frames whenever its clock has them.
 struct Device {
@@ -260,7 +247,7 @@ fn echo_through_capture(
     let (voice, _) = device.open();
     let mic_slot = Slot::new(Box::new(voice));
     let report = mic_slot.echo_report();
-    let slots = vec![mic_slot, Slot::new(Box::new(Clip { samples: far, at: 0 }))];
+    let slots = vec![mic_slot, Slot::new(Box::new(Clip::new(far)))];
     let echo_cancel = |p: &mut Params| {
         split(p);
         p.slots[0].effects.echo_cancel = EchoCancelParams { enabled: true };

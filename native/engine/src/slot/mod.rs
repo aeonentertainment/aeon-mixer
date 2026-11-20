@@ -2,6 +2,8 @@
 //! bus. The order is docs/design.md section 4; the ramps are one block.
 
 pub mod corrector_delay;
+#[cfg(test)]
+mod corrector_edge_tests;
 pub mod cue;
 pub mod echo_report;
 #[cfg(test)]
@@ -276,47 +278,48 @@ mod tests {
     use crate::params::{CleanupParams, CorrectorParams, EffectParams, Params};
     use crate::slot::effects::Reading;
     use crate::slot::guide::Note;
+    use crate::slot::source::fixtures::Clip;
 
     const CORRECTING: CorrectorParams =
         CorrectorParams { enabled: true, strength: 1.0, retune_ms: 0.0 };
 
-    /// Hands over `samples`, then silence.
-    struct Clip {
+    /// `samples` through a new slot, hard left so the left channel is its mono output, block `n`
+    /// with `corrector_at(n)`, under the allocation guard, through the block that holds the last
+    /// sample. After each block `after_block` hears what stats reads.
+    pub(super) fn through_slot(
         samples: Vec<f32>,
-        at: usize,
+        corrector_at: impl Fn(usize) -> CorrectorParams,
+        after_block: impl FnMut(u32),
+    ) -> Vec<f32> {
+        let blocks = samples.len().div_ceil(BLOCK);
+        let mut slot = Slot::new(Box::new(Clip::new(samples)));
+        render(&mut slot, blocks, corrector_at, |_, _| {}, after_block)
     }
 
-    impl Source for Clip {
-        fn pull(&mut self, out: &mut [f32]) {
-            for sample in out {
-                *sample = self.samples.get(self.at).copied().unwrap_or(0.0);
-                self.at += 1;
-            }
-        }
-    }
-
-    /// `samples` through a new slot with `corrector`, hard left so the left channel is its mono
-    /// output, under the allocation guard. After each block `after_block` hears what stats reads.
-    fn through_slot(
-        samples: Vec<f32>,
-        corrector: CorrectorParams,
+    /// `blocks` blocks of `slot`, hard left, block `n` with `corrector_at(n)`. `ahead(n, slot)` runs
+    /// on the audio thread before block `n`, under the allocation guard with it, and `after_block`
+    /// hears what stats reads after each. Returns the left channel.
+    pub(super) fn render(
+        slot: &mut Slot,
+        blocks: usize,
+        corrector_at: impl Fn(usize) -> CorrectorParams,
+        mut ahead: impl FnMut(usize, &mut Slot),
         mut after_block: impl FnMut(u32),
     ) -> Vec<f32> {
-        let frames = samples.len();
-        let mut slot = Slot::new(Box::new(Clip { samples, at: 0 }));
         let delay = slot.corrector_delay();
-        let params = SlotParams {
-            pan: -1.0,
-            effects: EffectParams { corrector, ..EffectParams::default() },
-            ..SlotParams::default()
-        };
         let (mut events, _drain) = event_ring();
         let history = EchoHistory::new();
-        let mut output = Vec::with_capacity(frames);
-        for _ in 0..frames.div_ceil(BLOCK) {
+        let mut output = Vec::with_capacity(blocks * BLOCK);
+        for block in 0..blocks {
+            let params = SlotParams {
+                pan: -1.0,
+                effects: EffectParams { corrector: corrector_at(block), ..EffectParams::default() },
+                ..SlotParams::default()
+            };
             let mut left = [0.0; BLOCK];
             let mut right = [0.0; BLOCK];
             assert_no_alloc(|| {
+                ahead(block, slot);
                 let mut out = Stereo { left: &mut left, right: &mut right };
                 let shared = Shared { any_solo: false, cue: Cue::default(), history: &history };
                 slot.render(0, &params, shared, &mut out, &mut events);
@@ -338,7 +341,7 @@ mod tests {
         ];
         let input = harmonic_voice(RATE as usize, &BUZZ, |_| 226.0);
         for corrector in off {
-            let output = through_slot(input.clone(), corrector, |delay| assert_eq!(delay, 0));
+            let output = through_slot(input.clone(), |_| corrector, |delay| assert_eq!(delay, 0));
             for (frame, (out, sample)) in output.iter().zip(&input).enumerate() {
                 assert_eq!(out.to_bits(), sample.to_bits(), "{corrector:?} changed frame {frame}");
             }
@@ -364,7 +367,7 @@ mod tests {
             input.resize(click + BLOCK * 16, 0.0);
 
             let mut reported = Vec::new();
-            let output = through_slot(input, CORRECTING, |delay| reported.push(delay));
+            let output = through_slot(input, |_| CORRECTING, |delay| reported.push(delay));
             let before_click = reported[click / BLOCK - 1] as i64;
             let arrived = (click..output.len())
                 .max_by(|a, b| output[*a].abs().total_cmp(&output[*b].abs()))
@@ -449,7 +452,7 @@ mod tests {
         guide: Guide,
         corrector: CorrectorParams,
     ) -> (Vec<f32>, Vec<Reading>) {
-        let mut slot = Slot::new(Box::new(Clip { samples: input.to_vec(), at: 0 }));
+        let mut slot = Slot::new(Box::new(Clip::new(input.to_vec())));
         slot.set_guide(Some(Box::new(guide)));
         let mut graph = Graph::new(vec![slot]);
         let (mut events, mut drain) = event_ring();

@@ -566,9 +566,9 @@ mod tests {
         dip_db: f64,
     }
 
-    /// `input` through a corrector at full strength on every class, a frame at a time, and every
-    /// jump of its read point, with `hz_at` the voice's true pitch at each sample.
-    fn splices(input: &[f32], hz_at: impl Fn(usize) -> f64) -> Vec<Splice> {
+    /// `input` through a corrector at full strength on every class, a frame at a time, under the
+    /// allocation guard: the output, and the delay after each frame.
+    fn walked(input: &[f32]) -> (Vec<f32>, Vec<f64>) {
         let mut corrector = PitchCorrector::new(RATE);
         corrector.set_target(EVERY_PITCH_CLASS, 1.0, 40.0);
         let mut output = vec![0.0; input.len()];
@@ -581,6 +581,13 @@ mod tests {
                 delays.push(corrector.latency_samples() as f64);
             }
         });
+        (output, delays)
+    }
+
+    /// Every jump of the read point in `input` through `walked`, with `hz_at` the voice's true
+    /// pitch at each sample.
+    fn splices(input: &[f32], hz_at: impl Fn(usize) -> f64) -> Vec<Splice> {
+        let (output, delays) = walked(input);
         let level = |from: usize, to: usize| {
             let slice = &output[from..to.min(output.len())];
             (slice.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / slice.len() as f64).sqrt()
@@ -655,6 +662,156 @@ mod tests {
             .collect();
         let bad = report("breathy D3", &splices(&voice[..frames], |_| hz), seconds);
         assert_eq!(bad, 0);
+    }
+
+    /// The shifter's quietest audible level, -50 dBFS, as RMS over the three crossfades it judges.
+    const QUIETEST: f64 = 0.003_16;
+
+    /// Whether the 384 samples of `signal` before `end` are under the shifter's level floor.
+    fn quiet(signal: &[f32], end: usize) -> bool {
+        let stretch = &signal[end.saturating_sub(384)..end];
+        let energy: f64 = stretch.iter().map(|s| f64::from(*s).powi(2)).sum();
+        (energy / 384.0).sqrt() < QUIETEST
+    }
+
+    /// White noise at `db` dBFS RMS: a quiet room, or bleed.
+    fn room_noise(frames: usize, db: f32) -> Vec<f32> {
+        let mut rng = Lcg::new(0x00c0_ffee);
+        at_db((0..frames).map(|_| rng.sample()).collect(), db)
+    }
+
+    /// A line on A3 `cents` off, a rest from 0.6 to 1.0 s holding `rest`, then the same line again
+    /// from 1.0 s with a 5 ms onset, as a singer's next line starts.
+    fn line_rest_line(cents: f64, rest: &[f32]) -> Vec<f32> {
+        let rate = f64::from(RATE);
+        let (rest_at, line_at) = ((0.6 * rate) as usize, (1.0 * rate) as usize);
+        let hz = midi_hz(57.0 + cents / 100.0);
+        harmonic_voice((1.6 * rate) as usize, &BUZZ, |_| hz)
+            .into_iter()
+            .enumerate()
+            .map(|(i, sample)| match i {
+                _ if i < rest_at => sample,
+                _ if i < line_at => rest[i - rest_at],
+                _ => sample * ((i - line_at) as f32 / 240.0).min(1.0),
+            })
+            .collect()
+    }
+
+    /// The rest moves in `delays` between frames `from` and `to`: jumps down that land at the
+    /// resting point, a quarter of the voice's `period` above the shifter's floor. Each as the
+    /// frame, and the delay it left and the one it landed on.
+    fn rest_moves(delays: &[f64], period: f64, from: usize, to: usize) -> Vec<(usize, f64, f64)> {
+        (from.max(1)..to)
+            .filter(|&n| delays[n - 1] - delays[n] >= 2.0)
+            .filter(|&n| {
+                [5.0, 8.0].iter().any(|floor| (delays[n] - floor - 0.25 * period).abs() <= 1.5)
+            })
+            .map(|n| (n, delays[n - 1], delays[n]))
+            .collect()
+    }
+
+    // A rest under -50 dBFS keeps the read point at its resting point for as long as it lasts, so
+    // it may move many times in one rest. None of it is heard: every move splices input under the
+    // floor at both ends, the output stays under it through the rest, and the next line's first
+    // period is whole. A voice shifted up, whose read point closes on the floor as the shift eases
+    // in the rest and jumps a period back, is the case that once left a line starting high
+    #[test]
+    fn a_rest_move_is_never_heard() {
+        let rate = f64::from(RATE);
+        let (rest_at, line_at) = ((0.6 * rate) as usize, (1.0 * rate) as usize);
+        let rest = room_noise(line_at - rest_at, -60.0);
+        for cents in [-40.0, 40.0] {
+            let input = line_rest_line(cents, &rest);
+            let (output, delays) = walked(&input);
+            let period = rate / midi_hz(57.0 + cents / 100.0);
+            let moves = rest_moves(&delays, period, rest_at, line_at);
+            assert!(!moves.is_empty(), "{cents:+} c: the rest never moved the delay");
+            // Shifted down, the easing shift lets the delay climb all through the rest, and the
+            // rest keeps taking it back
+            if cents > 0.0 {
+                assert!(
+                    moves.len() > 1,
+                    "{cents:+} c: one move in a rest the delay climbs through"
+                );
+            }
+            for (n, from, to) in &moves {
+                let (read, landing) = (n - *from as usize, n - *to as usize);
+                assert!(
+                    quiet(&input, read) && quiet(&input, landing),
+                    "{cents:+} c: a move at {n} spliced sound"
+                );
+            }
+            for end in (rest_at + 1_200..line_at).step_by(128) {
+                assert!(quiet(&output, end), "{cents:+} c: the rest is heard at {end}");
+            }
+            let starts = line_at + delays[line_at] as usize;
+            let first = starts..starts + period as usize;
+            assert!(
+                delays[first.clone()].windows(2).all(|d| (d[1] - d[0]).abs() < 2.0),
+                "{cents:+} c: a splice in the line's first period"
+            );
+            let dry = steepest_step(&input[line_at..line_at + period as usize]);
+            let wet = steepest_step(&output[first]);
+            assert!(wet <= 1.5 * dry, "{cents:+} c: a step of {wet} where the voice has {dry}");
+            assert!(
+                delays[line_at] < 5.0 + 0.25 * period + 8.0,
+                "{cents:+} c: the line starts at {}",
+                delays[line_at]
+            );
+        }
+    }
+
+    fn steepest_step(signal: &[f32]) -> f32 {
+        signal.windows(2).map(|pair| (pair[1] - pair[0]).abs()).fold(0.0, f32::max)
+    }
+
+    // The room is rarely silent. Bleed 2 dB over the floor through the whole rest holds the delay
+    // where the line left it, as decision 0024's row says; 2 dB under, the rest moves it. Bleed
+    // that arrives halfway through reaches the newest end of a splice first, and from then on no
+    // move is made. A rest shorter than a crossfade is never judged a rest
+    #[test]
+    fn the_room_is_not_silent() {
+        let rate = f64::from(RATE);
+        let (rest_at, line_at) = ((0.6 * rate) as usize, (1.0 * rate) as usize);
+        let frames = line_at - rest_at;
+        let period = rate / midi_hz(57.4);
+        let moves_with = |rest: &[f32]| {
+            let input = line_rest_line(40.0, rest);
+            let (_, delays) = walked(&input);
+            let moves = rest_moves(&delays, period, rest_at, line_at);
+            for (n, from, to) in &moves {
+                let (read, landing) = (n - *from as usize, n - *to as usize);
+                assert!(
+                    quiet(&input, read) && quiet(&input, landing),
+                    "a move at {n} spliced sound"
+                );
+            }
+            moves.len()
+        };
+        assert_eq!(
+            moves_with(&room_noise(frames, -48.0)),
+            0,
+            "bleed over the floor moved the delay"
+        );
+        assert!(
+            moves_with(&room_noise(frames, -52.0)) > 0,
+            "a rest under the floor did not move it"
+        );
+        let mut arriving = vec![0.0; frames / 2];
+        arriving.extend(room_noise(frames - frames / 2, -48.0));
+        assert!(moves_with(&arriving) > 0, "the quiet half did not move the delay");
+
+        let gap = 96;
+        let input: Vec<f32> = harmonic_voice((1.2 * rate) as usize, &BUZZ, |_| midi_hz(57.4))
+            .into_iter()
+            .enumerate()
+            .map(|(i, sample)| if (rest_at..rest_at + gap).contains(&i) { 0.0 } else { sample })
+            .collect();
+        let (_, delays) = walked(&input);
+        assert!(
+            rest_moves(&delays, period, rest_at, rest_at + 2_000).is_empty(),
+            "a 2 ms gap moved the delay"
+        );
     }
 
     // A rest still moves the read point down: a line that starts after one starts near the floor
