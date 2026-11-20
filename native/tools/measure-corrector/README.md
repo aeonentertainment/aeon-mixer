@@ -101,6 +101,26 @@ the way they do, and the table says so.
   the input did not have, octave jumps, pitch movement between 8 and 30 Hz the input did not have,
   and held notes gone still. Through Opus, `off` is the codec's share.
 
+- **Warble,** on the clip as sung through each variant, and on three known voices under
+  `known_voices.warble`: one held still, one with 5.5 Hz vibrato 60 cents deep, one gliding. Over
+  each stretch held voiced for 300 ms, past its attack, with the output set back by the delay the
+  slot reported:
+  - `pitch_moved_cents`: the output's pitch less the input's, in 3 to 12 Hz, where a wobble is
+    heard. Following the singer moves it by design: it is how much correction does there.
+  - `pitch_movement_kept`: the output's movement in that band over the singer's. Under 1,
+    correction took some of the singer's movement out; over 1, it added movement they did not
+    sing. Null for a voice held still.
+  - `level_added_db`: the output's level against the input's, moving at 3 to 40 Hz, where a
+    shifter's splices would show.
+
+  The voice held still is the control: anything on it is the corrector's own. These say how much
+  correction moves a voice and whether it moves more than the singer did. They do not say
+  whether that is heard as warble, which only a listener can, nor which of the singer's movement
+  was meant. They do not read timbre: a spectrum's shape in bands, compared across two pitches,
+  moves by 1 dB on a voice held still with nothing done to it, more than correction changes it.
+  And a reading one stretch long, as the golden vocal gives at the corrector's confidence bar,
+  makes its p95 its median.
+
 LSD charges pitch as much as damage: 20 cents of pitch alone costs about 5.5 dB of it on a real
 voice, and MCD about 1.5. A corrector that lands notes closer reads a lower LSD with the same
 artefacts. Read MCD and the artefact columns for damage, and LSD as everything that changed.

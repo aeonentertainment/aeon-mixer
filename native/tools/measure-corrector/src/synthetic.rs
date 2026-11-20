@@ -14,6 +14,7 @@ use crate::chain::{Input, Setup, frames_of_ms, run};
 use crate::contour;
 use crate::expression::band_rms;
 use crate::music::{cents, median};
+use crate::warble;
 
 const A3: f64 = 220.0;
 
@@ -161,6 +162,41 @@ fn held_off(hz: f64, cents_off: f64) -> (f64, u32) {
     (median(&landed), take.delays.iter().copied().max().unwrap_or(0))
 }
 
+/// The warble rows on three known voices, pulled to the nearest note: one held still 40 cents
+/// flat, one with 5.5 Hz vibrato 60 cents deep around 30 cents flat, and one gliding up three
+/// semitones over four seconds. A voice held still is the control: anything on it is the
+/// corrector's own.
+fn warble_rows() -> Value {
+    let frames = RATE as usize * 4;
+    let voices: [(&str, Vec<f32>); 3] = [
+        ("steady", harmonic_voice(frames, |_| A3 * 2f64.powf(-40.0 / 1200.0))),
+        (
+            "vibrato",
+            harmonic_voice(frames, |ms| {
+                A3 * 2f64.powf((-30.0 + 60.0 * (TAU * 5.5 * ms / 1000.0).sin()) / 1200.0)
+            }),
+        ),
+        (
+            "glide",
+            harmonic_voice(frames, |ms| A3 * 2f64.powf((-100.0 + 300.0 * ms / 4000.0) / 1200.0)),
+        ),
+    ];
+    let mut rows = serde_json::Map::new();
+    for (name, voice) in &voices {
+        for (label, strength, retune_ms) in settings() {
+            let params = CorrectorParams { enabled: true, strength, retune_ms };
+            let mut setup = Setup::new(Input::Samples(voice.clone()), frames, params);
+            setup.guide = Some(Guide { notes: Vec::new(), key_mask: EVERY_PITCH_CLASS });
+            let take = run(setup);
+            rows.insert(
+                format!("{name}.{label}"),
+                warble::measure(voice, &take.voice(), &take.delays),
+            );
+        }
+    }
+    Value::Object(rows)
+}
+
 pub fn rows() -> Value {
     let mut vibrato_rows = serde_json::Map::new();
     for (label, strength, retune_ms) in settings() {
@@ -190,6 +226,7 @@ pub fn rows() -> Value {
             .insert(label.to_owned(), json!({ "motion_in_cents": dry, "motion_out_cents": wet }));
     }
     json!({
+        "warble": warble_rows(),
         "vibrato": vibrato_rows,
         "scoop": scoop_rows,
         "scoop_from_vibrato": vibrato_scoop_rows,
