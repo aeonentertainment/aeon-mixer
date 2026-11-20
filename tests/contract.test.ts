@@ -1,3 +1,4 @@
+import { networkInterfaces } from "node:os";
 import { expect, test } from "vite-plus/test";
 import { checkContract, type ContractEngine, type ContractLimit } from "../src/contract/index.ts";
 import { Emitter } from "../src/emitter.ts";
@@ -18,11 +19,19 @@ async function testOsOutputs() {
   }
 }
 
+/** Whether this machine has an IPv4 address but loopback, which the listen promise sends from. */
+const hasWiderAddress = Object.values(networkInterfaces())
+  .flat()
+  .some((info) => info?.family === "IPv4" && !info.internal);
+
 test("the package keeps every promise of its contract, and an offline engine has no move to check", async () => {
   const report = await checkContract({ openEngine, outputDevices: testOsOutputs });
   expect(report.broken).toEqual([]);
   expect(report.unchecked).toEqual([
     { promise: expect.stringMatching(/^After a move, `outputChanged`/), why: expect.any(String) },
+    ...(hasWiderAddress
+      ? []
+      : [{ promise: expect.stringMatching(/^An `rtp` slot takes/), why: expect.any(String) }]),
   ]);
 }, 30_000);
 
@@ -184,6 +193,7 @@ const RENDERED = [
   "A slot's `tone` is null while its tone stage is off, and reports once it is on.",
 ];
 const SOCKETED = [
+  "An `rtp` slot takes datagrams from this machine only, unless its `listen` is `every-interface`.",
   "A slot playing one sender refuses every other address.",
   "After `resetSlot`, a slot takes a new sender at once.",
   "After `resetSlot`, a slot refuses the sender it released.",

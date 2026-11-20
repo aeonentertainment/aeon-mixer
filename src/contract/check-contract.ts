@@ -23,7 +23,7 @@ const LACKING: Record<Need, (options: ContractOptions<never>) => string | undefi
       : undefined,
   sockets: ({ limits }) =>
     limits?.includes("opensNoSocket")
-      ? "the subject opens no socket, and this promise is about packets an `l16` slot takes over loopback UDP"
+      ? "the subject opens no socket, and this promise is about packets a slot takes over UDP"
       : undefined,
   outputMoves: ({ moveOutput }) =>
     moveOutput ? undefined : "an offline engine never moves; give `moveOutput` to check a stand-in",

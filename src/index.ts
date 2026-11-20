@@ -18,6 +18,7 @@ export type {
   OutputInfo,
   SlotConfig,
   SlotEffect,
+  SlotListen,
   SlotSettings,
   SlotStats,
   StemKind,
