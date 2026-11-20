@@ -90,17 +90,18 @@ pub const SLIP_CENTS: f64 = 300.0;
 
 /// `raw` with its holes filled in a line between the readings either side, the ends holding the
 /// nearest, after dropping every reading more than `reach_cents` from their median. `None` when
-/// under four fifths of it was read at all.
+/// under four fifths of it is left to read from: a hole and a dropped reading are the same
+/// absence, and a line drawn over more than a fifth of a note is not a reading of it.
 pub fn bridged(raw: &[Option<f64>], reach_cents: f64) -> Option<Vec<f64>> {
     let read: Vec<f64> = raw.iter().flatten().copied().collect();
-    if (read.len() as f64) < 0.8 * raw.len() as f64 {
-        return None;
-    }
     let centre = median(&read);
     let kept: Vec<Option<f64>> = raw
         .iter()
         .map(|reading| reading.filter(|cents| (cents - centre).abs() <= reach_cents))
         .collect();
+    if (kept.iter().flatten().count() as f64) < 0.8 * raw.len() as f64 {
+        return None;
+    }
     let first = kept.iter().position(Option::is_some)?;
     let mut filled = vec![kept[first]?; kept.len()];
     let mut last = (first, kept[first]?);

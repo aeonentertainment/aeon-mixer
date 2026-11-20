@@ -45,10 +45,15 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32], notes: &[MeantNote]) ->
     let mut heard =
         TakeDelay::new(delays).onto_input(&contour::read_with_window(wet, PITCH_WINDOW, 0));
     heard.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+    rows(&sung, &heard, notes)
+}
+
+/// The rows from the two voices' readings, `heard` already on the input's clock.
+fn rows(sung: &[Point], heard: &[Point], notes: &[MeantNote]) -> Value {
     // Each note's readings, and what could be read of it
     let held: Vec<(usize, Option<_>)> = notes
         .iter()
-        .map(|note| (note_readings(&sung, note).len(), note_and_shift(&sung, &heard, note)))
+        .map(|note| (note_readings(sung, note).len(), note_and_shift(sung, heard, note)))
         .collect();
 
     let spread = |values: &[f64]| {
@@ -88,7 +93,7 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32], notes: &[MeantNote]) ->
 
 /// A note's sung contour, and the corrected pitch less the sung at each of its readings, both in
 /// cents with the detector's slips bridged; `None`, the note refused, when under four fifths of
-/// either can be read. A slip is the same thing on either: `SLIP_CENTS` from the note's median,
+/// either is left to read from once the holes and the slips are out. A slip is the same thing on either: `SLIP_CENTS` from the note's median,
 /// well past a step between scale notes, so a target the corrector changes mid-note is kept.
 fn note_and_shift(
     sung: &[Point],
@@ -343,6 +348,41 @@ mod tests {
                 (Some(0), Some(1))
             );
         }
+    }
+
+    // How much of a note the detector may slip on. The output is read an octave up, sure of it,
+    // under a steady 20 cent pull: a tenth of the note slipped is bridged and the note reads as
+    // moving nothing; a third slipped is refused and counted, not read from a line drawn over 500
+    // ms; three fifths slipped is refused too, not read from the slips the median then sits in
+    #[test]
+    fn a_note_slipped_on_for_over_a_fifth_is_refused_and_counted() {
+        let reading = |ms: f64, cents: f64| Point {
+            ms,
+            hz: (A3 * 2f64.powf(cents / 1200.0)) as f32,
+            confidence: 1.0,
+        };
+        let sung: Vec<Point> = (0..150)
+            .map(|k| reading(10.0 * f64::from(k), vibrato(30.0, 0.0)(10.0 * f64::from(k))))
+            .collect();
+        let slipped_for = |readings: i32| -> Value {
+            let heard: Vec<Point> = (0..151)
+                .map(|k| {
+                    let ms = 10.0 * f64::from(k) - 9.4;
+                    let slip = if (40..40 + readings).contains(&k) { 1200.0 } else { 0.0 };
+                    reading(ms, 20.0 + vibrato(30.0, 0.0)(ms) + slip)
+                })
+                .collect();
+            rows(&sung, &heard, &held(1500.0))
+        };
+        for (readings, read, refused) in [(15, 1, 0), (50, 0, 1), (90, 0, 1)] {
+            let row = slipped_for(readings);
+            for band in ["3_to_12_hz", "6_to_12_hz"] {
+                let counts = (row[band]["notes"].as_u64(), row[band]["refused"].as_u64());
+                assert_eq!(counts, (Some(read), Some(refused)), "{readings} slipped: {row}");
+            }
+        }
+        let moved = median_of(&slipped_for(15), "3_to_12_hz", "pitch_moved_cents");
+        assert!(moved < 0.5, "a steady pull moved {moved} cents");
     }
 
     // A note is reported only in a band it resolves: 0.3 s in neither, 0.7 s in 6 to 12 Hz alone,
