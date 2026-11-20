@@ -132,6 +132,61 @@ pub fn artefacts_table(result: &Value) -> String {
     table
 }
 
+/// Warble on every answer-key take and known voice, `off` the control. Per band: the notes read
+/// and how many more could not be, then pitch moved and the singer's movement kept, each the median over notes and the p95, or
+/// the most a note read where there are too few notes for a p95.
+pub fn warble_table(result: &Value) -> String {
+    let mut table = String::from(
+        "| Take | 3 to 12 Hz: notes; moved; kept | 6 to 12 Hz: notes; moved; kept |\n|---|---|---|\n",
+    );
+    let spread = |row: &Value| {
+        let worst = match row["p95"].as_f64() {
+            Some(_) => format!("p95 {}", number(&row["p95"], 2)),
+            None => format!("most {}", number(&row["most"], 2)),
+        };
+        format!("{} ({worst})", number(&row["median"], 2))
+    };
+    let band = |row: &Value| {
+        let refused = match row["refused"].as_u64() {
+            Some(0) | None => String::new(),
+            Some(refused) => format!(" ({refused} more could not be read)"),
+        };
+        match row["notes"].as_u64() {
+            Some(0) | None => format!("0{refused}"),
+            Some(notes) => format!(
+                "{notes}{refused}; {} c; {}",
+                spread(&row["pitch_moved_cents"]),
+                spread(&row["pitch_movement_kept"]),
+            ),
+        }
+    };
+    let mut row = |name: String, warble: &Value| {
+        writeln!(
+            table,
+            "| {name} | {} | {} |",
+            band(&warble["3_to_12_hz"]),
+            band(&warble["6_to_12_hz"])
+        )
+        .expect("a string takes writes");
+    };
+    if let Some(keys) = result["answer_key"].as_object() {
+        for (clip, entry) in keys {
+            let Some(variants) = entry["variants"].as_object() else { continue };
+            for (variant, columns) in variants {
+                if !columns["warble"].is_null() {
+                    row(format!("{clip} {variant}"), &columns["warble"]);
+                }
+            }
+        }
+    }
+    if let Some(voices) = result["known_voices"]["warble"].as_object() {
+        for (voice, warble) in voices {
+            row(voice.clone(), warble);
+        }
+    }
+    table
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

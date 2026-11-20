@@ -32,6 +32,7 @@ use crate::sung_rows::render;
 use crate::take_delay::TakeDelay;
 use crate::variant::Variant;
 use crate::vibrato;
+use crate::warble;
 
 /// The answer key measures the corrector alone, so the slot's cleanup stays off for it.
 const OFF: CleanupParams = CleanupParams { enabled: false };
@@ -112,6 +113,7 @@ pub fn rows(clip: &SungClip, variants: &[Variant]) -> Result<Value, String> {
             variant.label.clone(),
             json!({
                 "flapping": flapping.json(),
+                "warble": warble::measure(&clip.samples, &sung_take.voice(), &sung_take.delays, &clip.notes),
                 "left_alone": left_alone(&ruler, &key, &left, &key_clip),
                 "restored": restored_row(&ruler, &key, &broken, &restored, &clip.notes, &degradation),
             }),

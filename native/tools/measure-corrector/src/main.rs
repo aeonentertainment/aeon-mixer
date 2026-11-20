@@ -41,6 +41,7 @@ mod variant;
 mod vibrato;
 mod vocadito;
 mod vocal_delays;
+mod warble;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -340,6 +341,7 @@ fn run() -> Result<(), String> {
             println!("{}", report::expression_table(&result));
             println!("{}", key_report::table(&result));
             println!("{}", key_report::artefacts_table(&result));
+            println!("{}", key_report::warble_table(&result));
             if let Some(out) = flags.get("--out") {
                 let text = serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?;
                 std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
@@ -354,6 +356,7 @@ fn run() -> Result<(), String> {
             println!("{}", report::expression_table(&result));
             println!("{}", key_report::table(&result));
             println!("{}", key_report::artefacts_table(&result));
+            println!("{}", key_report::warble_table(&result));
         }
         "diff" => {
             let [before, after] = &flags.positional[..] else { return Err(USAGE.to_owned()) };
