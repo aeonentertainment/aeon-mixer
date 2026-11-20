@@ -113,7 +113,7 @@ pub fn rows(clip: &SungClip, variants: &[Variant]) -> Result<Value, String> {
             variant.label.clone(),
             json!({
                 "flapping": flapping.json(),
-                "warble": warble::measure(&clip.samples, &sung_take.voice(), &sung_take.delays),
+                "warble": warble::measure(&clip.samples, &sung_take.voice(), &sung_take.delays, &clip.notes),
                 "left_alone": left_alone(&ruler, &key, &left, &key_clip),
                 "restored": restored_row(&ruler, &key, &broken, &restored, &clip.notes, &degradation),
             }),

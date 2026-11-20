@@ -66,27 +66,26 @@ fn without_trend(series: &[f64]) -> Vec<f64> {
     series.iter().enumerate().map(|(i, y)| y - mean_y - slope * (i as f64 - mean_x)).collect()
 }
 
+/// The readings inside a note, past its attack, where any corrector is arriving, and before its
+/// release.
+pub fn note_readings<'a>(points: &'a [Point], note: &MeantNote) -> &'a [Point] {
+    let start = points.partition_point(|point| point.ms < note.start_ms + NOTE_LEAD_MS);
+    let end = points.partition_point(|point| point.ms < note.end_ms - NOTE_TAIL_MS);
+    points.get(start..end).unwrap_or_default()
+}
+
 /// A note's contour every 10 ms, in cents from the note in whatever octave it was sung. A short
 /// hole is bridged in a line. `None` when under four fifths of it is voiced.
 pub fn note_contour(points: &[Point], note: &MeantNote) -> Option<Vec<f64>> {
-    let from = note.start_ms + NOTE_LEAD_MS;
-    let to = note.end_ms - NOTE_TAIL_MS;
     let meant = f64::from(note.midi);
-    let start = points.partition_point(|point| point.ms < from);
-    let end = points.partition_point(|point| point.ms < to);
-    let frames = points.get(start..end)?;
-    if frames.is_empty() {
-        return None;
-    }
-    let raw: Vec<Option<f64>> = frames
+    let raw: Vec<Option<f64>> = note_readings(points, note)
         .iter()
         .map(|point| point.voiced().then(|| cents_off_class(point.midi(), meant)))
         .collect();
     bridged(&raw, SLIP_CENTS)
 }
 
-/// A reading this far from the rest of a note or stretch is the detector slipping, an octave or
-/// across a splice, not the singer.
+/// A reading this far from the rest of a note is the detector slipping, not the singer.
 pub const SLIP_CENTS: f64 = 300.0;
 
 /// `raw` with its holes filled in a line between the readings either side, the ends holding the

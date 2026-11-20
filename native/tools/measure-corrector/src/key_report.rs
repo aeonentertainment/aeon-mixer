@@ -132,28 +132,34 @@ pub fn artefacts_table(result: &Value) -> String {
     table
 }
 
-/// Warble on every answer-key take and known voice, `off` the control: pitch moved and the
-/// singer's movement kept in 3 to 12 Hz, the median and the p95 over held stretches, or the most
-/// one read where there are too few stretches for a p95.
+/// Warble on every answer-key take and known voice, `off` the control. Per band: the notes read,
+/// then pitch moved and the singer's movement kept, each the median over notes and the p95, or
+/// the most a note read where there are too few notes for a p95.
 pub fn warble_table(result: &Value) -> String {
     let mut table = String::from(
-        "| Take | Stretches | Pitch moved, median / p95 | Movement kept, median / p95 |\n\
-         |---|---|---|---|\n",
+        "| Take | 3 to 12 Hz: notes; moved; kept | 6 to 12 Hz: notes; moved; kept |\n|---|---|---|\n",
     );
     let spread = |row: &Value| {
         let worst = match row["p95"].as_f64() {
-            Some(_) => number(&row["p95"], 2),
+            Some(_) => format!("p95 {}", number(&row["p95"], 2)),
             None => format!("most {}", number(&row["most"], 2)),
         };
-        format!("{} / {worst}", number(&row["median"], 2))
+        format!("{} ({worst})", number(&row["median"], 2))
+    };
+    let band = |row: &Value| match row["notes"].as_u64() {
+        Some(0) | None => "0".to_owned(),
+        Some(notes) => format!(
+            "{notes}; {} c; {}",
+            spread(&row["pitch_moved_cents"]),
+            spread(&row["pitch_movement_kept"]),
+        ),
     };
     let mut row = |name: String, warble: &Value| {
         writeln!(
             table,
-            "| {name} | {} | {} c | {} |",
-            warble["stretches"],
-            spread(&warble["pitch_moved_cents"]),
-            spread(&warble["pitch_movement_kept"]),
+            "| {name} | {} | {} |",
+            band(&warble["3_to_12_hz"]),
+            band(&warble["6_to_12_hz"])
         )
         .expect("a string takes writes");
     };
