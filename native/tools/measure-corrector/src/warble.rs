@@ -15,17 +15,24 @@ use engine::block::RATE;
 use serde_json::{Value, json};
 
 use crate::contour::{self, Point};
-use crate::expression::{WARBLE_BAND, band_rms};
+use crate::expression::{SLIP_CENTS, WARBLE_BAND, band_rms, bridged};
 use crate::music::{median, percentile};
 use crate::take_delay::TakeDelay;
 
 /// Short enough to keep 90 percent of a 12 Hz movement, long enough for an 82 Hz voice.
 const PITCH_WINDOW: usize = 1024;
-const SHORTEST_MS: f64 = 300.0;
+/// Each stretch is read for three cycles of the band's lowest rate, a second, so every stretch
+/// resolves the band it is labelled with, as `expression` needs for a note.
+const READ_MS: f64 = 3000.0 / WARBLE_BAND.0;
+/// A run of the singer's sound carries through an unsure stretch this short, which is the
+/// detector's doubt, not a rest.
+const GAP_MS: f64 = 50.0;
+/// A p95 needs this many stretches; with fewer, the most a stretch read is given instead.
+const FOR_A_P95: usize = 20;
 const LEAD_MS: f64 = 60.0;
 const TAIL_MS: f64 = 30.0;
-/// A reading this far from the stretch's usual shift is the detector's octave or a reading
-/// across a splice, not something the corrector did; it is bridged.
+/// A shift this far from the stretch's usual one is the detector slipping on the output, not
+/// something the corrector did.
 const MOST_SHIFT_CENTS: f64 = 100.0;
 /// Less movement in the band than this, and the singer held the note still.
 const STILLEST_CENTS: f64 = 1.0;
@@ -52,8 +59,11 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32]) -> Value {
         }
     }
 
-    let spread =
-        |values: &[f64]| json!({ "median": median(values), "p95": percentile(values, 0.95) });
+    let spread = |values: &[f64]| {
+        let p95 = (values.len() >= FOR_A_P95).then(|| percentile(values, 0.95));
+        let most = values.iter().copied().fold(f64::NAN, f64::max);
+        json!({ "median": median(values), "p95": p95, "most": most })
+    };
     json!({
         "stretches": moved.len(),
         "pitch_moved_cents": spread(&moved),
@@ -61,47 +71,47 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32]) -> Value {
     })
 }
 
-/// Runs of voiced readings at least `SHORTEST_MS` long, less their attack and release.
+/// Runs of voiced readings that carry through a gap of `GAP_MS` or less, less their attack and
+/// release, that leave `READ_MS` to read. A gap's readings are bridged in the run.
 fn stretches(points: &[Point]) -> Vec<std::ops::Range<usize>> {
     let hop_ms = 1000.0 * contour::HOP as f64 / f64::from(RATE);
     let (lead, tail) = ((LEAD_MS / hop_ms) as usize, (TAIL_MS / hop_ms) as usize);
+    let gap = (GAP_MS / hop_ms) as usize;
     let mut runs = Vec::new();
-    let mut start = None;
-    for (index, point) in
-        points.iter().chain([&Point { ms: 0.0, hz: 0.0, confidence: 0.0 }]).enumerate()
-    {
-        match (point.voiced(), start) {
-            (true, None) => start = Some(index),
-            (false, Some(from)) => {
-                if (index - from) as f64 * hop_ms >= SHORTEST_MS {
-                    runs.push(from + lead..index - tail);
-                }
-                start = None;
-            }
-            _ => {}
+    let mut run: Option<(usize, usize)> = None;
+    let mut close = |(from, to): (usize, usize)| {
+        if (to - from).saturating_sub(lead + tail) as f64 * hop_ms >= READ_MS {
+            runs.push(from + lead..to - tail);
         }
+    };
+    for (index, point) in points.iter().enumerate() {
+        if !point.voiced() {
+            continue;
+        }
+        run = match run {
+            Some((from, to)) if index - to <= gap => Some((from, index + 1)),
+            Some(done) => {
+                close(done);
+                Some((index, index + 1))
+            }
+            None => Some((index, index + 1)),
+        };
     }
+    run.into_iter().for_each(&mut close);
     runs
 }
 
-/// The sung pitch over `sung`, and the corrected pitch less it, both in cents, every reading;
-/// `None` when under four fifths of it can be read in the output.
+/// The sung pitch over `sung`, and the corrected pitch less it, both in cents, every reading,
+/// each with the detector's slips taken out and bridged; `None` when under four fifths of either
+/// can be read.
 fn shift_over(sung: &[Point], heard: &[Point]) -> Option<(Vec<f64>, Vec<f64>)> {
-    let dry: Vec<f64> = sung.iter().map(|point| 100.0 * point.midi()).collect();
-    let raw: Vec<Option<f64>> = sung
+    let raw: Vec<Option<f64>> =
+        sung.iter().map(|point| point.voiced().then(|| 100.0 * point.midi())).collect();
+    let shift: Vec<Option<f64>> = sung
         .iter()
-        .zip(&dry)
-        .map(|(point, cents)| Some(100.0 * at(heard, point.ms)? - cents))
+        .map(|point| Some(100.0 * (at(heard, point.ms).filter(|_| point.voiced())? - point.midi())))
         .collect();
-    let known: Vec<f64> = raw.iter().flatten().copied().collect();
-    let usual = median(&known);
-    let shift: Vec<Option<f64>> =
-        raw.iter().map(|value| value.filter(|s| (s - usual).abs() < MOST_SHIFT_CENTS)).collect();
-    let read = shift.iter().flatten().count();
-    if (read as f64) < 0.8 * shift.len() as f64 {
-        return None;
-    }
-    Some((dry, bridged(&shift)))
+    Some((bridged(&raw, SLIP_CENTS)?, bridged(&shift, MOST_SHIFT_CENTS)?))
 }
 
 /// The output's pitch at `ms` on the input's clock, from the two readings around it, as MIDI.
@@ -115,28 +125,13 @@ fn at(heard: &[Point], ms: f64) -> Option<f64> {
     Some(before.midi() + t * (next.midi() - before.midi()))
 }
 
-/// Holes filled with a line between the readings either side; the ends hold the nearest.
-fn bridged(series: &[Option<f64>]) -> Vec<f64> {
-    let known: Vec<(usize, f64)> =
-        series.iter().enumerate().filter_map(|(i, v)| v.map(|v| (i, v))).collect();
-    (0..series.len())
-        .map(|i| {
-            let after = known.partition_point(|(k, _)| *k < i);
-            match (after.checked_sub(1).map(|b| known[b]), known.get(after)) {
-                (_, Some(&(k, v))) if k == i => v,
-                (Some((a, va)), Some(&(b, vb))) => va + (vb - va) * (i - a) as f64 / (b - a) as f64,
-                (Some((_, v)), None) | (None, Some(&(_, v))) => v,
-                (None, None) => 0.0,
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::f64::consts::TAU;
 
     use super::*;
+    use kernels::fixtures::BUZZ;
+
     use crate::synthetic::harmonic_voice;
 
     const A3: f64 = 220.0;
@@ -175,6 +170,45 @@ mod tests {
         let moved = median_of(&row, "pitch_moved_cents");
         assert!((moved - difference / 2f64.sqrt()).abs() < 1.0, "{row}");
         assert!((median_of(&row, "pitch_movement_kept") - 0.5).abs() < 0.03, "{row}");
+    }
+
+    // A sung voice whose fundamental and odd harmonics fade for 60 ms, which the detector reads
+    // an octave up and sure of it, in the input and so in the output: the slip is bridged, not
+    // read as movement, and half the vibrato, 20 ms late, still keeps half
+    #[test]
+    fn a_slip_of_the_detector_on_the_sung_voice_is_bridged() {
+        let slipped = |depth: f64, late_ms: f64| {
+            let hz = |i: usize| {
+                let ms = i as f64 * 1000.0 / f64::from(RATE);
+                A3 * 2f64
+                    .powf((-20.0 + depth * (TAU * 5.0 * (ms - late_ms) / 1000.0).sin()) / 1200.0)
+            };
+            let whole = kernels::fixtures::harmonic_voice(FRAMES, &BUZZ, hz);
+            let even: Vec<f64> =
+                BUZZ.iter().enumerate().map(|(h, l)| if h % 2 == 1 { *l } else { 0.0 }).collect();
+            let octave = kernels::fixtures::harmonic_voice(FRAMES, &even, hz);
+            // Odd harmonics fade out over 40 ms, stay out 60 ms and come back over 40 ms
+            let odd = |i: usize| {
+                let ms = i as f64 * 1000.0 / f64::from(RATE);
+                ((ms - 1460.0).min(1600.0 - ms) / 40.0).clamp(0.0, 1.0) as f32
+            };
+            whole
+                .iter()
+                .zip(&octave)
+                .enumerate()
+                .map(|(i, (w, o))| w + odd(i) * (o - w))
+                .collect::<Vec<f32>>()
+        };
+        let (dry, wet) = (slipped(30.0, 0.0), slipped(15.0, 20.0));
+        let sung = contour::read_with_window(&dry, PITCH_WINDOW, 0);
+        let octave_up = sung
+            .iter()
+            .filter(|p| p.voiced() && (1460.0..1600.0).contains(&p.ms) && p.hz > 400.0)
+            .count();
+        assert!(octave_up >= 3, "the detector slipped on {octave_up} readings");
+        let row = measure(&dry, &wet, &[]);
+        assert_eq!(row["stretches"], 1, "{row}");
+        assert!((median_of(&row, "pitch_movement_kept") - 0.5).abs() < 0.05, "{row}");
     }
 
     // A 9 Hz wobble of 20 cents the singer did not sing, over their 10 cents of vibrato, moves the

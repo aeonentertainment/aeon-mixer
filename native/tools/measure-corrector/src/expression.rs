@@ -82,15 +82,25 @@ pub fn note_contour(points: &[Point], note: &MeantNote) -> Option<Vec<f64>> {
         .iter()
         .map(|point| point.voiced().then(|| cents_off_class(point.midi(), meant)))
         .collect();
-    let voiced: Vec<f64> = raw.iter().flatten().copied().collect();
-    if (voiced.len() as f64) < 0.8 * raw.len() as f64 {
+    bridged(&raw, SLIP_CENTS)
+}
+
+/// A reading this far from the rest of a note or stretch is the detector slipping, an octave or
+/// across a splice, not the singer.
+pub const SLIP_CENTS: f64 = 300.0;
+
+/// `raw` with its holes filled in a line between the readings either side, the ends holding the
+/// nearest, after dropping every reading more than `reach_cents` from their median. `None` when
+/// under four fifths of it was read at all.
+pub fn bridged(raw: &[Option<f64>], reach_cents: f64) -> Option<Vec<f64>> {
+    let read: Vec<f64> = raw.iter().flatten().copied().collect();
+    if (read.len() as f64) < 0.8 * raw.len() as f64 {
         return None;
     }
-    // A reading far from the rest of the note is the detector slipping, not the singer
-    let centre = median(&voiced);
+    let centre = median(&read);
     let kept: Vec<Option<f64>> = raw
-        .into_iter()
-        .map(|reading| reading.filter(|cents| (cents - centre).abs() <= 300.0))
+        .iter()
+        .map(|reading| reading.filter(|cents| (cents - centre).abs() <= reach_cents))
         .collect();
     let first = kept.iter().position(Option::is_some)?;
     let mut filled = vec![kept[first]?; kept.len()];

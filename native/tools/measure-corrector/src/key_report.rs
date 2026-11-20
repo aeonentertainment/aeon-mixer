@@ -132,23 +132,28 @@ pub fn artefacts_table(result: &Value) -> String {
     table
 }
 
-/// Warble on every answer-key take and known voice: pitch moved and the singer's movement kept in
-/// 3 to 12 Hz, median and p95 over held stretches.
+/// Warble on every answer-key take and known voice, `off` the control: pitch moved and the
+/// singer's movement kept in 3 to 12 Hz, the median and the p95 over held stretches, or the most
+/// one read where there are too few stretches for a p95.
 pub fn warble_table(result: &Value) -> String {
     let mut table = String::from(
         "| Take | Stretches | Pitch moved, median / p95 | Movement kept, median / p95 |\n\
          |---|---|---|---|\n",
     );
-    let number = |value: &Value| value.as_f64().map_or("-".to_owned(), |v| format!("{v:.2}"));
+    let spread = |row: &Value| {
+        let worst = match row["p95"].as_f64() {
+            Some(_) => number(&row["p95"], 2),
+            None => format!("most {}", number(&row["most"], 2)),
+        };
+        format!("{} / {worst}", number(&row["median"], 2))
+    };
     let mut row = |name: String, warble: &Value| {
         writeln!(
             table,
-            "| {name} | {} | {} / {} c | {} / {} |",
+            "| {name} | {} | {} c | {} |",
             warble["stretches"],
-            number(&warble["pitch_moved_cents"]["median"]),
-            number(&warble["pitch_moved_cents"]["p95"]),
-            number(&warble["pitch_movement_kept"]["median"]),
-            number(&warble["pitch_movement_kept"]["p95"]),
+            spread(&warble["pitch_moved_cents"]),
+            spread(&warble["pitch_movement_kept"]),
         )
         .expect("a string takes writes");
     };
@@ -156,7 +161,7 @@ pub fn warble_table(result: &Value) -> String {
         for (clip, entry) in keys {
             let Some(variants) = entry["variants"].as_object() else { continue };
             for (variant, columns) in variants {
-                if !columns["warble"].is_null() && variant != "off" {
+                if !columns["warble"].is_null() {
                     row(format!("{clip} {variant}"), &columns["warble"]);
                 }
             }
