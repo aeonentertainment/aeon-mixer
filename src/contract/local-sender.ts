@@ -1,5 +1,13 @@
 import { createSocket, type Socket } from "node:dgram";
 import { once } from "node:events";
+import { networkInterfaces } from "node:os";
+
+/** An IPv4 address of this machine that is not loopback, where it has one, to send from. */
+export function widerAddress() {
+  return Object.values(networkInterfaces())
+    .flat()
+    .find((info) => info?.family === "IPv4" && !info.internal)?.address;
+}
 
 /** 5 ms at 48 kHz, a house mic sender's packet. */
 const FRAMES = 240;

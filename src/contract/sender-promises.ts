@@ -1,5 +1,4 @@
-import { networkInterfaces } from "node:os";
-import { LocalSender } from "./local-sender.ts";
+import { LocalSender, widerAddress } from "./local-sender.ts";
 import { pumpUntil, startLive } from "./offline-clock.ts";
 import type {
   ContractEngine,
@@ -54,13 +53,6 @@ async function withHeldSlot(trial: Trial, body: (slot: HeldSlot) => Promise<Verd
 function reset({ engine, mixer }: HeldSlot) {
   mixer.resetSlot(0);
   engine.pump(1);
-}
-
-/** An IPv4 address of this machine that is not loopback, where it has one. */
-function widerAddress() {
-  return Object.values(networkInterfaces())
-    .flat()
-    .find((info) => info?.family === "IPv4" && !info.internal)?.address;
 }
 
 export const senderPromises: ReadonlyArray<ContractPromise> = [

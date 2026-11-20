@@ -1,9 +1,10 @@
 import { createSocket } from "node:dgram";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { networkInterfaces, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vite-plus/test";
+import { widerAddress } from "../src/contract/local-sender.ts";
 import { BLOCK, startLive } from "../src/contract/offline-clock.ts";
 import { openEngine } from "../src/index.ts";
 import { destroyLive, SILENT_STATS } from "./offline.ts";
@@ -137,9 +138,7 @@ test("an rtp slot listens on loopback unless its listen is every-interface, and 
   });
   const [unsaid, loopback, every] = mixer.slots.map((slot) => slot.port ?? 0);
   // A port bound on loopback alone is still free on another address of this machine
-  const wider = Object.values(networkInterfaces())
-    .flat()
-    .find((info) => info?.family === "IPv4" && !info.internal)?.address;
+  const wider = widerAddress();
   const taken = { code: "EADDRINUSE" };
   const onLoopback = await Promise.all(
     [unsaid, loopback, every].map((port) => bindAgain(port ?? 0, "127.0.0.1")),

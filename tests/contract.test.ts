@@ -1,6 +1,6 @@
-import { networkInterfaces } from "node:os";
 import { expect, test } from "vite-plus/test";
 import { checkContract, type ContractEngine, type ContractLimit } from "../src/contract/index.ts";
+import { widerAddress } from "../src/contract/local-sender.ts";
 import { Emitter } from "../src/emitter.ts";
 import {
   type EngineEvents,
@@ -19,17 +19,12 @@ async function testOsOutputs() {
   }
 }
 
-/** Whether this machine has an IPv4 address but loopback, which the listen promise sends from. */
-const hasWiderAddress = Object.values(networkInterfaces())
-  .flat()
-  .some((info) => info?.family === "IPv4" && !info.internal);
-
 test("the package keeps every promise of its contract, and an offline engine has no move to check", async () => {
   const report = await checkContract({ openEngine, outputDevices: testOsOutputs });
   expect(report.broken).toEqual([]);
   expect(report.unchecked).toEqual([
     { promise: expect.stringMatching(/^After a move, `outputChanged`/), why: expect.any(String) },
-    ...(hasWiderAddress
+    ...(widerAddress() !== undefined
       ? []
       : [{ promise: expect.stringMatching(/^An `rtp` slot takes/), why: expect.any(String) }]),
   ]);
