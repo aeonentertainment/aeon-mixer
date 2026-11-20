@@ -46,6 +46,8 @@ struct PitchShifter::State {
   double rate;
   /** A jump ahead found the waveform still matching better further on, and waits until the delay reaches this. */
   double waitUntil = 0;
+  /** Whether the detector hears a voice, which may be under the level floor and still be heard once the slot makes it up. */
+  bool voiced = false;
   /** Samples until the rest move looks again: once a crossfade, so its level checks cost little. */
   int restCheckIn = 0;
 
@@ -160,16 +162,17 @@ struct PitchShifter::State {
 
   /**
    * Jumps a period back when the read point closes on the floor, or ahead once it has fallen a
-   * period behind and the waveform matches there. Where both ends of a splice down to a quarter
-   * period above the floor are too quiet to hear, there is nothing to keep whole, so the read point
-   * goes there, and is kept there for as long as the input stays that quiet, looking again every
-   * crossfade. That is a rest, whatever the detector makes of the voice; anything audible holds
-   * the delay where it is.
+   * period behind and the waveform matches there. In a rest there is nothing to keep whole, so the
+   * read point goes down to a quarter period above the floor and is kept there for the rest's
+   * length, looking again every crossfade. A rest needs both: the detector has let go, since a voice
+   * too quiet to hear here may be made up after the corrector, and both ends of the splice are under
+   * -50 dBFS, since the detector also lets go of a voice that still sounds. Anything else holds the
+   * delay where it is.
    */
   void keepInRange() {
     const double floor = floorFor(ratio);
     const double delay = double(written) - read;
-    if (--restCheckIn <= 0) {
+    if (!voiced && --restCheckIn <= 0) {
       restCheckIn = int(fadeIn.size());
       const double resting = floor + kRestingPeriods * period;
       if (delay > resting + 1 && !audibleAt(read) && !audibleAt(read + delay - resting)) {
@@ -200,6 +203,7 @@ void PitchShifter::reset() {
   s.ratio = 1;
   s.period = float(s.rate * kStartingPeriodSeconds);
   s.waitUntil = 0;
+  s.voiced = false;
   s.restCheckIn = 0;
 }
 
@@ -211,6 +215,8 @@ void PitchShifter::setPeriod(float samples) {
   State &s = *state_;
   s.period = std::clamp(samples, s.shortestPeriod, s.longestPeriod);
 }
+
+void PitchShifter::setVoiced(bool voiced) { state_->voiced = voiced; }
 
 void PitchShifter::process(const float *in, float *out, int frames) {
   State &s = *state_;

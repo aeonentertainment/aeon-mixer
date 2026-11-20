@@ -794,6 +794,48 @@ mod tests {
         );
     }
 
+    // A voice can reach the corrector under the level floor and still be heard: a house mic on a
+    // low preamp, made up by the slot's gain and compressor after the corrector. Held at -55 dBFS,
+    // low and high, shifted up and down, it makes no rest move and keeps the correction it gets at
+    // -20 dBFS. Once it fades out and the reader lets go, the rest moves the delay as any rest does
+    #[test]
+    fn a_quiet_voice_is_not_a_rest() {
+        let rate = f64::from(RATE);
+        let (held, fades, ends) =
+            ((1.2 * rate) as usize, (1.3 * rate) as usize, (1.8 * rate) as usize);
+        for midi in [45.0, 69.0] {
+            for cents in [-40.0, 40.0] {
+                let hz = midi_hz(midi + cents / 100.0);
+                let period = rate / hz;
+                let tone = |db| at_db(harmonic_voice(held, &BUZZ, |_| hz), db);
+                let pitch = |input: &[f32]| median_pitch(&walked(input).0, 0.4, 1.2);
+                let quiet = tone(-55.0);
+                let (_, delays) = walked(&quiet);
+                let moves = rest_moves(&quiet, &delays, period, (0.2 * rate) as usize, held);
+                assert_eq!(moves, 0, "{midi} {cents:+} c: a held voice was moved as a rest");
+                let (soft, loud) = (pitch(&quiet), pitch(&tone(-20.0)));
+                let off = cents_between(soft, loud).abs();
+                assert!(
+                    off < 1.0,
+                    "{midi} {cents:+} c: {off:.1} c from its correction at -20 dBFS"
+                );
+
+                // The same voice fading out over 100 ms into silence
+                let fading: Vec<f32> = at_db(harmonic_voice(ends, &BUZZ, |_| hz), -55.0)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, sample)| {
+                        let left = (fades - i.clamp(held, fades)) as f32 / (fades - held) as f32;
+                        sample * left
+                    })
+                    .collect();
+                let (_, delays) = walked(&fading);
+                let moves = rest_moves(&fading, &delays, period, fades, ends);
+                assert!(moves > 0, "{midi} {cents:+} c: the rest after a soft line never moved");
+            }
+        }
+    }
+
     // A rest still moves the read point down: a line that starts after one starts near the floor
     #[test]
     fn a_rest_still_moves_the_delay_down() {
