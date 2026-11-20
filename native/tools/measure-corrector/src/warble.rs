@@ -19,7 +19,7 @@
 use serde_json::{Value, json};
 
 use crate::contour::{self, Point};
-use crate::expression::{WARBLE_BAND, band_rms, bridged, note_contour, note_readings};
+use crate::expression::{SLIP_CENTS, WARBLE_BAND, band_rms, bridged, note_contour, note_readings};
 use crate::music::{median, percentile};
 use crate::sung_clip::MeantNote;
 use crate::take_delay::TakeDelay;
@@ -35,9 +35,6 @@ const CYCLES: f64 = 3.0;
 const READINGS_PER_SECOND: f64 = 100.0;
 /// A p95 needs this many notes; with fewer, the most a note read is given instead.
 const FOR_A_P95: usize = 20;
-/// A shift this far from the note's usual one is the detector slipping on one voice and not the
-/// other, not something the corrector did.
-const MOST_SHIFT_CENTS: f64 = 100.0;
 /// Less movement in the band than this, and the singer held the note still.
 const STILLEST_CENTS: f64 = 1.0;
 
@@ -48,8 +45,11 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32], notes: &[MeantNote]) ->
     let mut heard =
         TakeDelay::new(delays).onto_input(&contour::read_with_window(wet, PITCH_WINDOW, 0));
     heard.sort_by(|a, b| a.ms.total_cmp(&b.ms));
-    let held: Vec<(Vec<f64>, Vec<f64>)> =
-        notes.iter().filter_map(|note| note_and_shift(&sung, &heard, note)).collect();
+    // Each note's readings, and what could be read of it
+    let held: Vec<(usize, Option<_>)> = notes
+        .iter()
+        .map(|note| (note_readings(&sung, note).len(), note_and_shift(&sung, &heard, note)))
+        .collect();
 
     let spread = |values: &[f64]| {
         let p95 = (values.len() >= FOR_A_P95).then(|| percentile(values, 0.95));
@@ -60,9 +60,12 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32], notes: &[MeantNote]) ->
     for (name, (low, high)) in BANDS {
         let in_band = |series: &[f64]| band_rms(series, READINGS_PER_SECOND, low, high);
         let (mut moved, mut kept) = (Vec::new(), Vec::new());
-        let resolved =
-            held.iter().filter(|(sung, _)| sung.len() as f64 >= CYCLES * READINGS_PER_SECOND / low);
-        for (sung, shift) in resolved {
+        let resolved: Vec<_> = held
+            .iter()
+            .filter(|(readings, _)| *readings as f64 >= CYCLES * READINGS_PER_SECOND / low)
+            .map(|(_, read)| read)
+            .collect();
+        for (sung, shift) in resolved.iter().copied().flatten() {
             moved.push(in_band(shift));
             let out: Vec<f64> = sung.iter().zip(shift).map(|(d, s)| d + s).collect();
             // A note held still has no movement of its own to keep
@@ -74,6 +77,7 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32], notes: &[MeantNote]) ->
             name.to_owned(),
             json!({
                 "notes": moved.len(),
+                "refused": resolved.len() - moved.len(),
                 "pitch_moved_cents": spread(&moved),
                 "pitch_movement_kept": spread(&kept),
             }),
@@ -83,7 +87,9 @@ pub fn measure(dry: &[f32], wet: &[f32], delays: &[u32], notes: &[MeantNote]) ->
 }
 
 /// A note's sung contour, and the corrected pitch less the sung at each of its readings, both in
-/// cents with the detector's slips bridged; `None` when under four fifths of either can be read.
+/// cents with the detector's slips bridged; `None`, the note refused, when under four fifths of
+/// either can be read. A slip is the same thing on either: `SLIP_CENTS` from the note's median,
+/// well past a step between scale notes, so a target the corrector changes mid-note is kept.
 fn note_and_shift(
     sung: &[Point],
     heard: &[Point],
@@ -93,7 +99,7 @@ fn note_and_shift(
         .iter()
         .map(|point| Some(100.0 * (at(heard, point.ms).filter(|_| point.voiced())? - point.midi())))
         .collect();
-    Some((note_contour(sung, note)?, bridged(&shift, MOST_SHIFT_CENTS)?))
+    Some((note_contour(sung, note)?, bridged(&shift, SLIP_CENTS)?))
 }
 
 /// The output's pitch at `ms` on the input's clock, from the two readings around it, as MIDI.
@@ -103,8 +109,7 @@ fn at(heard: &[Point], ms: f64) -> Option<f64> {
     let after = heard.partition_point(|point| point.ms < ms);
     let (before, next) = (heard.get(after.checked_sub(1)?)?, heard.get(after)?);
     let apart = 100.0 * (next.midi() - before.midi()).abs();
-    if !before.voiced() || !next.voiced() || next.ms - before.ms > 15.0 || apart > MOST_SHIFT_CENTS
-    {
+    if !before.voiced() || !next.voiced() || next.ms - before.ms > 15.0 || apart > SLIP_CENTS {
         return None;
     }
     let t = (ms - before.ms) / (next.ms - before.ms).max(1e-9);
@@ -290,6 +295,54 @@ mod tests {
         let (_, shift) = note_and_shift(&sung, &heard, &held(1500.0)[0]).unwrap();
         let moved = band_rms(&shift, READINGS_PER_SECOND, WARBLE_BAND.0, WARBLE_BAND.1);
         assert!(moved < 0.5, "a pull held steady moved {moved} cents: {shift:?}");
+    }
+
+    // A corrector in key mode can flip its target between two scale notes on a held note, which
+    // is warble if anything is. Here the pull swings between 60 cents up and 60 down, 120 apart,
+    // up for three tenths of each 5 Hz cycle and eased over 5 ms: the rows read that swing as it
+    // was applied, and the note is not refused. A reach under a scale step would bridge it away
+    #[test]
+    fn a_target_flipping_between_two_scale_notes_is_movement() {
+        let flips: Vec<f64> = (0..300_000)
+            .scan(-60.0, |pull, tick| {
+                let ms = f64::from(tick) / 100.0;
+                let target = if (TAU * 5.0 * ms / 1000.0).sin() > 0.588 { 60.0 } else { -60.0 };
+                *pull += (target - *pull) * (1.0 - (-0.01f64 / 5.0).exp());
+                Some(*pull)
+            })
+            .collect();
+        let pull = |ms: f64| flips[((ms * 100.0) as usize).min(flips.len() - 1)];
+        let dry = sung(3000.0, vibrato(20.0, 0.0));
+        let wet = sung(3000.0, |ms| vibrato(20.0, 0.0)(ms) + pull(ms));
+        let row = measure(&dry, &wet, &[], &held(3000.0));
+        let applied: Vec<f64> = (6..297).map(|k| pull(10.0 * f64::from(k))).collect();
+        for (band, (low, high)) in BANDS {
+            assert_eq!(
+                (row[band]["notes"].as_u64(), row[band]["refused"].as_u64()),
+                (Some(1), Some(0))
+            );
+            let expected = band_rms(&applied, READINGS_PER_SECOND, low, high);
+            let moved = median_of(&row, band, "pitch_moved_cents");
+            assert!(
+                expected > 10.0 && (moved - expected).abs() < 0.15 * expected,
+                "{moved} of {expected}"
+            );
+        }
+    }
+
+    // A note the singer does not voice for four fifths of its length is refused, and counted
+    #[test]
+    fn a_note_that_cannot_be_read_is_counted() {
+        let dry = sung(1500.0, vibrato(30.0, 0.0));
+        let silent_after_a_third: Vec<f32> =
+            dry.iter().enumerate().map(|(i, s)| if i < 24_000 { *s } else { 0.0 }).collect();
+        let row = measure(&silent_after_a_third, &silent_after_a_third, &[], &held(1500.0));
+        for band in ["3_to_12_hz", "6_to_12_hz"] {
+            assert_eq!(
+                (row[band]["notes"].as_u64(), row[band]["refused"].as_u64()),
+                (Some(0), Some(1))
+            );
+        }
     }
 
     // A note is reported only in a band it resolves: 0.3 s in neither, 0.7 s in 6 to 12 Hz alone,

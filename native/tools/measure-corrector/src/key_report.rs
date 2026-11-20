@@ -132,8 +132,8 @@ pub fn artefacts_table(result: &Value) -> String {
     table
 }
 
-/// Warble on every answer-key take and known voice, `off` the control. Per band: the notes read,
-/// then pitch moved and the singer's movement kept, each the median over notes and the p95, or
+/// Warble on every answer-key take and known voice, `off` the control. Per band: the notes read
+/// and how many more could not be, then pitch moved and the singer's movement kept, each the median over notes and the p95, or
 /// the most a note read where there are too few notes for a p95.
 pub fn warble_table(result: &Value) -> String {
     let mut table = String::from(
@@ -146,13 +146,19 @@ pub fn warble_table(result: &Value) -> String {
         };
         format!("{} ({worst})", number(&row["median"], 2))
     };
-    let band = |row: &Value| match row["notes"].as_u64() {
-        Some(0) | None => "0".to_owned(),
-        Some(notes) => format!(
-            "{notes}; {} c; {}",
-            spread(&row["pitch_moved_cents"]),
-            spread(&row["pitch_movement_kept"]),
-        ),
+    let band = |row: &Value| {
+        let refused = match row["refused"].as_u64() {
+            Some(0) | None => String::new(),
+            Some(refused) => format!(" ({refused} more could not be read)"),
+        };
+        match row["notes"].as_u64() {
+            Some(0) | None => format!("0{refused}"),
+            Some(notes) => format!(
+                "{notes}{refused}; {} c; {}",
+                spread(&row["pitch_moved_cents"]),
+                spread(&row["pitch_movement_kept"]),
+            ),
+        }
     };
     let mut row = |name: String, warble: &Value| {
         writeln!(

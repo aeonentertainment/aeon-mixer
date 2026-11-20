@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::chain::{Input, Setup, frames_of_ms, run};
 use crate::contour;
 use crate::expression::band_rms;
-use crate::music::{cents, median};
+use crate::music::{cents, hz_of, key_mask, median};
 use crate::sung_clip::MeantNote;
 use crate::warble;
 
@@ -163,27 +163,44 @@ fn held_off(hz: f64, cents_off: f64) -> (f64, u32) {
     (median(&landed), take.delays.iter().copied().max().unwrap_or(0))
 }
 
-/// The warble rows on two known voices, each one held note pulled to the nearest: one held still
-/// 40 cents flat, and one with 5.5 Hz vibrato 60 cents deep around 30 cents flat. The voice held
-/// still is the control: anything on it is the corrector's own.
+/// The warble rows on three known voices, each one held note. Two are pulled to the nearest
+/// note: one held still 40 cents flat, the control, since anything on it is the corrector's own,
+/// and one with 5.5 Hz vibrato 60 cents deep around 30 cents flat. The third is the key-mode
+/// case: C sharp sung in tune in the key of C, midway between two scale notes, with the same
+/// depth of vibrato at 3.5 Hz, slow enough that the corrector's target flips between C and D
+/// with it.
 fn warble_rows() -> Value {
     let frames = RATE as usize * 4;
-    let note = [MeantNote { midi: 57, start_ms: 0.0, end_ms: 4000.0 }];
+    let c_sharp = hz_of(61.0);
+    let in_c = key_mask("C").expect("C is a key");
+    let swing = |rate: f64, ms: f64| 60.0 * (TAU * rate * ms / 1000.0).sin();
     let voices = [
-        ("steady", harmonic_voice(frames, |_| A3 * 2f64.powf(-40.0 / 1200.0))),
+        (
+            "steady",
+            57,
+            EVERY_PITCH_CLASS,
+            harmonic_voice(frames, |_| A3 * 2f64.powf(-40.0 / 1200.0)),
+        ),
         (
             "vibrato",
-            harmonic_voice(frames, |ms| {
-                A3 * 2f64.powf((-30.0 + 60.0 * (TAU * 5.5 * ms / 1000.0).sin()) / 1200.0)
-            }),
+            57,
+            EVERY_PITCH_CLASS,
+            harmonic_voice(frames, |ms| A3 * 2f64.powf((-30.0 + swing(5.5, ms)) / 1200.0)),
+        ),
+        (
+            "midpoint_in_key",
+            61,
+            in_c,
+            harmonic_voice(frames, |ms| c_sharp * 2f64.powf(swing(3.5, ms) / 1200.0)),
         ),
     ];
     let mut rows = serde_json::Map::new();
-    for (name, voice) in &voices {
+    for (name, midi, key_mask, voice) in &voices {
+        let note = [MeantNote { midi: *midi, start_ms: 0.0, end_ms: 4000.0 }];
         for (label, strength, retune_ms) in settings() {
             let params = CorrectorParams { enabled: true, strength, retune_ms };
             let mut setup = Setup::new(Input::Samples(voice.clone()), frames, params);
-            setup.guide = Some(Guide { notes: Vec::new(), key_mask: EVERY_PITCH_CLASS });
+            setup.guide = Some(Guide { notes: Vec::new(), key_mask: *key_mask });
             let take = run(setup);
             rows.insert(
                 format!("{name}.{label}"),
@@ -235,6 +252,23 @@ pub fn rows() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // In key mode the real corrector flips its target under the midpoint voice, 120 cents between
+    // targets at strength 0.6 and 200 at full, and the warble rows show it: over 15 cents moved at
+    // the natural setting and over 45 at a hard tune, with no note refused. The voice pulled to
+    // the nearest of every note, which never flips so far, is moved less
+    #[test]
+    fn a_target_flipping_in_key_mode_shows_in_the_warble_rows() {
+        let rows = warble_rows();
+        let moved = |row: &str| {
+            let band = &rows[row]["3_to_12_hz"];
+            assert_eq!((band["notes"].as_u64(), band["refused"].as_u64()), (Some(1), Some(0)));
+            band["pitch_moved_cents"]["median"].as_f64().unwrap()
+        };
+        assert!(moved("midpoint_in_key.natural-0.6-40ms") > 15.0);
+        assert!(moved("midpoint_in_key.hard-1.0-0ms") > 45.0);
+        assert!(moved("vibrato.natural-0.6-40ms") < 10.0);
+    }
 
     // Off is the control: a voice with 50 cents of vibrato reads as that vibrato, 30 cents flat
     #[test]
