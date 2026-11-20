@@ -101,28 +101,37 @@ the way they do, and the table says so.
   the input did not have, octave jumps, pitch movement between 8 and 30 Hz the input did not have,
   and held notes gone still. Through Opus, `off` is the codec's share.
 
-- **Warble,** on the clip as sung through each variant, `off` the control, and on three known
-  voices under `known_voices.warble`: one held still, one with 5.5 Hz vibrato 60 cents deep, one
-  gliding. Over each stretch the singer held a sound, carried through an unsure gap of 50 ms or
-  less and read for at least a second past its attack and release, so it resolves 3 Hz, with the
-  output set back by the delay the slot reported and the detector's slips on either voice bridged:
-  - `pitch_moved_cents`: the output's pitch less the input's, in 3 to 12 Hz, where a wobble is
-    heard. Following the singer moves it by design: it is how much correction does there.
-  - `pitch_movement_kept`: the output's movement in that band over the singer's. Under 1,
+- **Warble,** on the clip as sung through each variant, `off` the control, and on two known
+  voices under `known_voices.warble`, one held still and one with 5.5 Hz vibrato 60 cents deep.
+  It is read over one annotated note at a time, past its attack and before its release as
+  `note_contour` reads it, so no figure reads across a change of note. The output is set back by
+  the delay the slot reported, and the detector's slips on either voice are bridged:
+  - `pitch_moved_cents`: the output's pitch less the input's, in the band. Following the singer
+    moves it by design: it is how much correction does there.
+  - `pitch_movement_kept`: the output's movement in the band over the singer's. Under 1,
     correction took some of the singer's movement out; over 1, it added movement they did not
-    sing. Null for a voice held still.
+    sing. Null for a note held still.
 
-  Each gives the median over stretches, a p95 only from 20 stretches or more, and the most any
-  stretch read. Few sources reach 20: at strength 0.6 and retune 40 ms, vocadito 2 has 8 stretches,
-  6 and 19 have 3, 10 has 1, and the golden vocal, sung in short notes, has none. Read them as a
-  handful of held notes each, not as a distribution. `motion_kept` in the clip rows is the same
-  ratio over annotated notes of 500 ms or more. The level's share is `envelope_added_p95_db` there.
+  A note is read only in a band its length resolves, three cycles of the band's lowest rate, so
+  the rows come in two bands. `3_to_12_hz` is the whole band a wobble is heard in, over notes
+  read for a second. `6_to_12_hz` is its upper half, over notes read for half a second; it does
+  not see a vibrato under 6 Hz. Each gives the notes it read, the median over them, a p95 only
+  from 20 notes or more, and the most any note read.
+
+  Sung notes are short, so the notes are few: in `3_to_12_hz`, vocadito 2 has 2 and the others
+  none; in `6_to_12_hz`, vocadito 2 has 15, vocadito 19 has 8, vocadito 6 has 3 and vocadito 10
+  has 1. The golden vocal, sung in notes under 0.2 s, has none in either, and no warble figure.
+  Read them as a handful of held notes, not as a distribution. `motion_kept` in the clip rows is
+  the same ratio in 3 to 12 Hz over notes of 500 ms or more, shorter than that band resolves.
+  The level's share is `envelope_added_p95_db` there.
 
   The voice held still is the control: anything on it is the corrector's own. These say how much
-  correction moves a voice and whether it moves more than the singer did. They do not say
-  whether that is heard as warble, which only a listener can, nor which of the singer's movement
-  was meant. They do not read timbre: a spectrum's shape in bands, compared across two pitches,
-  moves by 1 dB on a voice held still with nothing done to it, more than correction changes it.
+  correction moves a held note and whether the note then moves more than the singer sang it.
+  They do not say whether that is heard as warble, which only a listener can, nor which of the
+  singer's movement was meant. A correction still arriving past a note's first 60 ms counts as
+  movement, which weighs against a slow retune. They do not read timbre: a spectrum's shape in
+  bands, compared across two pitches, moves by 1 dB on a voice held still with nothing done to
+  it, more than correction changes it.
 
 LSD charges pitch as much as damage: 20 cents of pitch alone costs about 5.5 dB of it on a real
 voice, and MCD about 1.5. A corrector that lands notes closer reads a lower LSD with the same
