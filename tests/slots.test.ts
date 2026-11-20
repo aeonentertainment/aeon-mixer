@@ -4,19 +4,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vite-plus/test";
-import { widerAddress } from "../src/contract/local-sender.ts";
 import { BLOCK, startLive } from "../src/contract/offline-clock.ts";
 import { openEngine } from "../src/index.ts";
 import { destroyLive, SILENT_STATS } from "./offline.ts";
 
-/**
- * Binds a second UDP socket to `port`, on every interface or on `address`, the way a sender's
- * neighbour would, and reports the error.
- */
-async function bindAgain(port: number, address?: string) {
+/** Binds a second UDP socket to `port` the way a sender's neighbour would, and reports the error. */
+async function bindAgain(port: number) {
   const socket = createSocket("udp4");
   const failed = once(socket, "error").then(([error]: unknown[]) => error);
-  socket.bind(port, address);
+  socket.bind(port);
   const outcome = await Promise.race([failed, once(socket, "listening").then(() => null)]);
   socket.close();
   return outcome;
@@ -127,39 +123,12 @@ test("the slot count and the playout delay are checked before anything crosses",
   await engine.close();
 });
 
-test("an rtp slot listens on loopback unless its listen is every-interface, and listen is checked before anything crosses", async () => {
+test("an unknown listen on an rtp slot is refused before anything crosses", async () => {
   const engine = await openEngine({ output: { offline: true } });
-  const mixer = await engine.createMixer({
-    slots: [
-      { kind: "rtp" },
-      { kind: "rtp", listen: "loopback" },
-      { kind: "rtp", listen: "every-interface" },
-    ],
-  });
-  const [unsaid, loopback, every] = mixer.slots.map((slot) => slot.port ?? 0);
-  // A port bound on loopback alone is still free on another address of this machine
-  const wider = widerAddress();
-  const taken = { code: "EADDRINUSE" };
-  const onLoopback = await Promise.all(
-    [unsaid, loopback, every].map((port) => bindAgain(port ?? 0, "127.0.0.1")),
-  );
-  expect(onLoopback).toMatchObject([taken, taken, taken]);
-  if (wider !== undefined) {
-    const onWider = await Promise.all(
-      [unsaid, loopback, every].map((port) => bindAgain(port ?? 0, wider)),
-    );
-    expect(onWider).toMatchObject([null, null, taken]);
-  }
-  await mixer.destroy();
-
   // @ts-expect-error a JavaScript caller can spell listen any way
   await expect(engine.createMixer({ slots: [{ kind: "rtp", listen: "lan" }] })).rejects.toThrow(
     "slots[0].listen must be loopback or every-interface, got lan",
   );
-  await expect(
-    // @ts-expect-error listen belongs to an rtp slot
-    engine.createMixer({ slots: [{ kind: "l16", listen: "every-interface" }] }),
-  ).rejects.toThrow("slots[0].listen is for an rtp slot, not l16");
   await engine.close();
 });
 

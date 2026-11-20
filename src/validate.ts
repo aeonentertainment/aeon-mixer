@@ -18,23 +18,19 @@ export function ingestKind(name: string, value: string) {
 
 /**
  * A slot as the addon takes it: its kind, for an `rtp` slot where it listens, and for a `capture`
- * slot its device and channel. `listen` belongs to an `rtp` slot alone, so it is refused on any
- * other, where it would bind nothing a host asked for.
+ * slot its device and channel. A field that belongs to another kind is not read.
  */
 export function slotInput(name: string, slot: SlotConfig): SlotInput & { kind: IngestKind } {
   const kind = ingestKind(`${name}.kind`, slot.kind);
-  // A JavaScript caller may put `listen` on any kind, so it is looked for on every one
-  const listen = "listen" in slot ? slot.listen : undefined;
   if (slot.kind === "rtp") {
-    if (listen === undefined) return { kind };
-    const known = LISTENS.find((where) => where === listen);
-    if (known === undefined) {
-      throw new RangeError(`${name}.listen must be loopback or every-interface, got ${listen}`);
+    if (slot.listen === undefined) return { kind };
+    const listen = LISTENS.find((where) => where === slot.listen);
+    if (listen === undefined) {
+      throw new RangeError(
+        `${name}.listen must be loopback or every-interface, got ${slot.listen}`,
+      );
     }
-    return { kind, listen: known };
-  }
-  if (listen !== undefined) {
-    throw new TypeError(`${name}.listen is for an rtp slot, not ${kind}`);
+    return { kind, listen };
   }
   if (slot.kind !== "capture") return { kind };
   const { device, channel = 0 } = slot;

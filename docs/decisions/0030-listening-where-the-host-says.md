@@ -18,9 +18,10 @@ The engine takes audio only from where the host says.
 - **An `rtp` slot listens on loopback by default.** `SlotConfig` takes `listen: "loopback"`, the
   same as leaving it out, or `listen: "every-interface"`, which binds every interface, for a
   sender on another machine, such as a phone sending straight to the engine.
-- **Checked twice, refused in the engine's words.** `createMixer` refuses an unknown `listen`, and
-  `listen` on any kind but `rtp`, before anything crosses to the native side, and the addon refuses
-  the same again for a caller that skips the check.
+- **Checked twice, refused in the engine's words.** `createMixer` refuses an unknown `listen` on an
+  `rtp` slot before anything crosses to the native side, and the addon refuses it again for a
+  caller that skips the check. On any other kind `listen` is not read, as `device` and `channel`
+  are read on a `capture` slot alone, and such a slot binds loopback as it always has.
 - **`l16` does not take it here.** Its sender is always on this machine. If a host ever needs an
   `l16` sender on another machine, the same option fits it, as an additive change.
 - **The contract suite holds it.** A promise, which needs a socket, sends to an `rtp` slot's port

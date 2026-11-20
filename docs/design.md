@@ -600,8 +600,7 @@ export interface Engine {
 }
 
 /**
- * An `rtp` slot listens where `listen` says, loopback when left out (8.4); `listen` on any other
- * kind is refused. A `capture` slot's `device` is an id from `inputDevices()`, or the default
+ * An `rtp` slot listens where `listen` says, loopback when left out (8.4). A `capture` slot's `device` is an id from `inputDevices()`, or the default
  * input; `channel` is the device's, default 0.
  */
 export type SlotConfig =

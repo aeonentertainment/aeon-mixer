@@ -41,9 +41,6 @@ impl Ingest {
         playout_delay_frames: Option<u32>,
         network: &Network,
     ) -> Result<(Self, Box<dyn Source>)> {
-        if listen.is_some() && kind != "rtp" {
-            return Err(Error::from_reason(format!("listen is for an rtp slot, not {kind:?}")));
-        }
         match kind {
             "push" => {
                 let (feed, voice) = push_voice_with_depth(DEFAULT_CAPACITY_FRAMES, PUSH_SLOT_DEPTH);
