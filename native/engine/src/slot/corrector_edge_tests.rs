@@ -2,7 +2,7 @@
 //! correction engaged on a voice already sounding, a reset mid-note, and packet loss with a pause
 //! through the jitter buffer. Each renders through a real slot under the allocation guard.
 
-use kernels::fixtures::{BUZZ, harmonic_voice};
+use kernels::fixtures::{BUZZ, harmonic_voice, steepest_step};
 
 use super::tests::{render, through_slot};
 use super::*;
@@ -17,11 +17,6 @@ const ON: CorrectorParams = CorrectorParams { enabled: true, strength: 1.0, retu
 
 fn peak(signal: &[f32]) -> f32 {
     signal.iter().fold(0.0, |most, sample| most.max(sample.abs()))
-}
-
-/// The largest step between two neighbouring samples.
-fn steepest(signal: &[f32]) -> f32 {
-    signal.windows(2).map(|pair| (pair[1] - pair[0]).abs()).fold(0.0, f32::max)
 }
 
 /// A corrected voice is finite, no louder than the singer by more than a correction's crossfade
@@ -92,7 +87,11 @@ fn correction_engaged_on_a_voice_already_sounding_fades_in() {
     let output = through_slot(input.clone(), |_| ON, |delay| delays.push(delay));
     sound(&output, &input, &delays);
     let onset = &output[..RATE as usize / 20];
-    assert!(steepest(onset) <= 1.5 * steepest(&input), "a step of {}", steepest(onset));
+    assert!(
+        steepest_step(onset) <= 1.5 * steepest_step(&input),
+        "a step of {}",
+        steepest_step(onset)
+    );
     assert!(delays.iter().any(|delay| *delay > 0), "correction engaged");
 }
 
