@@ -110,8 +110,10 @@ the way they do, and the table says so.
   - `pitch_movement_kept`: the output's movement in that band over the singer's. Under 1,
     correction took some of the singer's movement out; over 1, it added movement they did not
     sing. Null for a voice held still.
-  - `level_added_db`: the output's level against the input's, moving at 3 to 40 Hz, where a
-    shifter's splices would show.
+
+  `motion_kept` in the clip rows is the same ratio over annotated notes of 500 ms or more; these
+  read every held stretch, so they find a short or unannotated note correction gives movement
+  to. The level's share is `envelope_added_p95_db` in the clip rows.
 
   The voice held still is the control: anything on it is the corrector's own. These say how much
   correction moves a voice and whether it moves more than the singer did. They do not say

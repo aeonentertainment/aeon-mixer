@@ -1478,8 +1478,8 @@ nothing the test does not.
 chain on the offline driver and prints each row beside the GStreamer baseline, and it renders the
 blind-listen set. Decision [0005](decisions/0005-corrector-measurement.md) has the reasons. Its
 warble rows say how much correction moves a voice's pitch in 3 to 12 Hz, the band a wobble is
-heard in, whether the output moves more there than the singer did, and how much its level moves
-at 3 to 40 Hz, on each answer-key take and on three known voices. They are physical measures: a
+heard in, and whether the output moves more there than the singer did, on each answer-key take
+and on three known voices. They are physical measures: a
 listener decides what is heard as warble, and the tool's README says what else they cannot tell.
 
 `native/tools/measure-echo` replays Aeon Karaoke's `aec:measure` files through the canceller and

@@ -133,23 +133,22 @@ pub fn artefacts_table(result: &Value) -> String {
 }
 
 /// Warble on every answer-key take and known voice: pitch moved and the singer's movement kept in
-/// 3 to 12 Hz, median and p95 over held stretches, and level added at 3 to 40 Hz.
+/// 3 to 12 Hz, median and p95 over held stretches.
 pub fn warble_table(result: &Value) -> String {
     let mut table = String::from(
-        "| Take | Stretches | Pitch moved, median / p95 | Movement kept, median / p95 | Level added p95 |\n\
-         |---|---|---|---|---|\n",
+        "| Take | Stretches | Pitch moved, median / p95 | Movement kept, median / p95 |\n\
+         |---|---|---|---|\n",
     );
     let number = |value: &Value| value.as_f64().map_or("-".to_owned(), |v| format!("{v:.2}"));
     let mut row = |name: String, warble: &Value| {
         writeln!(
             table,
-            "| {name} | {} | {} / {} c | {} / {} | {} dB |",
+            "| {name} | {} | {} / {} c | {} / {} |",
             warble["stretches"],
             number(&warble["pitch_moved_cents"]["median"]),
             number(&warble["pitch_moved_cents"]["p95"]),
             number(&warble["pitch_movement_kept"]["median"]),
             number(&warble["pitch_movement_kept"]["p95"]),
-            number(&warble["level_added_db"]["p95"]),
         )
         .expect("a string takes writes");
     };
