@@ -141,9 +141,11 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
-    use crate::fixtures::{BUZZ, Lcg, at_db, harmonic_voice, pink_noise, rms, room, through};
+    use crate::fixtures::{
+        BUZZ, Lcg, at_db, harmonic_voice, midi_hz, pink_noise, rms, room, through,
+    };
     use crate::pitch::{EVERY_PITCH_CLASS, pitch_class_of};
-    use crate::test_support::{RATE, cents_between, cents_track, median_pitch, midi_hz};
+    use crate::test_support::{RATE, cents_between, cents_track, median_pitch};
 
     /// `input` through `corrector` in runs of `block` frames, as a host's buffers would arrive,
     /// under the allocation guard.

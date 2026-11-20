@@ -9,10 +9,6 @@ pub fn cents_between(hz: f64, reference: f64) -> f64 {
     1200.0 * (hz / reference).log2()
 }
 
-pub fn midi_hz(midi: f64) -> f64 {
-    440.0 * 2f64.powf((midi - 69.0) / 12.0)
-}
-
 /// A YIN reading of `signal` every 10 ms from `from` to `to` seconds, in cents from `reference` Hz.
 /// The 1024-sample window keeps 98 percent of a 5.5 Hz vibrato's depth; unvoiced frames are left out.
 pub fn cents_track(signal: &[f32], from: f64, to: f64, reference: f64) -> Vec<f64> {

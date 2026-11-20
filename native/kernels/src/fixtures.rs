@@ -18,6 +18,11 @@ impl Lcg {
     }
 }
 
+/// The pitch of MIDI note `midi` in Hz, with A4 = 69 at 440: what a sung vowel is usually pitched with.
+pub fn midi_hz(midi: f64) -> f64 {
+    440.0 * 2f64.powf((midi - 69.0) / 12.0)
+}
+
 /// The harmonics of a sung vowel's buzz for `harmonic_voice`, the fundamental first, falling as 1/h.
 pub const BUZZ: [f64; 12] = [
     1.0,
