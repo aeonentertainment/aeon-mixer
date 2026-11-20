@@ -101,11 +101,15 @@ the way they do, and the table says so.
   the input did not have, octave jumps, pitch movement between 8 and 30 Hz the input did not have,
   and held notes gone still. Through Opus, `off` is the codec's share.
 
-- **Warble,** on the clip as sung through each variant, `off` the control, and on two known
-  voices under `known_voices.warble`, one held still and one with 5.5 Hz vibrato 60 cents deep.
-  It is read over one annotated note at a time, past its attack and before its release as
-  `note_contour` reads it, so no figure reads across a change of note. The output is set back by
-  the delay the slot reported, and the detector's slips on either voice are bridged:
+- **Warble,** on the clip as sung through each variant, `off` the control, and on three known
+  voices under `known_voices.warble`: one held still, one with 5.5 Hz vibrato 60 cents deep, and
+  `midpoint_in_key`, a C sharp sung in tune in the key of C with a slow vibrato, where key mode's
+  target flips between C and D. It is read over one annotated note at a time, past its attack
+  and before its release as `note_contour` reads it, so no figure reads across a change of note.
+  The output is set back by the delay the slot reported. A slip of the detector is one thing
+  everywhere, a reading 300 cents from the note's median, on the sung voice, on the shift, or
+  between two output readings; it is bridged. That is well past a step between scale notes, so
+  a target the corrector flips mid-note is read as the movement it is:
   - `pitch_moved_cents`: the output's pitch less the input's, in the band. Following the singer
     moves it by design: it is how much correction does there.
   - `pitch_movement_kept`: the output's movement in the band over the singer's. Under 1,
@@ -116,7 +120,10 @@ the way they do, and the table says so.
   the rows come in two bands. `3_to_12_hz` is the whole band a wobble is heard in, over notes
   read for a second. `6_to_12_hz` is its upper half, over notes read for half a second; it does
   not see a vibrato under 6 Hz. Each gives the notes it read, the median over them, a p95 only
-  from 20 notes or more, and the most any note read.
+  from 20 notes or more, and the most any note read. `refused` counts the notes long enough for
+  the band that could not be read, under four fifths of the note voiced or free of slips, so
+  nothing is left out of a figure unseen: vocadito 2 has 2 in `6_to_12_hz`, and no other source
+  has any.
 
   Sung notes are short, so the notes are few: in `3_to_12_hz`, vocadito 2 has 2 and the others
   none; in `6_to_12_hz`, vocadito 2 has 15, vocadito 19 has 8, vocadito 6 has 3 and vocadito 10
