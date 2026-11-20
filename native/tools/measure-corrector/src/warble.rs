@@ -364,7 +364,7 @@ mod tests {
         let sung: Vec<Point> = (0..150)
             .map(|k| reading(10.0 * f64::from(k), vibrato(30.0, 0.0)(10.0 * f64::from(k))))
             .collect();
-        let slipped_for = |readings: i32| -> Value {
+        let slipped_for = |readings: i32| {
             let heard: Vec<Point> = (0..151)
                 .map(|k| {
                     let ms = 10.0 * f64::from(k) - 9.4;
