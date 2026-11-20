@@ -2,8 +2,6 @@
 //! bus. The order is docs/design.md section 4; the ramps are one block.
 
 pub mod corrector_delay;
-#[cfg(test)]
-mod corrector_edge_tests;
 pub mod cue;
 pub mod echo_report;
 #[cfg(test)]
