@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { checkContract, type ContractEngine } from "../src/contract/index.ts";
+import { checkContract, type ContractEngine, type ContractLimit } from "../src/contract/index.ts";
 import { Emitter } from "../src/emitter.ts";
 import {
   type EngineEvents,
@@ -130,4 +130,96 @@ test("a stand-in whose close rejects gets its sentence, and the destroy it cut s
   } finally {
     process.off("unhandledRejection", hear);
   }
+}, 30_000);
+
+/**
+ * A stand-in that only records, as a host's adapter specs drive one: the package answers its calls
+ * and keeps its clock, but nothing it plays comes back, its tone stage never reports, and its
+ * slots open no socket a sender could reach.
+ */
+async function openRecorder(options: OpenEngineOptions & { output: { offline: true } }) {
+  const engine = await openEngine(options);
+  const moves = new Emitter<EngineEvents>();
+  return {
+    get output() {
+      return engine.output;
+    },
+    pump(blocks: number) {
+      engine.pump(blocks);
+      return new Float32Array(2 * 128 * blocks);
+    },
+    close: () => engine.close(),
+    on<K extends keyof EngineEvents>(event: K, listener: EngineEvents[K]) {
+      return event === "outputChanged" ? moves.on(event, listener) : engine.on(event, listener);
+    },
+    async createMixer(config: Parameters<ContractEngine["createMixer"]>[0]) {
+      const mixer = await engine.createMixer(config);
+      return {
+        slots: mixer.slots.map((slot) => ({ ...slot, port: null })),
+        setSlot: mixer.setSlot.bind(mixer),
+        setSlotEffects: mixer.setSlotEffects.bind(mixer),
+        resetSlot: mixer.resetSlot.bind(mixer),
+        push: mixer.push.bind(mixer),
+        start: mixer.start.bind(mixer),
+        destroy: mixer.destroy.bind(mixer),
+        stats() {
+          const stats = mixer.stats();
+          // A fresh object every call, so its slots are this stand-in's to change
+          for (const slot of stats.slots) Object.assign(slot, { tone: null });
+          return stats;
+        },
+        on: mixer.on.bind(mixer),
+      };
+    },
+    move() {
+      moves.emit("outputChanged", engine.output, 40, 0);
+    },
+  };
+}
+
+const RENDERED = [
+  "A stem handed in as bytes plays the samples the same file plays by path.",
+  "A slot nobody has set plays at the profile's `slot.gain`.",
+  "A gain set while the mixer is armed is the gain its slot starts at.",
+  "A slot's `tone` is null while its tone stage is off, and reports once it is on.",
+];
+const SOCKETED = [
+  "A slot playing one sender refuses every other address.",
+  "After `resetSlot`, a slot takes a new sender at once.",
+  "After `resetSlot`, a slot refuses the sender it released.",
+];
+
+async function checkRecorder(limits: ReadonlyArray<ContractLimit> = []) {
+  return checkContract(
+    { openEngine: openRecorder, outputDevices: testOsOutputs },
+    { moveOutput: (engine) => engine.move(), limits },
+  );
+}
+
+test("a stand-in that renders no audio and opens no socket says so, and only what needs those goes unchecked", async () => {
+  const report = await checkRecorder(["rendersNoAudio", "opensNoSocket"]);
+  expect(report.broken).toEqual([]);
+  expect(report.unchecked).toEqual([
+    {
+      promise: RENDERED[0],
+      why: "the subject renders no audio, and this promise is about what it plays",
+    },
+    ...RENDERED.slice(1).map((promise) => ({
+      promise,
+      why: expect.stringMatching(/renders no audio/),
+    })),
+    ...SOCKETED.map((promise) => ({ promise, why: expect.stringMatching(/opens no socket/) })),
+  ]);
+}, 30_000);
+
+test("a stand-in that claims to render and to listen, and does neither, breaks those promises", async () => {
+  const report = await checkRecorder();
+  expect(report.unchecked).toEqual([]);
+  expect(report.broken.map(({ promise }) => promise)).toEqual([...RENDERED, ...SOCKETED]);
+}, 30_000);
+
+test("stating a limit excuses only the promises that need it", async () => {
+  const report = await checkRecorder(["opensNoSocket"]);
+  expect(report.unchecked.map(({ promise }) => promise)).toEqual(SOCKETED);
+  expect(report.broken.map(({ promise }) => promise)).toEqual(RENDERED);
 }, 30_000);

@@ -7,12 +7,27 @@ import type {
   ContractOptions,
   ContractPromise,
   ContractSubject,
+  Need,
   Trial,
 } from "./contract-subject.ts";
 
 const PROMISES = [...enginePromises, ...slotPromises, ...senderPromises];
 /** Longer than any check takes, so only a call that never settles reaches it. */
 const CHECK_MS = 10_000;
+
+/** Why a subject lacks each need, or nothing when it has it. */
+const LACKING: Record<Need, (options: ContractOptions<never>) => string | undefined> = {
+  rendering: ({ limits }) =>
+    limits?.includes("rendersNoAudio")
+      ? "the subject renders no audio, and this promise is about what it plays"
+      : undefined,
+  sockets: ({ limits }) =>
+    limits?.includes("opensNoSocket")
+      ? "the subject opens no socket, and this promise is about packets an `l16` slot takes over loopback UDP"
+      : undefined,
+  outputMoves: ({ moveOutput }) =>
+    moveOutput ? undefined : "an offline engine never moves; give `moveOutput` to check a stand-in",
+};
 
 export interface ContractReport {
   /** Each promise the subject broke, with what the suite found. Empty when it keeps them all. */
@@ -32,7 +47,12 @@ export async function checkContract<E extends ContractEngine>(
   options: ContractOptions<E> = {},
 ) {
   const report: ContractReport = { broken: [], unchecked: [] };
-  for (const { promise, check } of PROMISES) {
+  for (const { promise, needs = [], check } of PROMISES) {
+    const lacking = needs.map((need) => LACKING[need](options)).find((why) => why !== undefined);
+    if (lacking) {
+      report.unchecked.push({ promise, why: lacking });
+      continue;
+    }
     // oxlint-disable-next-line no-await-in-loop -- one promise at a time, each on engines of its own
     const verdict = await run(check, subject, options);
     if (verdict && "found" in verdict) report.broken.push({ promise, found: verdict.found });
@@ -55,7 +75,14 @@ async function run<E extends ContractEngine>(
     async open(options = {}) {
       const engine = await subject.openEngine({ ...options, output: { offline: true } });
       opened.push(engine);
-      return { engine, move: moveOutput && (() => moveOutput(engine)) };
+      // A check runs only where the subject has what it needs, so a move is there when one is
+      return {
+        engine,
+        move: () => {
+          if (!moveOutput) throw new Error("this check moved an output it does not need");
+          moveOutput(engine);
+        },
+      };
     },
     outputDevices: () => subject.outputDevices(),
   };

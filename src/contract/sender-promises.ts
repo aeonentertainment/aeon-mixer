@@ -58,6 +58,7 @@ function reset({ engine, mixer }: HeldSlot) {
 export const senderPromises: ReadonlyArray<ContractPromise> = [
   {
     promise: "A slot playing one sender refuses every other address.",
+    needs: ["sockets"],
     check: (trial) =>
       withHeldSlot(trial, async ({ engine, port, held, next, ingest }) => {
         await next.send(port);
@@ -74,6 +75,7 @@ export const senderPromises: ReadonlyArray<ContractPromise> = [
   },
   {
     promise: "After `resetSlot`, a slot takes a new sender at once.",
+    needs: ["sockets"],
     check: (trial) =>
       withHeldSlot(trial, async (slot) => {
         reset(slot);
@@ -84,6 +86,7 @@ export const senderPromises: ReadonlyArray<ContractPromise> = [
   },
   {
     promise: "After `resetSlot`, a slot refuses the sender it released.",
+    needs: ["sockets"],
     check: (trial) =>
       withHeldSlot(trial, async (slot) => {
         const { engine, port, held, next, ingest } = slot;

@@ -47,6 +47,7 @@ export const enginePromises: ReadonlyArray<ContractPromise> = [
   },
   {
     promise: "A stem handed in as bytes plays the samples the same file plays by path.",
+    needs: ["rendering"],
     async check(trial) {
       const file = sineWav();
       const dir = await mkdtemp(join(tmpdir(), "aeon-contract-"));
@@ -92,13 +93,9 @@ export const enginePromises: ReadonlyArray<ContractPromise> = [
   {
     promise:
       "After a move, `outputChanged` carries `engine.output`, the gap, and `heldMs`, which is 0 with no song playing.",
+    needs: ["outputMoves"],
     async check(trial) {
       const { engine, move } = await trial.open();
-      if (!move) {
-        return {
-          unchecked: "an offline engine never moves; give `moveOutput` to check a stand-in",
-        };
-      }
       const changed = new Promise<{ output: OutputInfo; gapMs: number; heldMs: number }>(
         (resolve) => {
           engine.on("outputChanged", (output, gapMs, heldMs) => resolve({ output, gapMs, heldMs }));
