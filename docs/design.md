@@ -793,9 +793,13 @@ export interface ContractSubject<E extends ContractEngine = ContractEngine> {
   openEngine(options: OpenEngineOptions & { output: { offline: true } }): Promise<E>;
   outputDevices(): Promise<ReadonlyArray<DeviceInfo>>;
 }
+/** Something a stand-in does not do: one that only records calls renders no audio and opens no socket. */
+export type ContractLimit = "rendersNoAudio" | "opensNoSocket";
 export interface ContractOptions<E extends ContractEngine> {
   /** Moves `engine` to another output. An offline engine never moves: without it, that promise is unchecked. */
   moveOutput?: (engine: E) => void;
+  /** What the subject does not do. A promise that needs it is unchecked, with why, never broken; the rest are checked. */
+  limits?: ReadonlyArray<ContractLimit>;
 }
 export interface ContractReport {
   /** Each promise broken, as a sentence, with what the suite found; empty when all hold. */
@@ -1440,8 +1444,12 @@ section 7.2 with typed events and validation of ranges before anything crosses.
   packetizer hides a drop as a timestamp jump: without the count, a stalled network thread
   looks to the host like a quiet room.
 - `src/contract/` is the contract suite, whose entry point and types are at the end of 7.2.
-  Each promise is a sentence, checked on its own offline engines; the move's runs only on a
-  stand-in the host can move. The package's own suite runs it against the package.
+  Each promise is a sentence, checked on its own offline engines, and names what its check
+  needs beyond the calls every check makes: what the engine plays, a loopback socket, or a move
+  to another output. Where the subject lacks one (it gave no `moveOutput`, or its `limits` say it
+  renders no audio or opens no socket), the promise is unchecked with why and its check never
+  runs, so the list of what needs what lives with the promises and a limit can excuse nothing
+  else. The package states no limits, and its own suite runs it against the package.
 
 Done when: every method and event in 7.2 exists, `vp check` passes with no `any`, and the
 TypeScript suite exercises them on the offline engine.

@@ -114,6 +114,10 @@ await engine.close();
   // [] when every promise holds; a stand-in that can move its output passes `{ moveOutput }`
   ```
 
+  A stand-in that only records calls says what it does not do, `{ limits: ["rendersNoAudio",
+  "opensNoSocket"] }`, and each promise that needs what it plays or a loopback socket comes back
+  in `unchecked` with why, not in `broken`. Every other promise is still checked.
+
 [docs/design.md](docs/design.md) section 7.2 has the full API. The reasons are in
 [docs/decisions](docs/decisions).
 

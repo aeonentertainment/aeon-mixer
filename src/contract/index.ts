@@ -3,6 +3,7 @@
 export { checkContract, type ContractReport } from "./check-contract.ts";
 export type {
   ContractEngine,
+  ContractLimit,
   ContractMixer,
   ContractOptions,
   ContractSubject,

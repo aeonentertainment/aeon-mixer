@@ -42,6 +42,7 @@ async function idleStats(trial: Trial, pinned: number | undefined) {
 export const slotPromises: ReadonlyArray<ContractPromise> = [
   {
     promise: "A slot nobody has set plays at the profile's `slot.gain`.",
+    needs: ["rendering"],
     async check(trial) {
       const gain = 0.7;
       const { engine } = await trial.open({
@@ -59,6 +60,7 @@ export const slotPromises: ReadonlyArray<ContractPromise> = [
   },
   {
     promise: "A gain set while the mixer is armed is the gain its slot starts at.",
+    needs: ["rendering"],
     async check(trial) {
       const { engine } = await trial.open();
       const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
@@ -79,6 +81,7 @@ export const slotPromises: ReadonlyArray<ContractPromise> = [
   },
   {
     promise: "A slot's `tone` is null while its tone stage is off, and reports once it is on.",
+    needs: ["rendering"],
     async check(trial) {
       const { engine } = await trial.open();
       const mixer = await engine.createMixer({ slots: [{ kind: "push" }] });
