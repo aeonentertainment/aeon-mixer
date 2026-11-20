@@ -1,5 +1,6 @@
 // Run by bundle.test.ts in a process of its own: a song with a session bundle whose process dies
 // mid-song, with no `destroy` and no exit handler.
+import { startLive } from "../../src/contract/offline-clock.ts";
 import { openEngine } from "../../src/index.ts";
 
 const dir = process.argv[2];
@@ -10,9 +11,7 @@ const mixer = await engine.createMixer({
   slots: [{ kind: "rtp" }, { kind: "push" }],
   bundle: { dir },
 });
-const started = mixer.start();
-engine.pump(3);
-await started;
+await startLive(engine, mixer);
 mixer.setSlotEffects(1, [{ kind: "reverb", enabled: true }]);
 engine.pump(8);
 mixer.setSlot(0, { gain: 0.5 });

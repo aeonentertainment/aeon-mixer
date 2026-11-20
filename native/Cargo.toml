@@ -6,6 +6,7 @@ members = [
   "node",
   "devices",
   "transport",
+  "tools/bench",
   "tools/measure-corrector",
   "tools/measure-echo",
   "tools/measure-latency",

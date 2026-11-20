@@ -60,6 +60,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bench"
+version = "0.0.0"
+dependencies = [
+ "assert_no_alloc",
+ "devices",
+ "engine",
+ "measure-latency",
+ "replay",
+ "rtrb",
+ "scorecard",
+ "serde_json",
+ "transport",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -646,9 +661,11 @@ version = "0.0.0"
 dependencies = [
  "assert_no_alloc",
  "engine",
+ "realfft",
  "replay",
  "serde",
  "serde_json",
+ "transport",
 ]
 
 [[package]]

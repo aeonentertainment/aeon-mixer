@@ -294,7 +294,19 @@ impl Lcg {
 /// The output frame the first packet of `arrivals` is anchored at: the block after it arrives,
 /// plus the playout delay.
 pub fn anchor_of(arrivals: &[Arrival]) -> i64 {
-    (arrivals[0].at / BLOCK as i64 + 1) * BLOCK as i64 + i64::from(DELAY)
+    drained(&arrivals[0]) + i64::from(DELAY)
+}
+
+/// The block a packet is drained in: the one after it arrives, as `Rig` and `pull_direct` feed it.
+pub fn drained(arrival: &Arrival) -> i64 {
+    (arrival.at / BLOCK as i64 + 1) * BLOCK as i64
+}
+
+/// The first packets of a stream held up `late` frames, as a link that starts slow holds them.
+pub fn first_held(mut arrivals: Vec<Arrival>, late: i64) -> Vec<Arrival> {
+    let released = arrivals[0].at + late;
+    arrivals.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+    arrivals
 }
 
 /// A slot on the offline driver fed from a packet ring, panned hard left so the left channel

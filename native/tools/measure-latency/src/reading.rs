@@ -21,7 +21,13 @@ pub const MIN_SNR_DB: f64 = 30.0;
 pub const MAX_MOVED_MS: f64 = 0.75;
 
 /// Under this peak the input is silent, which on macOS is what a denied microphone sounds like.
-const SILENT_DB: f64 = -70.0;
+pub const SILENT_DB: f64 = -70.0;
+
+/// The loudest sample in `samples`, in dBFS, for the silence check every reading makes first.
+pub fn peak_db(samples: &[f32]) -> f64 {
+    let peak = samples.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+    20.0 * f64::from(peak).max(1e-9).log10()
+}
 
 /// What one opening recorded. `render_wakes` hold the first frame of the block rendered at that
 /// moment; `capture_wakes` hold how many frames had been delivered at that moment.
@@ -108,8 +114,7 @@ pub fn read(take: &Take, programme: &Programme) -> Result<Reading, String> {
     let capture_line = ClockLine::under(&capture_wakes);
     let (low, high) = render_line.spread(&render_wakes);
 
-    let peak = take.captured.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
-    let peak_db = 20.0 * f64::from(peak).max(1e-9).log10();
+    let peak_db = peak_db(&take.captured);
     if peak_db < SILENT_DB {
         return Err(format!(
             "the input is silent, peak {peak_db:.0} dBFS. On macOS, grant this terminal the \

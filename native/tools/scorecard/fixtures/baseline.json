@@ -47,7 +47,7 @@
         "tolerance": 5.0
       },
       "slot0.playoutDelayMs": {
-        "value": 15.0,
+        "value": 17.67,
         "tolerance": 0.0
       },
       "slot1.concealed": {
@@ -71,21 +71,21 @@
         "tolerance": 1.0
       },
       "slot1.playoutDelayMs": {
-        "value": 15.0,
+        "value": 19.0,
         "tolerance": 0.0
       }
     },
     "echo": {
       "master.levelMedianDb": {
-        "value": -19.76,
+        "value": -19.95,
         "tolerance": 1.0
       },
       "master.levelTopTenthDb": {
-        "value": -17.16,
+        "value": -17.88,
         "tolerance": 1.0
       },
       "slot0.bleedDb": {
-        "value": -7.13,
+        "value": -7.11,
         "tolerance": 0.5
       },
       "slot0.concealed": {
@@ -93,11 +93,11 @@
         "tolerance": 2.0
       },
       "slot0.echoRemovedDb": {
-        "value": 12.71,
-        "tolerance": 1.0
+        "value": 12.91,
+        "tolerance": 1.5
       },
       "slot0.howlCatches": {
-        "value": 0.0,
+        "value": 1.0,
         "tolerance": 0.0
       },
       "slot0.late": {
@@ -105,15 +105,15 @@
         "tolerance": 0.0
       },
       "slot0.levelMedianDb": {
-        "value": -46.15,
-        "tolerance": 1.5
+        "value": -50.36,
+        "tolerance": 3.5
       },
       "slot0.levelTopTenthDb": {
-        "value": -17.14,
-        "tolerance": 1.0
+        "value": -20.74,
+        "tolerance": 1.5
       },
       "slot0.playoutDelayMs": {
-        "value": 15.0,
+        "value": 17.38,
         "tolerance": 0.0
       }
     }

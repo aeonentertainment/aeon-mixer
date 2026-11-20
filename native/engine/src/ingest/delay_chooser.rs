@@ -1,24 +1,16 @@
 //! How a slot chooses its own playout delay (docs/design.md 8.4, decision 0007). A stream opens at
-//! a delay that suits busy Wi-Fi. Every half second the chooser notes how close to its due time
-//! the half second's latest packet came, so a stall counts once however short the frames are. Once
-//! ten seconds of that says the stream never needed the slack it has, the delay falls, once, to
-//! what those ten seconds used. If packets then keep arriving late it rises, at most back to where
-//! it opened. No move leaves it over the opening delay, so a stream whose first packet came late
+//! a delay that suits busy Wi-Fi. The chooser reads the stream's `SlackNotes`, how close to its due
+//! time each half second's latest packet came, so a stall counts once however short the frames
+//! are. Once ten seconds of that says the stream never needed the slack it has, the delay falls,
+//! once, to what those ten seconds used. If packets then keep arriving late it rises, at most back
+//! to where it opened. No move leaves it over the opening delay, so a stream whose first packet came late
 //! falls at least that far. It moves only while the slot is quiet, when nobody can hear it.
 
+use super::slack_notes::SlackNotes;
 use crate::block::{BLOCK, RATE};
 
 /// The delay a stream opens at, and the most any move may leave it at.
 pub const OPENING: u32 = RATE * 15 / 1000;
-
-/// One note per half second: a stall spans at most a few, and neither a frame's length nor how
-/// many packets a stall catches changes what it counts for.
-const INTERVAL: i64 = RATE as i64 / 2;
-
-/// Ten seconds of notes. The worst of 20 covers 86 percent of half seconds with 95 percent
-/// confidence whatever the distribution, and a later half second beats it about once in ten
-/// seconds. The margin is what makes that rarer; decision 0007 has what it buys.
-const INTERVALS: usize = 20;
 
 /// What a link with no jitter at all still needs on top of the block a packet can wait for.
 const MARGIN: i64 = RATE as i64 / 1000;
@@ -47,52 +39,17 @@ pub struct Move {
     pub delay: i64,
 }
 
-/// The slack of one interval's earliest and latest packets against their due times.
-#[derive(Clone, Copy)]
-struct Interval {
-    worst: i64,
-    best: i64,
-}
-
-impl Interval {
-    const EMPTY: Self = Self { worst: i64::MAX, best: i64::MIN };
-}
-
+#[derive(Default)]
 pub struct DelayChooser {
-    current: Interval,
-    ends_at: i64,
-    intervals: [Interval; INTERVALS],
-    /// Where the next note goes, and how many have been taken, up to all of them.
-    next: usize,
-    filled: usize,
     has_fallen: bool,
     wanted: Option<Move>,
     quiet_blocks: u32,
 }
 
 impl DelayChooser {
-    pub fn new(now: i64) -> Self {
-        Self {
-            current: Interval::EMPTY,
-            ends_at: now + INTERVAL,
-            intervals: [Interval::EMPTY; INTERVALS],
-            next: 0,
-            filled: 0,
-            has_fallen: false,
-            wanted: None,
-            quiet_blocks: 0,
-        }
-    }
-
     /// Whether the delay has fallen, after which it is the earliest packets' wait.
     pub fn has_fallen(&self) -> bool {
         self.has_fallen
-    }
-
-    /// A packet's slack against its due time, whether it made it or not.
-    pub fn observe(&mut self, slack: i64) {
-        self.current.worst = self.current.worst.min(slack);
-        self.current.best = self.current.best.max(slack);
     }
 
     /// The block just played, to tell whether the slot is quiet.
@@ -101,19 +58,12 @@ impl DelayChooser {
         self.quiet_blocks = if quiet { self.quiet_blocks.saturating_add(1) } else { 0 };
     }
 
-    /// Once a block: closes an interval that has ended, and returns the move wanted, if the slot
-    /// has been quiet. The caller tells `made` when it has made it, or asks again next block.
-    pub fn tick(&mut self, now: i64) -> Option<Move> {
-        if now >= self.ends_at {
-            self.ends_at = now + INTERVAL;
-            // A sender in DTX or a stall that outlasts an interval leaves nothing to note
-            if self.current.best != Interval::EMPTY.best {
-                self.intervals[self.next] = self.current;
-                self.next = (self.next + 1) % INTERVALS;
-                self.filled = (self.filled + 1).min(INTERVALS);
-                self.current = Interval::EMPTY;
-            }
-            self.wanted = self.choose();
+    /// Once a block, after the notes' own tick, which says whether a half second `closed`:
+    /// returns the move wanted, if the slot has been quiet. The caller tells `made` when it has
+    /// made it, or asks again next block.
+    pub fn tick(&mut self, closed: bool, notes: &SlackNotes) -> Option<Move> {
+        if closed {
+            self.wanted = self.choose(notes);
         }
         if self.quiet_blocks < QUIET_BLOCKS {
             return None;
@@ -124,19 +74,11 @@ impl DelayChooser {
     /// The caller moved the anchor as `tick` asked.
     pub fn made(&mut self, moved: Move) {
         self.has_fallen |= moved.by < 0;
-        self.shift(moved.by);
+        self.wanted = None;
     }
 
-    /// The anchor moved for another reason, a skew correction: every slack noted moved with it.
-    pub fn shift(&mut self, by: i64) {
-        let move_slack = |interval: &mut Interval| {
-            if interval.best != Interval::EMPTY.best {
-                interval.worst += by;
-                interval.best += by;
-            }
-        };
-        self.intervals.iter_mut().for_each(move_slack);
-        move_slack(&mut self.current);
+    /// The anchor moved for another reason, a skew correction, so the move wanted is stale.
+    pub fn shifted(&mut self) {
         self.wanted = None;
     }
 
@@ -146,21 +88,16 @@ impl DelayChooser {
     /// evidence. No move leaves the delay, the earliest packets' wait, over the opening delay: a
     /// first packet that came late anchors the stream that much later, and neither a fall nor a
     /// rise keeps that lateness.
-    fn choose(&self) -> Option<Move> {
-        if self.filled < INTERVALS {
+    fn choose(&self, notes: &SlackNotes) -> Option<Move> {
+        if !notes.full() {
             return None;
         }
-        let worst = self.intervals.iter().map(|interval| interval.worst).min()?;
-        let best = self.intervals.iter().map(|interval| interval.best).max()?;
+        let (worst, best) = (notes.worst()?, notes.best()?);
         let margin = MARGIN + (best - worst - BLOCK as i64).max(0) / 4;
         let room = (worst - margin).min(best - FLOOR);
         let by = (-room).min(i64::from(OPENING) - best);
-        let wanted = if self.has_fallen {
-            let late = self.intervals.iter().filter(|interval| interval.worst < 0).count();
-            late >= RISE_AFTER && by > 0
-        } else {
-            room >= LEAST_FALL
-        };
+        let wanted =
+            if self.has_fallen { notes.late() >= RISE_AFTER && by > 0 } else { room >= LEAST_FALL };
         wanted.then_some(Move { by, delay: best + by })
     }
 }
@@ -249,7 +186,8 @@ mod tests {
     }
 
     /// Spikes of 30 ms, which 15 ms never covered: the delay stays where it opened, and the slot
-    /// plays exactly what a held slot plays, sample for sample.
+    /// plays exactly what a held slot plays, sample for sample, and reports the same wait. A spike
+    /// held up the first packet, so that wait is over 15 ms.
     #[test]
     fn a_link_that_needs_all_of_the_opening_delay_never_moves_it() {
         let signal = quantized(&voice(30 * RATE as usize));
@@ -261,7 +199,8 @@ mod tests {
         let mut fixed = Rig::new(Codec::L16);
         fixed.run(&arrivals, until);
         assert_eq!(chosen.out, fixed.out);
-        assert_eq!(chosen.stats().playout_delay_ms, 15.0);
+        assert_eq!(chosen.stats().playout_delay_ms, fixed.stats().playout_delay_ms);
+        assert!(chosen.stats().playout_delay_ms > 15.0, "{:?}", chosen.stats());
         assert_eq!(chosen.stats().late, chosen.stats().late_at_opening);
     }
 
@@ -297,7 +236,8 @@ mod tests {
     }
 
     /// A 25 ms stall every 400 ms after the first twelve seconds, which 15 ms never covers. No
-    /// move leaves the delay over where it opened. Not on a stream whose first packets came 7 ms
+    /// move leaves the delay over where it opened, though before the first one a late first packet
+    /// has it read more. Not on a stream whose first packets came 7 ms
     /// late, which the opening's anchor kept and the fall took off, so a rise bounded on how far
     /// the anchor fell gave it back, at 23 ms. Not on 5 ms frames, whose skew correction at the
     /// floor moves the anchor a step later before the rise, at 17.5 ms. And not on one whose first
@@ -311,18 +251,19 @@ mod tests {
         {
             let sent = OpusSender::new(frame, 53).send_all(&signal, 0);
             let (calm, rough) = sent.split_at(sent.partition_point(|a| a.at < 12 * SECOND));
-            let mut arrivals = match calm_stall {
+            let calm = match calm_stall {
                 0 => calm.to_vec(),
                 stall => Stalls::new(stall, 8 * frame as i64).apply(calm, 8),
             };
-            let released = arrivals[0].at + first_late;
-            arrivals.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+            let mut arrivals = first_held(calm, first_late);
             arrivals.extend(Stalls::new(RATE as i64 / 40, 2 * SECOND / 5).apply(rough, 7));
             let mut rig = Rig::choosing(Codec::opus().unwrap());
             let mut delays = Vec::new();
             for half in 1..=44 {
                 rig.run(&arrivals, half * SECOND / 2);
-                delays.push(rig.stats().playout_delay_ms);
+                if rig.stats().resyncs > 0 {
+                    delays.push(rig.stats().playout_delay_ms);
+                }
             }
             let stats = rig.stats();
             assert!(stats.resyncs >= 1, "{frame}: it moved: {stats:?}");
@@ -436,9 +377,7 @@ mod tests {
             compare(&signal[tones..], 240, &rig.out, tones as i64 + 400, 1200).lag
         };
         let clean = L16Sender::new(240, 46).send_all(&signal, 0, 1.0);
-        let mut stalled = clean.clone();
-        let released = clean[0].at + 1440;
-        stalled.iter_mut().take_while(|a| a.at < released).for_each(|a| a.at = released);
+        let stalled = first_held(clean.clone(), 1440);
         assert!((lag(&stalled) - lag(&clean)).abs() < BLOCK as i64);
     }
 
@@ -486,8 +425,9 @@ mod tests {
     /// Two hundred parts per million either way, a long way off for a phone against a sound card,
     /// for a minute. Ten seconds of that drift reads as 2 ms of spread, so the delay falls that far
     /// short of the floor, and skew correction holds it there on every frame size with no packet
-    /// late for it. A step of 20 ms would have put the slow sender's delay back over the opening
-    /// delay at its first correction.
+    /// late for it. The delay reported is what the earliest packets wait, which moves by up to a
+    /// step at each correction and with the drift between them. A step of 20 ms would have put the
+    /// slow sender's delay back over the opening delay at its first correction.
     #[test]
     fn clock_skew_at_the_floor_makes_nothing_late() {
         let signal = vec![0.0; 60 * RATE as usize];
@@ -504,7 +444,7 @@ mod tests {
                 let stats = jitter.stats();
                 assert_eq!(stats.late, 0, "{frame} at {rate}: {stats:?}");
                 assert!(
-                    (3.6..6.5).contains(&stats.playout_delay_ms),
+                    (3.6..=15.0).contains(&stats.playout_delay_ms),
                     "{frame} at {rate}: {stats:?}"
                 );
                 assert!(stats.resyncs >= 2, "{frame} at {rate}: skew corrected: {stats:?}");

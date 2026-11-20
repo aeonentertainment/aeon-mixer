@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "vite-plus/test";
-import { openEngine, type ToneBand } from "../src/index.ts";
+import { startLive } from "../src/contract/offline-clock.ts";
+import { openEngine, type SlotEffect, type ToneBand } from "../src/index.ts";
+import { destroyLive } from "./offline.ts";
 
 const lift = (hz: number): ToneBand => ({ kind: "peak", hz, gainDb: 6, q: 1 });
 const presence = (gainDb: number): ToneBand => ({ kind: "peak", hz: 3000, gainDb, q: 1 });
@@ -51,12 +54,26 @@ test("setSlotEffects refuses the blind match, which has no target yet, and a ban
   await engine.close();
 });
 
+// Replay's `a_tone_value_out_of_its_range_is_refused_as_the_live_mixer_refuses_it` reads the same
+// cases, so the ranges a bundle is held to cannot drift from the live mixer's
+test("setSlotEffects refuses each tone value out of its range in the words replay uses", async () => {
+  const fixture = new URL("./fixtures/tone-out-of-range.json", import.meta.url);
+  const cases: ReadonlyArray<{ effect: SlotEffect; error: string }> = JSON.parse(
+    readFileSync(fixture, "utf8"),
+  );
+  expect(cases.length).toBeGreaterThan(0);
+  const { engine, mixer } = await armed();
+  for (const { effect, error } of cases) {
+    expect(() => mixer.setSlotEffects(0, [effect])).toThrow(error);
+  }
+  await mixer.destroy();
+  await engine.close();
+});
+
 // Live, stats reads the stage once it is on and null once it is off again
 test("stats reports the tone stage while it is on", async () => {
   const { engine, mixer } = await armed();
-  const started = mixer.start();
-  engine.pump(3);
-  await started;
+  await startLive(engine, mixer);
   expect(mixer.stats().slots[0]?.tone).toBeNull();
   mixer.setSlotEffects(0, [{ kind: "tone", enabled: true, plosiveDb: 12, deEssDb: 6 }]);
   engine.pump(2);
@@ -64,8 +81,6 @@ test("stats reports the tone stage while it is on", async () => {
   mixer.setSlotEffects(0, []);
   engine.pump(2);
   expect(mixer.stats().slots[0]?.tone).toBeNull();
-  const destroyed = mixer.destroy();
-  engine.pump(3);
-  await destroyed;
+  await destroyLive(engine, mixer);
   await engine.close();
 });

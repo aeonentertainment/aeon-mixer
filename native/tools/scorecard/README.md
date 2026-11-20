@@ -21,7 +21,7 @@ it live. Per recorded slot:
 | --------------------- | --------------------------------------------------------------------------------------------- |
 | `late`                | packets that arrived after their samples fell due                                             |
 | `concealed`           | frames the decoder filled in                                                                  |
-| `playoutDelayMs`      | the jitter buffer's delay at the end of the song                                              |
+| `playoutDelayMs`      | what the stream's earliest packets wait at the end of the song                                |
 | `correctorDelayMs`    | how far the corrector held the voice, the mean over the blocks it held any                    |
 | `pitchErrorCents`     | the median distance from the guide note of each reading with one, at least 0.9 sure and 82 Hz |
 | `correctedErrorCents` | the same median after correction: where the corrected voice sat                               |
@@ -44,6 +44,30 @@ corrected voice was. `letGoes` counts each gap in the corrector's pull inside a 
 one guide note, with a pull either side: a voice that stops as its note ends lets go of nothing.
 The shift and the pull are on the engine's reading and not yet on the binding's `pitch` event.
 The levels count every reading, silence too, as `replay`'s table does.
+
+## The paired rows
+
+A slot whose bundle holds `reference/<n>.wav` and `reference/<n>.json` (docs/design.md 8.11) is
+a paired take: the same singing recorded at once by the phone and by a reference vocal mic at
+the same distance. Its rows say how far from the mic the phone sounds, and how much the tone
+stage changes that (decision 0029). The scorecard replays the slot alone with no stems, once
+with its stage off and once as it ran, lines the mic's recording up with it by level, and reads
+each on the mic's moments of singing, s and room. So a pair is sung with reverb and voice off.
+
+| number                                                  | what it is, for `off`, `on` and, where it has one, `reference`                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `pairDistanceDb`                                        | how far the phone's tone sits from the mic's at the same loudness; 0 is the mic |
+| `pairLowDb`, `pairMidDb`, `pairPresenceDb`, `pairTopDb` | the same gap, signed: 100 to 400 Hz, 400 Hz to 2 kHz, 2 to 6 kHz, 6 to 12.5 kHz |
+| `sibilanceDb`                                           | power over 5 kHz in an s, against the singing                                   |
+| `plosivesPerMinute`                                     | bursts under 100 Hz that stand over the singing                                 |
+| `noiseFloorDb`                                          | the room between lines, against the singing                                     |
+
+It prints a table of them, mic, stage off and stage on, and how many dB closer the stage
+brought the phone. A bundle with no `reference/` scores as before and says its paired rows were
+not scored. The tests write synthetic pairs: a voice, and the same voice through known bands,
+or with its s, its pops or its room at known gains. The spectral rows read the bands within
+0.15 dB, sibilance and the room read their gains within 0.1, the pops cut by 12 dB count half,
+and the stage with the inverse bands brings the distance from 2.5 dB to under 0.1.
 
 ## Against a baseline
 
@@ -84,21 +108,28 @@ corrector delay and two concealed frames. Late packets, howl catches, let-goes a
 delay have none. Slot 0's correction runs at the profile's strength, 0.6, so 22 of its 48 cents
 are left after correction; at 0.3, 34 are, and nothing else moves past its tolerance.
 
-The echo canceller and the howl guard are off in the duet. `fixtures/bundles/echo` holds the
-canceller's numbers instead: a 16 s song on one house mic that hears the backing, pink noise
-from `fixtures/stems`, through a room 30 ms away and 10 dB down. The room plays alone for 10 s
-and a synthetic singer sings over it for the last 6. It is an `l16` slot because a phone's Opus
-at 32 kb/s fills noise in where the backing's waveform was. Through a phone, the canceller took
-out at most 5 dB, and its bleed read from -8.7 to -12.3 dB as the delay moved. Through PCM it
-takes out 36 dB by the tenth second, and across playout delays from 10 to 60 ms its bleed moves
-0.08 dB, its removal 0.5 dB, the slot's median level 1.2 dB and its top tenth 0.5 dB. The
-baseline gives a dB to the
-removal and each level but one, and half a dB to the bleed. The slot's median level is what the
-canceller left of the room alone, near -46 dBFS, which moves further than a sung level, so it
-has 1.5 dB.
+The echo canceller and the howl guard are off in the duet. `fixtures/bundles/echo` holds their
+numbers instead: a 16 s song on one house mic in a room 30 ms away and 10 dB down, with both on. The
+room plays the mic back whatever the speakers play: the backing, pink noise from `fixtures/stems`,
+and the slot itself, as the master carried it. The writer builds each of the mic's packets from the
+master the engine has rendered by then, so the room hears the slot's ducks as well. The room plays
+alone for 10 s, a synthetic singer sings for 3.5 s, and then a howl at 1.2 kHz grows from -40 dBFS
+at 25 dB a second for 0.45 s and holds until 15.5 s. The howl comes last because it is sound at the
+mic, not echo, and the removal and the slot's levels are medians over the song: mid-song, it and the
+singer after it would fill more than half of it. It is an `l16` slot because a phone's Opus at 32
+kb/s fills noise in where the backing's waveform was. Through a phone, the canceller took out at
+most 5 dB, and its bleed read from -8.7 to -12.3 dB as the delay moved.
 
-The guard is off in both. On over a singer it catches the synthetic voice at some delays and
-not others (#245), so `howlCatches` waits for a fixture where it holds still.
+The guard catches the howl once and never the singer: `howlCatches` is 1 at every playout delay
+from 10 to 60 ms, the same from run to run, and its tolerance is 0. The bundle is exact only at its
+own 15 ms. At another delay the room's echo of the slot still sits where 15 ms put it, which no
+room does, and the canceller cannot take it out. So at 15 ms the canceller takes out 12.9 dB and
+leaves the room at -50.4 dBFS, its median level. Across 10 to 60 ms it takes out 11.7 to 12.9 dB
+and leaves -47.3 to -50.4. The baseline gives the removal 1.5 dB, the slot's median level 3.5 dB
+and its top tenth 1.5 dB, so the delay can move. It gives the bleed half a dB, and a dB to the
+master's levels. At 60 ms that misplaced echo also hides the howl until it has nearly stopped
+growing, and the guard catches it 1.35 s in, as the echo swells, where it catches it 333 to 443 ms
+in at every other delay.
 
 To change a fixture, run `cargo test -p replay -- --ignored writes_the_scorecard_fixture` or
 `writes_the_echo_fixture`, then score it into the baseline with

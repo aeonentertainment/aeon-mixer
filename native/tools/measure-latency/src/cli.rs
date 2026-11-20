@@ -64,7 +64,7 @@ pub enum Command {
 const PLAYOUT_MS: f32 = 15.0;
 
 /// Just under the soft clipper's knee of 0.75: the chirp reaches the output unbent.
-const MAX_LEVEL_DB: f32 = -3.0;
+pub const MAX_LEVEL_DB: f32 = -3.0;
 
 /// Reads the command line. Opening a device takes both the `device` command and `--open-device`:
 /// nothing here touches the sound card of the machine it runs on unless a person says so.
@@ -131,23 +131,34 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Command, String> 
     if !open {
         return Err("refusing to open a device: add --open-device to play through it".into());
     }
-    if parsed.level_db > MAX_LEVEL_DB {
-        return Err(format!("--level-db is at most {MAX_LEVEL_DB}, under the master's clipper"));
-    }
+    under_clipper(parsed.level_db)?;
     if parsed.periods.is_empty() || parsed.openings == 0 {
         return Err("--periods and --openings need at least one".into());
     }
-    parsed.physical = match (rig.as_deref(), air_cm) {
-        (Some("cable"), None) => Physical::Cable,
-        (Some("mic"), Some(air_cm)) if air_cm >= 0.0 => Physical::Mic { air_cm },
-        (Some("cable"), Some(_)) => return Err("--air-cm is for --rig mic".into()),
-        (Some("mic"), _) => return Err("--rig mic needs the distance, --air-cm CM".into()),
-        (Some(other), _) => return Err(format!("--rig is cable or mic, not {other}")),
-        (None, _) => {
-            return Err("--rig says what the figure includes: --rig cable or --rig mic".into());
-        }
-    };
+    parsed.physical = physical(rig.as_deref(), air_cm)?;
     Ok(Command::Device(parsed))
+}
+
+/// Refuses a chirp level over `MAX_LEVEL_DB`, which the master's clipper would bend. Every tool
+/// that plays these chirps through a real output holds them to it.
+pub fn under_clipper(level_db: f32) -> Result<f32, String> {
+    if level_db <= MAX_LEVEL_DB {
+        Ok(level_db)
+    } else {
+        Err(format!("--level-db is at most {MAX_LEVEL_DB}, under the master's clipper"))
+    }
+}
+
+/// The rig `--rig` and `--air-cm` name, or why there is none: a figure says what it includes.
+pub fn physical(rig: Option<&str>, air_cm: Option<f64>) -> Result<Physical, String> {
+    match (rig, air_cm) {
+        (Some("cable"), None) => Ok(Physical::Cable),
+        (Some("mic"), Some(air_cm)) if air_cm >= 0.0 => Ok(Physical::Mic { air_cm }),
+        (Some("cable"), Some(_)) => Err("--air-cm is for --rig mic".into()),
+        (Some("mic"), _) => Err("--rig mic needs the distance, --air-cm CM".into()),
+        (Some(other), _) => Err(format!("--rig is cable or mic, not {other}")),
+        (None, _) => Err("--rig says what the figure includes: --rig cable or --rig mic".into()),
+    }
 }
 
 fn playout_frames(ms: f32) -> u32 {
@@ -159,7 +170,10 @@ fn number<T: std::str::FromStr>(flag: &str, text: String) -> Result<T, String> {
 }
 
 // `inf` and `NaN` parse as floats, and none of a delay, a distance or a level can be either.
-fn finite<T: std::str::FromStr + Copy + Into<f64>>(flag: &str, text: String) -> Result<T, String> {
+pub fn finite<T: std::str::FromStr + Copy + Into<f64>>(
+    flag: &str,
+    text: String,
+) -> Result<T, String> {
     let value: T = number(flag, text.clone())?;
     if value.into().is_finite() {
         Ok(value)

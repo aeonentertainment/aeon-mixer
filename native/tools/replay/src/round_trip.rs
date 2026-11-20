@@ -100,34 +100,29 @@ pub(crate) fn phone(signal: &[f32], dtx: bool, jitter: u32, swaps: bool) -> Vec<
     sent
 }
 
-/// What a house mic's sender puts on loopback: `rtpL16pay` at GStreamer's default 1400-byte MTU,
-/// 350 frames of 16-bit big-endian stereo PCM a packet, as `measure-latency` models it, with the
-/// mono signal on both channels. Each arrives a millisecond after its last sample. Deterministic.
-pub(crate) fn house_mic(signal: &[f32]) -> Vec<Sent> {
-    const PACKET: usize = 350;
-    signal
-        .as_chunks::<PACKET>()
-        .0
-        .iter()
-        .enumerate()
-        .map(|(k, pcm)| {
-            let mut datagram = vec![0u8; 12];
-            let header = Header {
-                marker: false,
-                payload_type: 96,
-                seq: 100u16.wrapping_add(k as u16),
-                timestamp: (k * PACKET) as u32,
-                ssrc: 0xAE16,
-            };
-            header.write((&mut datagram[..12]).try_into().unwrap());
-            for sample in pcm {
-                let bytes = ((sample.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_be_bytes();
-                datagram.extend_from_slice(&bytes);
-                datagram.extend_from_slice(&bytes);
-            }
-            Sent { at: ((k + 1) * PACKET) as i64 + 48, datagram }
-        })
-        .collect()
+/// Frames a house mic's packet carries.
+pub(crate) const HOUSE_MIC_PACKET: usize = 350;
+
+/// The `k`th packet a house mic's sender puts on loopback, carrying `pcm`: `rtpL16pay` at
+/// GStreamer's default 1400-byte MTU, 350 frames of 16-bit big-endian stereo PCM a packet, as
+/// `measure-latency` models it, with the mono signal on both channels. It arrives a millisecond
+/// after its last sample. Deterministic.
+pub(crate) fn house_mic_packet(k: usize, pcm: &[f32; HOUSE_MIC_PACKET]) -> Sent {
+    let mut datagram = vec![0u8; 12];
+    let header = Header {
+        marker: false,
+        payload_type: 96,
+        seq: 100u16.wrapping_add(k as u16),
+        timestamp: (k * HOUSE_MIC_PACKET) as u32,
+        ssrc: 0xAE16,
+    };
+    header.write((&mut datagram[..12]).try_into().unwrap());
+    for sample in pcm {
+        let bytes = ((sample.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_be_bytes();
+        datagram.extend_from_slice(&bytes);
+        datagram.extend_from_slice(&bytes);
+    }
+    Sent { at: ((k + 1) * HOUSE_MIC_PACKET) as i64 + 48, datagram }
 }
 
 /// The packets as a live receiver pushes them, straight from the datagrams.

@@ -4,18 +4,12 @@ import { join } from "node:path";
 import { types } from "node:util";
 import { runInNewContext } from "node:vm";
 import { afterAll, expect, test } from "vite-plus/test";
-import {
-  defaultProfile,
-  type Mixer,
-  type MixerConfig,
-  type OfflineEngine,
-  openEngine,
-} from "../src/index.ts";
+import { BLOCK, FADE_BLOCKS, rendered, startLive } from "../src/contract/offline-clock.ts";
+import { wav } from "../src/contract/wav.ts";
+import { defaultProfile, type Mixer, type MixerConfig, openEngine } from "../src/index.ts";
+import { destroyLive, left } from "./offline.ts";
 
 const RATE = 48000;
-const BLOCK = 128;
-/** The swap fade is 5 ms, under two blocks; the third block is clean. */
-const FADE_BLOCKS = 3;
 /** Seek and pause fade over 20 ms, 7.5 blocks: the eighth block lands them. */
 const SEEK_FADE_BLOCKS = 8;
 /** A stem gain ramps over 50 ms, 18.75 blocks. */
@@ -35,28 +29,6 @@ function stem(samples: Float32Array) {
   const path = join(dir, `stem-${written}.wav`);
   writeFileSync(path, wav(samples));
   return path;
-}
-
-/** `samples` as the bytes of a mono 16-bit WAV at 48 kHz. */
-function wav(samples: Float32Array) {
-  const data = Buffer.alloc(samples.length * 2);
-  samples.forEach((sample, i) => {
-    data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, sample)) * 32767), 2 * i);
-  });
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + data.length, 4);
-  header.write("WAVEfmt ", 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(RATE, 24);
-  header.writeUInt32LE(RATE * 2, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(data.length, 40);
-  return Buffer.concat([header, data]);
 }
 
 function constant(level: number, seconds: number) {
@@ -104,10 +76,6 @@ function backing(
     stemGains,
     ...rest,
   };
-}
-
-function left(interleaved: Float32Array) {
-  return Array.from(interleaved.filter((_, i) => i % 2 === 0));
 }
 
 /**
@@ -172,30 +140,6 @@ function onceEnded(mixer: Mixer) {
       resolve();
     });
   });
-}
-
-/** Every render progress fraction, resolving with them once the last one is 1. */
-function rendered(mixer: Mixer) {
-  const fractions: number[] = [];
-  return new Promise<number[]>((resolve) => {
-    mixer.on("renderProgress", (fraction) => {
-      fractions.push(fraction);
-      if (fraction === 1) resolve(fractions);
-    });
-  });
-}
-
-/** Starts a rendered mixer, pumping the offline clock through the swap fade so the acks arrive. */
-async function startLive(engine: OfflineEngine, mixer: Mixer) {
-  const started = mixer.start();
-  engine.pump(FADE_BLOCKS);
-  return started;
-}
-
-async function destroyLive(engine: OfflineEngine, mixer: Mixer) {
-  const destroyed = mixer.destroy();
-  engine.pump(FADE_BLOCKS);
-  await destroyed;
 }
 
 test("the render reports its progress to 1, then start resolves the offset and the speed", async () => {

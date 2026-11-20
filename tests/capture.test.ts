@@ -1,4 +1,5 @@
 import { expect, test } from "vite-plus/test";
+import { FADE_BLOCKS, startLive } from "../src/contract/offline-clock.ts";
 import { openEngine } from "../src/index.ts";
 
 // A capture slot opens a real input, and no test opens a device (docs/design.md section 9). Its
@@ -63,14 +64,13 @@ test("bad backing is refused before a capture slot's input could open", async ()
 test("closing the engine releases every mixer, armed or live", async () => {
   const engine = await openEngine({ output: { offline: true } });
   const live = await engine.createMixer({ slots: [{ kind: "push" }] });
-  const started = live.start();
-  engine.pump(3);
-  await started;
+  await startLive(engine, live);
   const armed = await engine.createMixer({ slots: [{ kind: "push" }] });
   expect(armed.push(0, new Float32Array(256))).toBe(128);
-  // The live mixer's swap out waits on the offline clock like any command
+  // The live mixer's swap out waits on the offline clock like any command. Not the suite's
+  // `closeOffline`, which swallows a pump that throws: here a throw fails the test
   const closed = engine.close();
-  engine.pump(3);
+  engine.pump(FADE_BLOCKS);
   await closed;
   expect(() => armed.push(0, new Float32Array(256))).toThrow(/destroyed/);
   expect(() => live.push(0, new Float32Array(256))).toThrow(/destroyed/);

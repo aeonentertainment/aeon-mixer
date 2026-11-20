@@ -130,8 +130,10 @@ a decision record and the developer's agreement.
   title and body become the one commit on `main`.
 - Work is tracked in GitHub issues. The merged PR is the record. Do not commit plans, notes or
   checklists.
-- Agent PRs merge on green once proven end to end in Aeon Karaoke; the `land-pr` skill has
-  the steps and the changes that stop for the developer.
+- Agent PRs merge on green once proven on the mixer's own bench: the offline suites, the
+  scorecard over the fixture bundles, `bench play` when the change touches a device, a clock or
+  the mic path's delay, and the contract suite. A host's own suite runs only when the public API
+  changes. The `land-pr` skill has the steps and the changes that stop for the developer.
 
 ## Documentation
 

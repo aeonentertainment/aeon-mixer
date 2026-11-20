@@ -1123,7 +1123,11 @@ should reach that slot.
   cannot fill plays what it holds and silence after. When full pulls come back within the blocks
   the granted callback takes at a wake, and never fewer than eight, the phase of two clocks or a late wake ran the ring short, and the target rises by all
   those pulls lacked and 16 frames, at most one input period over where it opened. A longer run is
-  an input that stopped, and raises it only by what its first pull lacked. A trough that stays a
+  an input that stopped, and raises it only by what its first pull lacked. The slot judges the stop
+  the pull its run outgrows those blocks, so an input that stops for good is judged too. It
+  publishes each stop, and the first time it plays its input rather than its opening's silence, on
+  the stats crossing it already shares with the control thread; neither is in `stats()`, and
+  `bench loopback` reads both (section 10). A trough that stays a
   whole window more than a period over the target is a stall's backlog, dropped at once to the
   target. A fill high for one wake is no backlog: an output that catches up after a late wake, as
   WASAPI shared and the timer clock do, pulls more than one callback's blocks at a wake, past the
@@ -1281,8 +1285,10 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   correction follows its centre over 120 ms and leaves the vibrato alone, which changes only the
   control signal. [Decision 0013](decisions/0013-note-centre.md) has the numbers.
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
-  finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic keeps
-  growing, following it through a corrector's move and a moment unseen. Decision
+  finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic above
+  it and no fundamental under it keeps growing, following two tones from the four strongest narrow
+  peaks, through a corrector's move, a moment unseen and a singer's partial on its harmonic, and
+  reading growth only from levels a tone was seen alone at. Decision
   [0020](decisions/0020-echo-cancelling.md) has both. The port carries mdf.c's
   BSD licence in its file. A delay-locked loop in front of the filter follows an echo that slides
   against the master, as a mic on its own clock's does, reading the master between frames, and a
@@ -1507,11 +1513,10 @@ master has the two levels, from
 - **The fixtures.** Its tests score bundles written on the offline driver, with no real voice in
   them, against a committed baseline, so a change that moves one of their numbers past its
   tolerance fails `cargo test`: a short duet for the mic path and the corrector, and a house mic
-  in a room for the echo canceller. The canceller's is a house mic's because a phone's Opus
-  fills noise in where the backing's waveform was, which leaves the canceller little to take
-  out and its numbers moving with the delay.
-- **Not yet.** A fixture that holds `howlCatches` still: over a singer the guard catches the
-  synthetic voice at some delays and not others (#245).
+  in a room for the echo canceller and the howl guard, the room playing back what the master
+  carried. The canceller's is a house mic's because a phone's Opus fills noise in where the
+  backing's waveform was, which leaves the canceller little to take out and its numbers moving
+  with the delay.
 
 **The paired rows** judge the tone stage against a reference vocal mic (decision 0029). A slot `n`
 whose bundle holds `reference/<n>.wav` (8.11) is a paired take. Its rows read audio, not reports:
@@ -1523,8 +1528,10 @@ pair is sung with reverb and voice off, which the rows would score as tone.
   a paired bundle pays for them.
 - **Lining up.** The reference carries no clock. The scorecard reads both takes' levels every
   10 ms and takes the lag, within 60 s either way, at which they correlate best over an overlap of
-  at least half the phone's take, and prints it. A best correlation under 0.5 scores no paired row
-  and says why. A recorder on its own crystal drifts by up to 100 ppm against the output, 18 ms
+  at least half the phone's take, then refines that lag every 1 ms around it, and prints it. A
+  best correlation under 0.5 scores no paired row and says why. The correlation judged and
+  printed is the 10 ms one: 1 ms levels follow where each window falls in a pitch period, so two
+  mics that line up well still read lower there. A recorder on its own crystal drifts by up to 100 ppm against the output, 18 ms
   over three minutes, under one of the 85 ms frames below.
 - **Frames.** Over the overlap, frames of 4096 samples (85 ms) every 2048, Hann-windowed, each
   classed on the reference: voiced when it stands within 30 dB of the reference's 95th-percentile
@@ -1547,8 +1554,15 @@ pair is sung with reverb and voice off, which the rows would score as tone.
   - `noiseFloorDb`, `reference`, `off` and `on`: the mean power of the frames between lines
     against the voiced level.
 - **A bundle with no `reference/`** scores as it did before these rows, and the scorecard prints
-  that its paired rows were not scored. A reference with no `.json` beside it, or a format other
-  than 1, is refused by name.
+  that its paired rows were not scored.
+- **What is in `reference/`.** The folder is read once and every file opened by the name it was
+  found under, with `.wav` and `.json` in either case, since a recorder writes `.WAV`. One stray
+  file must not stop every bundle, so what is not a reference is skipped and named, with the
+  reason: a recording with no description beside it or a description with no recording, and any
+  other name, a note such as `mic.json` included. A hidden file, as a copy off a recorder's card
+  leaves, is passed over without a line. What could be read as another slot's is refused by
+  name: a number spelled another way (`01`, `+1`), two recordings or two descriptions for one
+  slot, and a format other than 1.
 - **What it prints**, for someone tuning the stage who has not read decision 0029: for each
   paired slot, the mic, its distance and the lag the takes lined up at; the rows for the
   reference, the stage off and the stage on; and a sentence saying how far from the mic the phone
@@ -1584,10 +1598,10 @@ bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--inpu
   since a move would make the song differ from `replay`'s (8.11).
 - **What it measures** is what only a real clock can say: whether the mix kept up.
   `output.underruns` counts the periods the output was not handed in time. `output.renderP99Ms`
-  and `output.renderMaxMs` time a block's render against the output's period, which is all the
-  time a render has. The song's
-  own numbers are the scorecard's: scoring the bundle the bench writes gives the scorecard's
-  numbers for the bundle it played, so the bench does not repeat them.
+  and `output.renderMaxMs` time a block's render against the time a block has: the output's
+  period when it is shorter than a block, and a block's 2.67 ms when a callback renders several
+  blocks back to back. The song's own numbers are the scorecard's: scoring the bundle the bench
+  writes gives the scorecard's numbers for the bundle it played, so the bench does not repeat them.
 - **It writes a bundle** to `--out`, as a mixer writes one (8.11), with the real output in the
   manifest and `stats.jsonl` from the run. It keeps time by the output's frames: every `us` it
   writes, a packet's or a line's, is the manifest's `us` plus the frames since, at 48 frames a
@@ -1597,8 +1611,10 @@ bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--inpu
 - **`loopback` measures a house mic's mouth to speaker without a mouth.** It plays decision
   0006's chirp into the output's left channel from the render, at frames it knows. A `capture`
   slot (decision 0018) reads it back from the input the rig reaches: a cable from the output's left
-  channel, or a mic `--air-cm` from the speaker, as `measure-latency`'s rigs are. The slot is out
-  of the mix and its output is read before the master, so the loop never feeds itself. Both ends
+  channel, or a mic `--air-cm` from the speaker, as `measure-latency`'s rigs are. The slot is
+  panned hard right and read from the master's right channel, as `measure-latency`'s rig reads its
+  slot from the left, and the output is handed only the chirps on its left, so the room never
+  hears the slot and the loop never feeds itself. Both ends
   are frames of the output's clock: the chirp's start as rendered and its arrival in the slot's
   output. The gap between them is the output, the cable or the air, the input and what the
   capture slot holds, which is the path a house mic's voice takes to the room. So the figure needs
@@ -1623,9 +1639,11 @@ bench loopback --open-device --rig cable|mic [--air-cm CM] [--output ID] [--inpu
 
 Done when: on the timer clock's synthetic clock and a fake output, `bench play` of the scorecard's
 duet renders what `replay` renders, sample for sample, under the allocation guard, and the bundle
-it writes replays to those samples; a fake loop of a known delay reads back as that delay plus
-what the capture slot reports holding, within a frame; and each #116 run it can now do is written
-there as its command.
+it writes replays to those samples; a fake loop of a known delay, on an input that delivers each
+block as it arrives, reads back within a frame as that delay plus the wait the capture slot
+reports, less half the input's period, since the slot reports the middle of a wait one period wide
+and such an input's samples wait none of it on the hardware; and each #116 run it can now do is
+written there as its command.
 
 ### 8.10 Adapter: Aeon Karaoke's `lib/device/infrastructure/src/mixer/impl/aeon/`
 
@@ -1829,7 +1847,13 @@ module sections a piece of work owns: a new issue names the rows whose paths it 
 
 A measuring tool may add a read-only accessor to a kernel or engine type another workstream owns:
 one function that reports state, with no change to behaviour. That is how a tool reads state
-without owning the file, as `Slot::corrector_correcting` does for `measure-corrector`.
+without owning the file, as `Slot::corrector_correcting` does for `measure-corrector`. When the
+state is decided on the audio thread, inside a type the graph holds, an accessor cannot reach it
+once the type has moved there. The type may then publish it on the crossing it already has: a flag
+or a count, set where it already decides that state, with no change to what it plays or to what
+`stats()` reports. The capture voice publishes so on its `SharedStats` that it has played its input
+and each stop it judges, for `bench loopback`. A tool that worked such a judgement out again from
+samples or counters would drift from the type's own, so the type says it and the tool reads it.
 
 | #   | Workstream          | Owns                 |
 | --- | ------------------- | -------------------- |

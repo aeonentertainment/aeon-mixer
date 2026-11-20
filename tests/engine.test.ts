@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
+import { BLOCK } from "../src/contract/offline-clock.ts";
 import { inputDevices, openEngine, outputDevices } from "../src/index.ts";
 
-const BLOCK = 128;
 /** One reading of the master meter, 100 ms at 48 kHz. */
 const METER_WINDOW = 4800;
 const LEVEL_TOLERANCE_DB = 0.01;
