@@ -129,9 +129,11 @@ What the engine reports so the rest of the device can follow:
   and the moved-to `latencyMs` after one, less the slot's mic-path latency, which the
   engine knows, plus a host-set `guideOffsetMs` for what it cannot know: the phone's capture and
   the Wi-Fi.
-- An engaged corrector delays its slot's voice by an amount that moves with the voice, and holds
-  it through a rest. `stats()` gives each slot `correctorDelayMs`, the delay as it stands, and
-  `correctorMaxDelayMs`, its 15 ms ceiling; both read 0 with correction off. A host shows
+- An engaged corrector delays its slot's voice by an amount that moves with the voice. A rest
+  moves it down only where the input falls under -50 dBFS at both ends of the splice, and
+  otherwise the delay holds through the rest, as it usually does for a phone in a room with the
+  backing playing (decision [0021](decisions/0021-one-period-and-a-rest.md)). `stats()` gives each slot `correctorDelayMs`, the delay as it stands, and
+  `correctorMaxDelayMs`, its 13.5 ms ceiling; both read 0 with correction off. A host shows
   the first and budgets with the second. Neither enters a clock: nothing can play a live voice
   early, and the guide clock and a pitch reading both name the corrector's input, ahead of its
   delay. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) has the reasons.
@@ -178,8 +180,10 @@ that: the bands and the air may leave no frequency from 80 Hz up more than 0.2 m
 guard adds at most 0.2 ms while it ducks a pop. Decision
 [0029](decisions/0029-the-tone-stage.md) has the reasons and the numbers. The
 corrector costs a singer who asks for it a delay that moves with the voice,
-from 1.2 ms up to 1.125 periods of it: 2.5 ms at most at 880 Hz, 11.2 at 110, 15 at the 82 Hz it
-stops at. Decision [0009](decisions/0009-reporting-the-corrector-delay.md) weighs that. Off, it hands
+from 0.1 ms at rest up to one period of it and 0.25 ms: 1.4 ms at most at 880 Hz, 9.3 at 110, 12.4
+at the 82 Hz it stops at, and 13.5 there shifted six semitones up. A rest moves it down to a quarter
+period above that floor where the input falls under -50 dBFS, and otherwise it holds. Decisions [0009](decisions/0009-reporting-the-corrector-delay.md) and
+[0021](decisions/0021-one-period-and-a-rest.md) weigh that. Off, it hands
 the voice over bit for bit with no delay and still reads pitch. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots, and a PCM ring
 a device's capture thread fills for `capture` slots. Slots are mono and pan with a constant-power
@@ -208,7 +212,7 @@ the network thread encodes into 10 ms Opus packets for mediasoup.
 | Opus frames accepted | 2.5, 5, 10, 20 ms                            | the phone's native module sends short frames; mediasoup sends 20       |
 | Return branch        | 10 ms Opus frames, in-band FEC on            | what the display's jitter buffer is tuned for today                    |
 | Level event          | 10 Hz, RMS and peak over 100 ms              | the device maps words at 5 Hz                                          |
-| Pitch event          | every 10 ms, batched per events-thread drain | the detector's own cadence                                             |
+| Pitch event          | every 10 ms, batched per events-thread drain | every second reading, as much as the display and the score use         |
 
 | Ramp                       | Length                            |
 | -------------------------- | --------------------------------- |
@@ -460,7 +464,7 @@ pub struct LiveKey;        // two pre-allocated stretchers; bypassed until the f
 pub struct PitchCorrector;  // new(rate), set_target(mask, strength, retune_ms), process(in, out), reset(), detected(), latency_samples(), shift_semitones()
 pub struct Stretch;         // new(channels, rate, preset), set_transpose_semitones(f32), process(planar in, planar out), latency_frames()
 pub struct Reverb;          // new(rate), set(room_size, mix), process(mono in place): a slot is mono until its pan
-pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: the corrector's detector
+pub struct YinDetector;     // new(rate, window_samples), analyze(window) -> Pitch: one window of the corrector's reader
 pub struct VoiceShifter;    // new(rate), set(semitones, formant_factor), process(in, out), reset(), latency_samples(), latency_bound_samples(rate, semitones, hz): pitch and formants apart, on the mic path
 pub struct EchoHistory;     // new(), push(left, right) folds a block to mono, read(lag, out): the frames ending `lag` before the next one
 pub struct EchoCanceller;   // new(rate), process(history, own, SourceDelay, block) in place, reset(), findings() -> Option<EchoFindings>; adds no delay
@@ -1243,8 +1247,11 @@ within 5 cents after the crossfade.
 
 ### 8.6 Kernels and slot effects: `kernels/`, `engine/src/slot/effects/`
 
-The C++ leaves and the Rust stages that drive them. The corrector's sources come from Aeon
-Karaoke's `lib/dsp/pitch-corrector` at a named commit, with its vendored FFT. The stretcher is
+The C++ leaves and the Rust stages that drive them. The corrector's sources start from Aeon
+Karaoke's `lib/dsp/pitch-corrector` at a named commit, with its vendored FFT; `PitchReader` and the
+period refinement are ours, [decision 0010](decisions/0010-pitch-reading.md), as are `NoteCentre`
+([0013](decisions/0013-note-centre.md)) and the shifter's delay
+([0021](decisions/0021-one-period-and-a-rest.md)). The stretcher is
 signalsmith-stretch. The reverb is a Rust port of Freeverb. The voice shifter is Rust of our own,
 [decision 0004](decisions/0004-voice-shifter.md) has why and its delay bound. Each C++ kernel gets
 an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
@@ -1254,8 +1261,10 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   every 10 ms. Position comes from the playhead as section 3 describes, which makes it exact.
 - At strength zero the corrector is bypassed with no delay and still reads pitch. Its readings
   then carry no target and no error, since nothing pulls.
-- A reading carries the note the follower set for the run it closes and the kernel's error at
-  that reading, so the target and the error a host shows are the ones the shifter acts on.
+- A reading carries the note the follower set for the run it closes and the error of that reading
+  against the class nearest it, so a host's pitch and error always come from one reading. The
+  shifter acts on its own newer reading. An error is 0 while unvoiced and when that reading is under
+  the corrector's bar.
 - A reading also carries `shift_semitones`, the transposition the voice at its centre came out
   of the shifter with, and `pulling`, whether the kernel was pulling as it read: a voice it
   hears, a class to pull it to, and a strength over 0. The corrected voice sat
@@ -1268,6 +1277,13 @@ an `extern "C"` shim and a safe Rust wrapper; the shim is the only `unsafe`.
   whole as `Event::Pitch { slot, reading }`, so a new field is written once. The binding maps
   `reading.*` to the `pitch` event, `targetMidi` from `note`'s `midi`, and carries none of the
   shift, the pull or the start yet; the scorecard reads them (8.9).
+- The corrector reads every 5 ms from the shortest window that holds the voice and steers from
+  where the voice is now. A published reading is still the longest window's, every 10 ms at its
+  centre, so readings stay evenly spaced and in order whichever window steers.
+  [Decision 0010](decisions/0010-pitch-reading.md) has the numbers.
+- A note lands at the singer's retune. Once the voice swings around it, the note is held: the
+  correction follows its centre over 120 ms and leaves the vibrato alone, which changes only the
+  control signal. [Decision 0013](decisions/0013-note-centre.md) has the numbers.
 - The echo canceller is SpeexDSP's MDF ported to Rust, in the slot's 128-frame block, behind a delay
   finder after AEC3's; the howl guard ducks the slot 12 dB when a narrow tone with no harmonic above
   it and no fundamental under it keeps growing, following two tones from the four strongest narrow
@@ -1900,7 +1916,7 @@ Each is deliberate and here so no one reverts it by accident.
   the settings and research in decision 0014. They come through the corrector's shifter, which
   reads its delay line at the product of the correction and the octave, so a voice with
   correction costs the corrector's one delay and `correctorDelayMs` reports it. Through the voice
-  stage's own shifter they would cost a second delay, up to 31.5 ms at 82 Hz with correction on.
+  stage's own shifter they would cost a second delay, up to 30 ms at 82 Hz with correction on.
   The pitch knob joins the contract with that work, and where it lives (with the corrector's
   knobs, or only with a guide) is that work's to decide. It starts once the corrector's shifter
   has settled, since it changes the same kernel, and is about four pull requests: the contract

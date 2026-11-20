@@ -34,8 +34,8 @@ impl Programme {
     }
 
     /// A sung vowel at `hz` ahead of each chirp, for the corrector to act on, and the short chirp
-    /// it leaves alone. Twelve phrases, each 25 ms longer than the last, leave its delay at as
-    /// many heights of its sawtooth.
+    /// it leaves alone. Twelve phrases, each 25 ms longer than the last, end at as many heights of
+    /// its sawtooth, and the rest after each moves those above a quarter period down to it.
     pub fn corrected(hz: f64) -> Self {
         let phrases = Phrases {
             hz,

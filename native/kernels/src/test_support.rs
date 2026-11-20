@@ -21,12 +21,47 @@ pub fn harmonic_tone(hz: f64, seconds: f64) -> Vec<f32> {
         .collect()
 }
 
+/// A voice whose pitch follows `hz_at` a sample at a time, with no break in phase, and whose
+/// harmonics are `levels`, the first being the fundamental.
+pub fn sung(frames: usize, levels: &[f64], hz_at: impl Fn(usize) -> f64) -> Vec<f32> {
+    let mut phase = 0.0f64;
+    (0..frames)
+        .map(|i| {
+            phase = (phase + hz_at(i) / f64::from(RATE)) % 1.0;
+            let sample: f64 = levels
+                .iter()
+                .enumerate()
+                .map(|(h, level)| (2.0 * PI * (h + 1) as f64 * phase).sin() * level)
+                .sum();
+            (0.25 * sample) as f32
+        })
+        .collect()
+}
+
+/// The levels of `harmonic_tone`: twelve harmonics falling as 1/h.
+pub fn buzz() -> Vec<f64> {
+    (1..=12).map(|h| 1.0 / f64::from(h)).collect()
+}
+
 pub fn cents_between(hz: f64, reference: f64) -> f64 {
     1200.0 * (hz / reference).log2()
 }
 
 pub fn midi_hz(midi: f64) -> f64 {
     440.0 * 2f64.powf((midi - 69.0) / 12.0)
+}
+
+/// A YIN reading of `signal` every 10 ms from `from` to `to` seconds, in cents from `reference` Hz.
+/// The 1024-sample window keeps 98 percent of a 5.5 Hz vibrato's depth; unvoiced frames are left out.
+pub fn cents_track(signal: &[f32], from: f64, to: f64, reference: f64) -> Vec<f64> {
+    let rate = f64::from(RATE);
+    let mut yin = YinDetector::new(RATE, 1024);
+    ((from * rate) as usize + 1024..=(to * rate) as usize)
+        .step_by(RATE as usize / 100)
+        .map(|end| f64::from(yin.analyze(&signal[end - 1024..end]).hz))
+        .filter(|hz| *hz > 0.0)
+        .map(|hz| cents_between(hz, reference))
+        .collect()
 }
 
 /// The median YIN reading over every 10 ms frame between `from` and `to` seconds of `signal`.

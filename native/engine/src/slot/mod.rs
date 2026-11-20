@@ -355,14 +355,17 @@ mod tests {
 
     // Whatever a voice leaves the delay at, the audio is that late: a click in the rest after a
     // phrase arrives where stats said it would, to within the one frame the shifter's fractional
-    // read point can round to. The phrase lengths leave the sawtooth at different heights.
+    // read point can round to. A silent rest moves the read point down to a quarter period above
+    // the floor unless it already sits lower, so the phrase lengths and two voices an octave apart
+    // leave it at different heights.
     #[test]
     fn stats_reads_the_delay_the_audio_has() {
         const REST: usize = RATE as usize / 5;
         let mut heights = Vec::new();
-        for phrase in (RATE as usize / 5..RATE as usize / 2).step_by(RATE as usize / 40) {
-            // 40 cents above A2, so the shift keeps the read point moving
-            let mut input: Vec<f32> = (0..phrase).map(|frame| voice(112.6, frame)).collect();
+        let phrases = (RATE as usize / 5..RATE as usize / 2).step_by(RATE as usize / 40);
+        // 40 cents above A2 and A3, so the shift keeps the read point moving
+        for (phrase, hz) in phrases.zip([112.6, 225.2].into_iter().cycle()) {
+            let mut input: Vec<f32> = (0..phrase).map(|frame| voice(hz, frame)).collect();
             input.resize(phrase + REST, 0.0);
             let click = input.len();
             input.push(0.5);
@@ -440,8 +443,9 @@ mod tests {
         let read = YinDetector::new(RATE, window).analyze(&left[left.len() - window..]);
         let cents = 1200.0 * (f64::from(read.hz) / (220.0 * 2f64.powf(100.0 / 1200.0))).log2();
         assert!(cents.abs() < 10.0, "came out {cents:+.1} cents from B flat 3");
-        // The shifter's floor, and at most an eighth over one period of the voice
-        let bound = 64 + (1.125 * f64::from(RATE) / a3_sharp) as u32;
+        // The shifter's floor at a shift of 70 cents up, and one period of the voice
+        let crossfade_room = ((2f64.powf(70.0 / 1200.0) - 1.0) * 128.0).ceil();
+        let bound = (5.0 + crossfade_room + f64::from(RATE) / a3_sharp + 2.0) as u32;
         assert!(most > 0 && most <= bound, "delay reached {most} frames, bound {bound}");
     }
 

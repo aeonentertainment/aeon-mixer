@@ -33,8 +33,8 @@ pitch move through this stage's own shifter would cost the bound in decision 000
 16.5, 13.0, 7.9 and 2.6 ms at 82, 110, 220 and 880 Hz, any shift down 13.9, 10.4, 5.3 and 1.4 ms. On
 vocadito an octave up averaged 4.3 to 6.9 ms per clip and reached 15.9; down, 2.6 to 5.3 and 13.8.
 
-The corrector already holds the voice in a delay line of its own, up to 15 ms. A slot with
-correction and an octave voice on would pay both, up to 31.5 ms for an 82 Hz voice, over the whole
+The corrector already holds the voice in a delay line of its own, up to 13.5 ms. A slot with
+correction and an octave voice on would pay both, up to 30 ms for an 82 Hz voice, over the whole
 budget before a phone or the network is counted. A corrector's shift and an octave are both a
 ratio, so one line can read the voice at their product and the octave adds nothing that correction
 does not already cost. The corrector's shifter is where that line is, and work on it stands on #67

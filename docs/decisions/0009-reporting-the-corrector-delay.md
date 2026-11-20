@@ -5,18 +5,19 @@
 ## The problem
 
 The corrector's shifter reads the voice back from a delay line. The delay climbs or falls with the
-shift, jumps by a pitch period at the end of its range, and stays where it is when the voice stops.
-On the golden vocal, one read per second gave 10.0, 1.2, 7.2, 7.6, 7.9, 1.3, 4.4 ms. A host needs
-something to do with that, and #44 first proposed adding the current figure to its configured
-latency.
+shift, jumps by a pitch period at the end of its range, and moves down once the voice stops
+(decision 0021; before #112 it stayed where it was). On the golden vocal, one read per second
+gave 10.0, 1.2, 7.2, 7.6, 7.9, 1.3, 4.4 ms. A host needs something to do with that, and #44 first
+proposed adding the current figure to its configured latency.
 
 ## Decision
 
 `stats()` gives each slot two numbers. Both read 0 with correction off.
 
 - **`correctorDelayMs`** is the delay as it stands, for a status panel or a log.
-- **`correctorMaxDelayMs`** is 15 ms: the shifter's floor and 1.125 periods of the lowest voice it
-  corrects, 82 Hz. It holds still, so a latency budget adds this one.
+- **`correctorMaxDelayMs`** is 13.5 ms: the shifter's floor six semitones up and one period of the
+  lowest voice it corrects, 82 Hz. It was 15 ms, with 1.125 periods, until #112 (decision
+  0021). It holds still, so a latency budget adds this one.
 
 Neither enters a clock. Nothing can play a live voice early, so there is no compensation for a
 moving figure to drive. The guide clock and a pitch reading's position both name the corrector's
@@ -66,10 +67,12 @@ GStreamer's figures sit inside the span: 10 of the 100 offsets give a p95 at or 
 max at or under 10.3. Decoding with ffmpeg in place of the engine's decoder reproduces #43's four
 offsets to 0.1 ms, so the decoder is not the gap either.
 
-The reason p95 moves so far is that the delay freezes in a rest and most of this clip is rest: 2840
-of the 3750 blocks in the window are unvoiced. At offset 0, the top 5 percent is 194 blocks and only
-8 are voiced. Nearly all of it is one 0.47 s rest, from 10.25 s, held at 11.9 ms. A statistic over
-time mostly says where the sawtooth stopped before the longest rest.
+The reason p95 moved so far, before #112, is that the delay froze in a rest and most of this clip is
+rest: 2840 of the 3750 blocks in the window are unvoiced. At offset 0, the top 5 percent was 194
+blocks and only 8 were voiced. Nearly all of it was one 0.47 s rest, from 10.25 s, held at 11.9 ms.
+A statistic over time mostly said where the sawtooth stopped before the longest rest. A rest quiet
+enough now moves the delay down (decision 0021), so `measure-corrector` also reports it where the
+voice sounds and where a line starts.
 
 The voice is also really that low. Its guide reaches down to MIDI 40 and a tenth of its voiced
 readings sit under 87 Hz, so 13 ms is what such a voice costs and does not point to a detector error.
@@ -77,15 +80,17 @@ readings sit under 87 Hz, so 13 ms is what such a voice costs and does not point
 I did not run the GStreamer harness, since that writes into Aeon Karaoke's tree, so this shows the
 gap is within the spread and does not show why that one run landed where it did.
 
-Draining the delay to its floor during a rest looks like a free win and is not. In a scratch build,
-the first voiced block after a rest of 100 ms or more went from a median of 5.0 to 1.6 ms, but the
-voiced mean only went from 5.2 to 4.6 and the voiced p95 rose from 9.2 to 10.5: a voice shifting up
-from the floor jumps a period back at once. It is not worth a change to the shifter on these numbers.
+Draining the delay to its floor during a rest was tried here and lost: the first voiced block after
+a rest of 100 ms or more went from a median of 5.0 to 1.6 ms, but the voiced p95 rose from 9.2 to
+10.5, because a voice shifting up from the floor jumps a period back at once. #112 moves it to a
+quarter period above the floor instead, which leaves that voice room, and on the same clip the
+voiced p95 fell to 5.6 ms (decision 0021).
 
 ## When correction is worth its cost
 
-What a slot pays depends on the voice. On a held tone the most it reaches is 2.5 ms at 880 Hz, 3.7 at
-440, 6.25 at 220, 11.2 at 110 and 14.6 at 82.5, and the mean sits near half that. A singer who has not
+What a slot pays depends on the voice. On a held tone the most it reaches is 1.3 ms at 880 Hz, 2.5 at
+440, 4.8 at 220, 9.4 at 110 and 12.0 at 82.5, and the mean sits near half that. Before #112 these
+were 2.5, 3.7, 6.25, 11.2 and 14.6. A singer who has not
 asked pays nothing, which a test holds bit for bit. Without a guide the corrector pulls to the nearest
 semitone at the same delay, so Aeon Karaoke's rule that a song without a guide is not corrected should
 carry over to this engine.
@@ -93,7 +98,7 @@ carry over to this engine.
 Whether it fits the budget needs a mic-path figure, and the hardware ones do not exist. As arithmetic
 across sources, against decision 0008's 20 to 30 ms with correction included, every path is over it
 today. A house mic over l16 is about 22 to 25 ms offline plus 9.8 to 20 ms of output on a Mac, 32 to
-45 ms, before correction adds anything; the 15 ms ceiling takes it to 47 to 60 ms. A phone is 71 to
+45 ms, before correction adds anything; the 13.5 ms ceiling takes it to 46 to 59 ms. A phone is 71 to
 114 ms with 20 ms frames and its capture, and correction adds about 5 ms on average to that. So the
 corrector's delay is one of several stages that have to shrink: #56's chosen playout delay takes
 about 11 ms off the engine's share, and the sender's frame size is worth 21.5 ms by #61's
@@ -111,8 +116,9 @@ it. A short signal passes, since the detector's 43 ms window barely holds it. At
 both arrived exactly at the delay read before them.
 
 So the row plays an off-pitch voiced phrase, then a rest, then the short sweep, through the existing
-`MatchedFilter`. The phrase's length sets how far the delay has moved, and the row prints the span for
-a low, middle and high voice.
+`MatchedFilter`. Since #112 the rest, silent offline, moves the delay down to a quarter period above
+the shifter's floor unless it already sits lower, so the sweep mostly meets that height, and the row prints the
+span it found for a low, middle and high voice.
 
 Through Opus the onset rule took noise for the sweep. At 64 kb/s the codec leaves peaks 15 to 20 dB
 under the short sweep's and ahead of it, inside the rule's 20 dB, and with the corrector off it
@@ -124,8 +130,8 @@ delay read before the sweep.
 
 ## Not measured
 
-- Whether anyone hears the delay move, or how a singer takes 15 ms against 5.
+- Whether anyone hears the delay move, or how a singer takes 13.5 ms against 5.
 - Any hardware figure, or any phone stream.
-- The ceiling is a measured one: 717 frames against 720 at 82 Hz, with targets flipping by up to six
-  semitones. Working from the code alone, a shift that reverses during a jump's crossfade could pass
-  it by up to 37 frames. That did not occur in these runs.
+- The ceiling is a measured one: 637 frames against 648 at 82 Hz, with targets flipping by up to six
+  semitones. Since #112 neither read point can pass the newest sample when a shift reverses during a
+  jump's crossfade, which before could have passed the ceiling by up to 37 frames.
