@@ -7,6 +7,7 @@ use engine::block::RATE;
 use engine::params::CorrectorParams;
 use engine::slot::guide::{Guide, Note};
 use kernels::EVERY_PITCH_CLASS;
+use kernels::fixtures::{self, BUZZ};
 use serde_json::{Value, json};
 
 use crate::chain::{Input, Setup, frames_of_ms, run};
@@ -16,21 +17,10 @@ use crate::music::{cents, median};
 
 const A3: f64 = 220.0;
 
-/// Twelve harmonics falling as 1/h, the buzz of a sung vowel, following `hz_at(ms)`. Silent where
-/// that says 0.
+/// The fixtures' sung vowel, `kernels::fixtures::harmonic_voice`, following `hz_at(ms)`, the clock
+/// every row of this tool keeps. Silent where that says 0.
 pub fn harmonic_voice(frames: usize, hz_at: impl Fn(f64) -> f64) -> Vec<f32> {
-    let mut phase = 0.0f64;
-    (0..frames)
-        .map(|i| {
-            let hz = hz_at(i as f64 * 1000.0 / f64::from(RATE));
-            phase = (phase + hz / f64::from(RATE)) % 1.0;
-            if hz <= 0.0 {
-                return 0.0;
-            }
-            let sample: f64 = (1..=12).map(|h| (TAU * h as f64 * phase).sin() / h as f64).sum();
-            (0.25 * sample) as f32
-        })
-        .collect()
+    fixtures::harmonic_voice(frames, &BUZZ, |i| hz_at(i as f64 * 1000.0 / f64::from(RATE)))
 }
 
 /// A corrector setting worth reading on a known voice.

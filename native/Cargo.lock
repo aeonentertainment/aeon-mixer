@@ -329,6 +329,7 @@ version = "0.0.0"
 dependencies = [
  "assert_no_alloc",
  "cc",
+ "kernels",
  "realfft",
 ]
 
@@ -391,6 +392,7 @@ dependencies = [
  "assert_no_alloc",
  "devices",
  "engine",
+ "kernels",
  "opus",
  "rtrb",
  "rustfft",

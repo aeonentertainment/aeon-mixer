@@ -6,6 +6,7 @@ use cpu_time::ThreadTime;
 use engine::block::RATE;
 use engine::params::{CleanupParams, CorrectorParams};
 use engine::slot::guide::Guide;
+use kernels::fixtures::{BUZZ, harmonic_voice};
 use kernels::{EVERY_PITCH_CLASS, PitchCorrector};
 use serde_json::{Value, json};
 
@@ -19,17 +20,15 @@ const OFF: CorrectorParams = CorrectorParams { enabled: false, strength: 0.0, re
 /// A buzzy 180 Hz tone with vibrato and a little noise, sixty seconds of it, which is what the
 /// core's bench in Aeon Karaoke times.
 fn bench_voice() -> Vec<f32> {
-    let frames = 60 * RATE as usize;
     let mut rng = Lcg(7);
-    let mut phase = 0.0f64;
-    (0..frames)
-        .map(|i| {
-            let t = i as f64 / f64::from(RATE);
-            let hz = 180.0 * 2f64.powf(0.03 * (std::f64::consts::TAU * 5.5 * t).sin());
-            phase += std::f64::consts::TAU * hz / f64::from(RATE);
-            let buzz: f64 = (1..=12).map(|h| (f64::from(h) * phase).sin() / f64::from(h)).sum();
-            0.3 * buzz as f32 + 0.01 * rng.signed()
-        })
+    let vibrato = |i: usize| {
+        let t = i as f64 / f64::from(RATE);
+        180.0 * 2f64.powf(0.03 * (std::f64::consts::TAU * 5.5 * t).sin())
+    };
+    // 1.2 times the fixture's quarter scale is the 0.3 the core's bench sings at
+    harmonic_voice(60 * RATE as usize, &BUZZ, vibrato)
+        .into_iter()
+        .map(|voice| 1.2 * voice + 0.01 * rng.signed())
         .collect()
 }
 

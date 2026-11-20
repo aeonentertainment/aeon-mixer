@@ -1,26 +1,13 @@
-//! What the backing tests share: a voice-shaped tone, a way to read its pitch, and its level.
+//! What the backing tests share: a way to read a tone's pitch, and its level. The tone they play is
+//! `kernels::fixtures::harmonic_voice`.
 
 use std::f32::consts::TAU;
-use std::f64::consts::PI;
 
 use kernels::YinDetector;
 
 use crate::block::RATE;
 
 pub const SECOND: usize = RATE as usize;
-
-/// Twelve harmonics falling as 1/h at `hz`: a tone the stretcher and the detector both treat as
-/// music, peaking near 0.5.
-pub fn harmonic_tone(hz: f64, frames: usize) -> Vec<f32> {
-    (0..frames)
-        .map(|i| {
-            let t = i as f64 / f64::from(RATE);
-            let sample: f64 =
-                (1..=12).map(|h| (2.0 * PI * hz * h as f64 * t).sin() / h as f64).sum();
-            (0.25 * sample) as f32
-        })
-        .collect()
-}
 
 /// The median YIN reading over every 10 ms window of `signal`.
 pub fn median_pitch(signal: &[f32]) -> f64 {

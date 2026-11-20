@@ -10,7 +10,7 @@ publish.workspace = true
 assert_no_alloc = "1.1"
 cpu-time = "1.0"
 engine = { workspace = true }
-kernels = { workspace = true }
+kernels = { workspace = true, features = ["fixtures"] }
 opus = "0.4.0"
 rustfft = "6"
 serde_json = { version = "1", features = ["float_roundtrip"] }

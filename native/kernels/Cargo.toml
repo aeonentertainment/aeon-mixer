@@ -10,7 +10,7 @@ publish.workspace = true
 realfft = "3.5.1"
 
 [features]
-# Synthetic signals for the echo stages' tests and measurements in other crates
+# Synthetic signals, a sung vowel among them, for tests, benches and tools in every crate
 fixtures = []
 
 [build-dependencies]
@@ -18,3 +18,5 @@ cc = "1"
 
 [dev-dependencies]
 assert_no_alloc = "1.1"
+# The examples sing with the fixtures; a test build has them anyway
+kernels = { path = ".", features = ["fixtures"] }

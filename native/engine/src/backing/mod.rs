@@ -157,7 +157,8 @@ mod tests {
     use crate::command::{Command, Event, event_ring};
     use crate::driver::OfflineDriver;
     use crate::graph::Graph;
-    use test_support::{SECOND, cents_between, harmonic_tone, median_pitch, rms_at, sine, wav};
+    use kernels::fixtures::{BUZZ, harmonic_voice};
+    use test_support::{SECOND, cents_between, median_pitch, rms_at, sine, wav};
 
     /// A graph holding only `backing`, swapped into an offline engine and started on its first
     /// block, so output frame `n` is backing frame `n`.
@@ -275,7 +276,7 @@ mod tests {
         // Half a second of silence, three of tone, one of silence: the tone's edges show whether
         // the stretcher's lead was trimmed and its tail flushed
         let mut track = vec![0.0; SECOND / 2];
-        track.extend(harmonic_tone(220.0, 3 * SECOND));
+        track.extend(harmonic_voice(3 * SECOND, &BUZZ, |_| 220.0));
         track.resize(track.len() + SECOND, 0.0);
         let progress = std::sync::atomic::AtomicU32::new(0);
         let stems = prerender(Stems::new(stereo(track), None), 0, 1.09, &progress);
@@ -344,7 +345,7 @@ mod tests {
 
     #[test]
     fn a_live_key_change_of_two_semitones_moves_a_tone_two_semitones() {
-        let tone = harmonic_tone(220.0, 3 * SECOND);
+        let tone = harmonic_voice(3 * SECOND, &BUZZ, |_| 220.0);
         let mut rig = Rig::new(Backing::new(Stems::new(stereo(tone), None), 0));
         rig.pump(SECOND / 4);
         rig.send(Command::SetKey { id: 3, semitones: 2 });

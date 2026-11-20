@@ -72,7 +72,8 @@ mod tests {
     use assert_no_alloc::assert_no_alloc;
 
     use super::*;
-    use crate::test_support::{RATE, harmonic_tone};
+    use crate::fixtures::{BUZZ, harmonic_voice};
+    use crate::test_support::RATE;
 
     /// The wet signal an impulse leaves, in 128-frame blocks under the allocation guard.
     fn impulse_response(room_size: f32, seconds: f64) -> Vec<f32> {
@@ -92,7 +93,7 @@ mod tests {
 
     #[test]
     fn mix_zero_is_the_input_itself() {
-        let input = harmonic_tone(220.0, 0.1);
+        let input = harmonic_voice(RATE as usize / 10, &BUZZ, |_| 220.0);
         let mut output = input.clone();
         let mut reverb = Reverb::new(RATE);
         reverb.set(0.8, 0.0);
