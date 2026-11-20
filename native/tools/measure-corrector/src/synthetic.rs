@@ -168,7 +168,7 @@ fn held_off(hz: f64, cents_off: f64) -> (f64, u32) {
 /// corrector's own.
 fn warble_rows() -> Value {
     let frames = RATE as usize * 4;
-    let voices: [(&str, Vec<f32>); 3] = [
+    let voices = [
         ("steady", harmonic_voice(frames, |_| A3 * 2f64.powf(-40.0 / 1200.0))),
         (
             "vibrato",
