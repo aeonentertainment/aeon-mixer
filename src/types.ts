@@ -12,6 +12,12 @@ export type Capability =
   | "pause"
   | "level";
 export type IngestKind = "rtp" | "l16" | "push" | "capture";
+/**
+ * Where an `rtp` slot listens. `"loopback"`, the default, takes datagrams from senders on this
+ * machine only, as an `l16` slot always does. `"every-interface"` binds every interface, for a
+ * sender on another machine.
+ */
+export type SlotListen = "loopback" | "every-interface";
 
 /**
  * How a device reaches the machine, as its OS or driver reports it; decision 0025 maps each OS.
@@ -85,12 +91,14 @@ export interface OutputInfo {
 }
 
 /**
- * One slot as a mixer asks for it. A `capture` slot is an input on this machine, a house mic:
- * `device` is an id from `inputDevices()`, the default input when left out, and `channel` the
- * device's channel from 0, default 0.
+ * One slot as a mixer asks for it. An `rtp` slot listens where `listen` says, loopback when left
+ * out. A `capture` slot is an input on this machine, a house mic: `device` is an id from
+ * `inputDevices()`, the default input when left out, and `channel` the device's channel from 0,
+ * default 0.
  */
 export type SlotConfig =
-  | { kind: Exclude<IngestKind, "capture"> }
+  | { kind: "rtp"; listen?: SlotListen }
+  | { kind: "l16" | "push" }
   | { kind: "capture"; device?: string; channel?: number };
 
 /**

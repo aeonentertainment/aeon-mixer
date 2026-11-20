@@ -123,6 +123,15 @@ test("the slot count and the playout delay are checked before anything crosses",
   await engine.close();
 });
 
+test("an unknown listen on an rtp slot is refused before anything crosses", async () => {
+  const engine = await openEngine({ output: { offline: true } });
+  // @ts-expect-error a JavaScript caller can spell listen any way
+  await expect(engine.createMixer({ slots: [{ kind: "rtp", listen: "lan" }] })).rejects.toThrow(
+    "slots[0].listen must be loopback or every-interface, got lan",
+  );
+  await engine.close();
+});
+
 test("an rtp slot records to a new pcap file, and a push slot or an existing file refuses", async () => {
   const dir = await mkdtemp(join(tmpdir(), "aeon-mixer-record-"));
   const engine = await openEngine({ output: { offline: true } });

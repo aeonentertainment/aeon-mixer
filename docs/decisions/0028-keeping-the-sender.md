@@ -1,11 +1,12 @@
 # 0028: An rtp slot keeps the sender it is receiving from
 
-**Status:** accepted, 2026-11-15, ahead of the code in #201.
+**Status:** accepted, 2026-11-15, ahead of the code in #201. Since decision 0030 an `rtp` slot
+listens on loopback unless the host asks for every interface, so "every interface" below is the
+wider bind a host chooses, no longer the default.
 
 ## The problem
 
-An `rtp` slot listens on every interface, since phones send over the LAN, and it took a datagram
-from any address. The receiver read the source with `recv_from` and dropped it, and the jitter
+An `rtp` slot listened on every interface, and it took a datagram from any address. The receiver read the source with `recv_from` and dropped it, and the jitter
 buffer re-anchored on any new SSRC at once. A second sender that reached a slot's port took the
 slot from the singer for as long as it kept sending, and the two took turns re-anchoring it.
 

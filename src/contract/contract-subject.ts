@@ -50,8 +50,8 @@ export interface ContractOptions<E extends ContractEngine> {
 }
 
 /**
- * What a promise's check needs beyond the calls every check makes: what the engine plays, a
- * loopback socket on an `l16` slot, or a move to another output.
+ * What a promise's check needs beyond the calls every check makes: what the engine plays, a socket
+ * on an `rtp` or `l16` slot, or a move to another output.
  */
 export type Need = "rendering" | "sockets" | "outputMoves";
 

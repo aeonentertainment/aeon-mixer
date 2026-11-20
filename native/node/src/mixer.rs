@@ -60,7 +60,9 @@ impl Mixer {
                             .map_err(|_| Error::from_reason("a channel is at most 65535"))?;
                         Ingest::capture(input.device, channel, output_frames)?
                     }
-                    kind => Ingest::open(kind, playout_delay_frames, network)?,
+                    kind => {
+                        Ingest::open(kind, input.listen.as_deref(), playout_delay_frames, network)?
+                    }
                 };
                 Ok((ingest, Slot::new(source)))
             })

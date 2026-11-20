@@ -488,6 +488,7 @@ export type Capability =
   | "pause"
   | "level";
 export type IngestKind = "rtp" | "l16" | "push" | "capture";
+export type SlotListen = "loopback" | "every-interface";
 export type StemKind = "instrumental" | "guideVocals";
 
 export interface OpenEngineOptions {
@@ -598,9 +599,13 @@ export interface Engine {
   close(): Promise<void>;
 }
 
-/** A `capture` slot's `device` is an id from `inputDevices()`, or the default input; `channel` is the device's, default 0. */
+/**
+ * An `rtp` slot listens where `listen` says, loopback when left out (8.4). A `capture` slot's `device` is an id from `inputDevices()`, or the default
+ * input; `channel` is the device's, default 0.
+ */
 export type SlotConfig =
-  | { kind: Exclude<IngestKind, "capture"> }
+  | { kind: "rtp"; listen?: SlotListen }
+  | { kind: "l16" | "push" }
   | { kind: "capture"; device?: string; channel?: number };
 
 /**
@@ -1015,9 +1020,12 @@ pushes fixed-size packets into the slot's ring. The RTCP mediasoup multiplexes o
 port is dropped by its payload type, RFC 5761's reserved range. The audio thread drains the
 ring into the jitter buffer at the top of each block.
 
-An `rtp` slot listens on every interface, since phones send over the LAN. An `l16` slot listens
-on loopback only: its sender is the house-mic sender on the device, and nothing else on the LAN
-should reach that slot.
+A slot takes audio only from as far away as the host says. An `rtp` slot listens on loopback
+unless its `listen` is `"every-interface"`, which a host asks for when the slot's sender is on
+another machine, as a phone sending straight to the engine is. An `l16` slot listens on loopback
+only: its sender is the house-mic sender on this machine. A sender the host did not intend cannot
+become a slot's first sender (decision 0028) from a machine the slot does not listen to. Decision
+[0030](decisions/0030-listening-where-the-host-says.md) has the reasons.
 
 - The jitter buffer anchors the first packet's RTP timestamp to the output clock plus the
   playout delay, and a single late packet never moves that anchor. A missing packet at its due
@@ -1448,8 +1456,8 @@ section 7.2 with typed events and validation of ranges before anything crosses.
   looks to the host like a quiet room.
 - `src/contract/` is the contract suite, whose entry point and types are at the end of 7.2.
   Each promise is a sentence, checked on its own offline engines, and names what its check
-  needs beyond the calls every check makes: what the engine plays, a loopback socket, or a move
-  to another output. Where the subject lacks one (it gave no `moveOutput`, or its `limits` say it
+  needs beyond the calls every check makes: what the engine plays, a socket on an `rtp` or `l16`
+  slot, or a move to another output. Where the subject lacks one (it gave no `moveOutput`, or its `limits` say it
   renders no audio or opens no socket), the promise is unchecked with why and its check never
   runs, so the list of what needs what lives with the promises and a limit can excuse nothing
   else. The package states no limits, and its own suite runs it against the package.

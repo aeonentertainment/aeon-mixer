@@ -49,8 +49,9 @@ await engine.close();
 ```
 
 - **Slots** are the mics: 8 per engine by default, up to 16 with `openEngine({ slots })`. `rtp`
-  takes Opus over UDP from a phone or mediasoup, `l16` takes raw PCM over loopback from a house
-  mic's sender, `capture` takes a mic on this machine by an id from `engine.inputDevices()`, and
+  takes Opus over UDP, on loopback unless the slot asks for `{ kind: "rtp", listen:
+  "every-interface" }` for a sender on another machine, `l16` takes raw PCM over loopback from a
+  house mic's sender, `capture` takes a mic on this machine by an id from `engine.inputDevices()`, and
   `push` takes PCM the host hands to `mixer.push`. Each slot has gain, pan, mute, solo, reverb,
   a pitch reading, a melody guide and pitch correction toward it, whose delay `stats()` reports.
   A slot can also take the room's echo of the mix out of its input and duck itself when its loop
@@ -115,7 +116,7 @@ await engine.close();
   ```
 
   A stand-in that only records calls says what it does not do, `{ limits: ["rendersNoAudio",
-  "opensNoSocket"] }`, and each promise that needs what it plays or a loopback socket comes back
+  "opensNoSocket"] }`, and each promise that needs what it plays or a socket comes back
   in `unchecked` with why, not in `broken`. Every other promise is still checked.
 
 [docs/design.md](docs/design.md) section 7.2 has the full API. The reasons are in

@@ -272,11 +272,13 @@ export interface RtpReturnStats {
 }
 
 /**
- * One slot as `createMixer` asks for it. `device` and `channel` belong to a `capture` slot: an id
- * from `inputs`, or the default input, and the device's channel from 0.
+ * One slot as `createMixer` asks for it. `listen` belongs to an `rtp` slot: `"loopback"`, the
+ * default, or `"every-interface"`. `device` and `channel` belong to a `capture` slot: an id from
+ * `inputs`, or the default input, and the device's channel from 0.
  */
 export interface SlotInput {
   kind: string
+  listen?: string
   device?: string
   channel?: number
 }

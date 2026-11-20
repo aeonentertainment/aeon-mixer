@@ -89,8 +89,8 @@ Rejected:
 The whole datagram as the socket returned it, RTCP included, and not the parsed `Packet`. Replay
 then parses it through the receiver's own `packet_from`, so a fault in the parse or the RTCP
 filter replays too. The IPv4 source is the sender, the destination port the slot's. The
-destination address is 0.0.0.0, because the socket is bound on every interface and a datagram
-read from it does not say which one it came in on.
+destination address is 0.0.0.0: the record names the slot's port, not which address of this
+machine the slot listens on (decision 0030).
 
 ## Replay
 

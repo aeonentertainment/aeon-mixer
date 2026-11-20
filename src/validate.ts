@@ -2,9 +2,10 @@
 
 import { isIP } from "node:net";
 import type { RtpReturnInput, SlotInput } from "./native.ts";
-import type { IngestKind, MixerConfig, SlotConfig } from "./types.ts";
+import type { IngestKind, MixerConfig, SlotConfig, SlotListen } from "./types.ts";
 
 const INGEST_KINDS: ReadonlyArray<IngestKind> = ["rtp", "l16", "push", "capture"];
+const LISTENS: ReadonlyArray<SlotListen> = ["loopback", "every-interface"];
 
 /** A kind as a JavaScript caller may have spelt it, so an unknown one never crosses. */
 export function ingestKind(name: string, value: string) {
@@ -15,9 +16,22 @@ export function ingestKind(name: string, value: string) {
   return kind;
 }
 
-/** A slot as the addon takes it: its kind, and for a `capture` slot its device and channel. */
+/**
+ * A slot as the addon takes it: its kind, for an `rtp` slot where it listens, and for a `capture`
+ * slot its device and channel. A field that belongs to another kind is not read.
+ */
 export function slotInput(name: string, slot: SlotConfig): SlotInput & { kind: IngestKind } {
   const kind = ingestKind(`${name}.kind`, slot.kind);
+  if (slot.kind === "rtp") {
+    if (slot.listen === undefined) return { kind };
+    const listen = LISTENS.find((where) => where === slot.listen);
+    if (listen === undefined) {
+      throw new RangeError(
+        `${name}.listen must be loopback or every-interface, got ${slot.listen}`,
+      );
+    }
+    return { kind, listen };
+  }
   if (slot.kind !== "capture") return { kind };
   const { device, channel = 0 } = slot;
   if (device !== undefined && (typeof device !== "string" || device === "")) {

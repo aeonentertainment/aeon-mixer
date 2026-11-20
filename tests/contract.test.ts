@@ -1,5 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import { checkContract, type ContractEngine, type ContractLimit } from "../src/contract/index.ts";
+import { widerAddress } from "../src/contract/local-sender.ts";
 import { Emitter } from "../src/emitter.ts";
 import {
   type EngineEvents,
@@ -23,6 +24,9 @@ test("the package keeps every promise of its contract, and an offline engine has
   expect(report.broken).toEqual([]);
   expect(report.unchecked).toEqual([
     { promise: expect.stringMatching(/^After a move, `outputChanged`/), why: expect.any(String) },
+    ...(widerAddress() !== undefined
+      ? []
+      : [{ promise: expect.stringMatching(/^An `rtp` slot takes/), why: expect.any(String) }]),
   ]);
 }, 30_000);
 
@@ -184,6 +188,7 @@ const RENDERED = [
   "A slot's `tone` is null while its tone stage is off, and reports once it is on.",
 ];
 const SOCKETED = [
+  "An `rtp` slot takes datagrams from this machine only, unless its `listen` is `every-interface`.",
   "A slot playing one sender refuses every other address.",
   "After `resetSlot`, a slot takes a new sender at once.",
   "After `resetSlot`, a slot refuses the sender it released.",

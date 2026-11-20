@@ -31,11 +31,13 @@ pub enum Ingest {
 impl Ingest {
     /// Builds a slot's source for `kind` and keeps this end of it. An `rtp` or `l16` slot binds
     /// a port of the OS's choice and joins the network thread here, so a failure is the caller's
-    /// to see before the mixer exists. An `rtp` slot listens on every interface for phones; an
-    /// `l16` slot on loopback only, since its sender is the house-mic sender on this machine.
-    /// `playout_delay_frames` pins the delay; without it, each stream chooses its own.
+    /// to see before the mixer exists. Both listen on loopback, so they take audio only from this
+    /// machine, unless an `rtp` slot's `listen` is `"every-interface"`, for a sender on another
+    /// machine (decision 0030). `playout_delay_frames` pins the delay; without it, each stream
+    /// chooses its own.
     pub fn open(
         kind: &str,
+        listen: Option<&str>,
         playout_delay_frames: Option<u32>,
         network: &Network,
     ) -> Result<(Self, Box<dyn Source>)> {
@@ -45,8 +47,17 @@ impl Ingest {
                 Ok((Self::Push(feed), Box::new(voice)))
             }
             "rtp" => {
+                let ip = match listen {
+                    None | Some("loopback") => Ipv4Addr::LOCALHOST,
+                    Some("every-interface") => Ipv4Addr::UNSPECIFIED,
+                    Some(other) => {
+                        return Err(Error::from_reason(format!(
+                            "listen must be loopback or every-interface, got {other:?}"
+                        )));
+                    }
+                };
                 let codec = Codec::opus().map_err(|error| Error::from_reason(error.to_string()))?;
-                Self::listen(codec, Ipv4Addr::UNSPECIFIED, playout_delay_frames, network)
+                Self::listen(codec, ip, playout_delay_frames, network)
             }
             "l16" => Self::listen(Codec::L16, Ipv4Addr::LOCALHOST, playout_delay_frames, network),
             other => Err(Error::from_reason(format!("unknown slot kind {other:?}"))),

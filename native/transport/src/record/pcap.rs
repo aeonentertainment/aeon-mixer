@@ -34,7 +34,8 @@ pub fn global_header() -> [u8; GLOBAL_HEADER_LEN] {
 }
 
 /// One datagram as a pcap record, appended to `out`: `at` since the Unix epoch, from `source`
-/// to `port` on the unspecified address, which is all a socket bound on every interface knows.
+/// to `port` on the unspecified address. The record names the slot's port, not which address of
+/// this machine the datagram reached.
 pub fn append_record(
     out: &mut Vec<u8>,
     at: Duration,
