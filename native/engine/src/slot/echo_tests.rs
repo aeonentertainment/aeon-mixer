@@ -15,6 +15,7 @@ use crate::graph::Graph;
 use crate::params::{
     CorrectorParams, EchoCancelParams, EffectParams, HowlGuardParams, VoiceParams, params_channel,
 };
+use crate::slot::source::fixtures::Clip;
 
 const SECOND: usize = RATE as usize;
 
@@ -147,9 +148,7 @@ impl Scene {
         let report = mic_slot.echo_report();
         let (mut events, _drain) = event_ring();
         let mut graph = match self.seek {
-            None => {
-                Graph::new(vec![mic_slot, Slot::new(Box::new(Clip { samples: self.far, at: 0 }))])
-            }
+            None => Graph::new(vec![mic_slot, Slot::new(Box::new(Clip::new(self.far)))]),
             Some(_) => {
                 let mut graph = Graph::new(vec![mic_slot]);
                 let silent = vec![0.0; self.far.len()];
@@ -202,21 +201,6 @@ impl Scene {
         }
         let mic = std::iter::from_fn(|| mic_out.pop().ok()).collect();
         Run { mic, out, report, first_catch }
-    }
-}
-
-/// Hands over `samples`, then silence.
-struct Clip {
-    samples: Vec<f32>,
-    at: usize,
-}
-
-impl Source for Clip {
-    fn pull(&mut self, out: &mut [f32]) {
-        for sample in out {
-            *sample = self.samples.get(self.at).copied().unwrap_or(0.0);
-            self.at += 1;
-        }
     }
 }
 
@@ -492,7 +476,7 @@ fn a_swapped_in_mixer_finds_the_room_again() {
     let (frames, swap_at) = (11 * SECOND, 4 * SECOND);
     let far = backing(frames);
     let graph_for = |room: Room, far: &[f32]| {
-        let far = Clip { samples: far.to_vec(), at: 0 };
+        let far = Clip::new(far.to_vec());
         Box::new(Graph::new(vec![Slot::new(Box::new(room)), Slot::new(Box::new(far))]))
     };
     let (room_a, mut played_a, _) = room_for(living_room(), frames);
@@ -547,7 +531,7 @@ fn a_canceller_turned_off_after_learning_is_bit_for_bit_again() {
     let far = backing(frames);
     let path = living_room();
     let echo = kernels::fixtures::through(&far, &path);
-    let mut slot = Slot::new(Box::new(Clip { samples: echo.clone(), at: 0 }));
+    let mut slot = Slot::new(Box::new(Clip::new(echo.clone())));
     let report = slot.echo_report();
     let mut history = EchoHistory::new();
     let (mut events, _drain) = event_ring();

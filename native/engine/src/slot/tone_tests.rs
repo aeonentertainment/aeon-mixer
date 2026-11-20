@@ -16,25 +16,11 @@ use crate::driver::OfflineDriver;
 use crate::graph::Graph;
 use crate::params::{Params, ToneBand, ToneBands, ToneParams};
 use crate::slot::effects::tone::{Biquad, MOST_LATE_MS, Section};
+use crate::slot::source::fixtures::Clip;
 use crate::slot::tone_report::ToneFindings;
 
 const SECOND: usize = RATE as usize;
 const MS: usize = SECOND / 1000;
-
-/// Hands over `samples`, then silence.
-struct Clip {
-    samples: Vec<f32>,
-    at: usize,
-}
-
-impl Source for Clip {
-    fn pull(&mut self, out: &mut [f32]) {
-        for sample in out {
-            *sample = self.samples.get(self.at).copied().unwrap_or(0.0);
-            self.at += 1;
-        }
-    }
-}
 
 struct Run {
     left: Vec<f32>,
@@ -50,7 +36,7 @@ fn on_the_offline_driver(
     input: &[f32],
     mut tone: impl FnMut(usize) -> ToneParams + Send + 'static,
 ) -> Run {
-    let slot = Slot::new(Box::new(Clip { samples: input.to_vec(), at: 0 }));
+    let slot = Slot::new(Box::new(Clip::new(input.to_vec())));
     let report = slot.tone_report();
     let mut graph = Graph::new(vec![slot]);
     let (mut events, mut drain) = event_ring();

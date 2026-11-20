@@ -172,6 +172,11 @@ pub fn db(level: f32) -> f32 {
     20.0 * level.max(1e-12).log10()
 }
 
+/// The largest step between two neighbouring samples: a click stands out as one a voice never makes.
+pub fn steepest_step(signal: &[f32]) -> f32 {
+    signal.windows(2).map(|pair| (pair[1] - pair[0]).abs()).fold(0.0, f32::max)
+}
+
 /// `signal` at a moment `t` frames in, between its frames, as a converter on another clock
 /// samples it: a Hann-windowed sinc 32 frames wide. Linear interpolation would add a lowpass that
 /// sweeps with the two clocks' phase, which no real mic has. Silence outside the signal.

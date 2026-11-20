@@ -46,7 +46,7 @@ The exception ends when `measure-latency` (#40) shows a slot with correction eng
 now pays at most one period of the voice and 0.25 ms while correcting a quarter tone: 12.4 ms at
 82 Hz, 9.3 at 110, 4.8 at 220 and 1.4 at 880, against 15.0, 11.5, 6.4 and 2.5 before. Its ceiling,
 `correctorMaxDelayMs`, is 13.5 ms, from 15. A rest under -50 dBFS moves the delay down, so a sung
-line starts at 1.3 to 3.8 ms at the median on the clips measured, from 2.2 to 6.5; with the backing
+line starts at 0.9 to 3.0 ms at the median on the clips measured, from 2.2 to 6.5; with the backing
 heard over that floor, the delay holds through the rest. A period of the voice is what
 any splice that keeps the voice whole costs, so what is left of the corrector's share is the
 voice's own period, and the rest of the cut has to come from the other stages:

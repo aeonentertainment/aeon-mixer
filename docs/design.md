@@ -130,9 +130,11 @@ What the engine reports so the rest of the device can follow:
   engine knows, plus a host-set `guideOffsetMs` for what it cannot know: the phone's capture and
   the Wi-Fi.
 - An engaged corrector delays its slot's voice by an amount that moves with the voice. A rest
-  moves it down only where the input falls under -50 dBFS at both ends of the splice, and
-  otherwise the delay holds through the rest, as it usually does for a phone in a room with the
-  backing playing (decision [0021](decisions/0021-one-period-and-a-rest.md)). `stats()` gives each slot `correctorDelayMs`, the delay as it stands, and
+  moves it down only once the detector has let go and where the input falls under -50 dBFS at
+  both ends of the splice, and keeps it there while both hold; otherwise the delay holds, as it
+  usually does for a phone in a room with the backing playing (decision
+  [0021](decisions/0021-one-period-and-a-rest.md)). `stats()` gives each slot `correctorDelayMs`,
+  the delay as it stands, and
   `correctorMaxDelayMs`, its 13.5 ms ceiling; both read 0 with correction off. A host shows
   the first and budgets with the second. Neither enters a clock: nothing can play a live voice
   early, and the guide clock and a pitch reading both name the corrector's input, ahead of its
@@ -181,8 +183,9 @@ guard adds at most 0.2 ms while it ducks a pop. Decision
 [0029](decisions/0029-the-tone-stage.md) has the reasons and the numbers. The
 corrector costs a singer who asks for it a delay that moves with the voice,
 from 0.1 ms at rest up to one period of it and 0.25 ms: 1.4 ms at most at 880 Hz, 9.3 at 110, 12.4
-at the 82 Hz it stops at, and 13.5 there shifted six semitones up. A rest moves it down to a quarter
-period above that floor where the input falls under -50 dBFS, and otherwise it holds. Decisions [0009](decisions/0009-reporting-the-corrector-delay.md) and
+at the 82 Hz it stops at, and 13.5 there shifted six semitones up. A rest keeps it a quarter
+period above that floor while the detector hears no voice and the input stays under -50 dBFS,
+and otherwise it holds. Decisions [0009](decisions/0009-reporting-the-corrector-delay.md) and
 [0021](decisions/0021-one-period-and-a-rest.md) weigh that. Off, it hands
 the voice over bit for bit with no delay and still reads pitch. The source is a
 jitter buffer and decoder for `rtp` and `l16` slots, a PCM ring for `push` slots, and a PCM ring
