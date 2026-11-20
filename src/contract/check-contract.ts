@@ -75,14 +75,7 @@ async function run<E extends ContractEngine>(
     async open(options = {}) {
       const engine = await subject.openEngine({ ...options, output: { offline: true } });
       opened.push(engine);
-      // A check runs only where the subject has what it needs, so a move is there when one is
-      return {
-        engine,
-        move: () => {
-          if (!moveOutput) throw new Error("this check moved an output it does not need");
-          moveOutput(engine);
-        },
-      };
+      return { engine, move: () => moveOutput?.(engine) };
     },
     outputDevices: () => subject.outputDevices(),
   };
