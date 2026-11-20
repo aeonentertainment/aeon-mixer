@@ -8,11 +8,15 @@ import { BLOCK, startLive } from "../src/contract/offline-clock.ts";
 import { openEngine } from "../src/index.ts";
 import { destroyLive, SILENT_STATS } from "./offline.ts";
 
-/** Binds a second UDP socket to `port` the way a sender's neighbour would, and reports the error. */
+/**
+ * Binds a second UDP socket to `port` on loopback, where a slot listens unless asked otherwise, and
+ * reports the error. On the address the slot holds, since Windows lets a second socket take the
+ * same port on every interface.
+ */
 async function bindAgain(port: number) {
   const socket = createSocket("udp4");
   const failed = once(socket, "error").then(([error]: unknown[]) => error);
-  socket.bind(port);
+  socket.bind(port, "127.0.0.1");
   const outcome = await Promise.race([failed, once(socket, "listening").then(() => null)]);
   socket.close();
   return outcome;
