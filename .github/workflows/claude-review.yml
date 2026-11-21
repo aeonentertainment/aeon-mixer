@@ -88,7 +88,7 @@ jobs:
             --jq '.data.repository.pullRequest.reviewThreads.nodes[] | "## \(.path):\(.line // "outdated") (\(if .isResolved then "resolved" else "open" end))\n" + ([.comments.nodes[] | "[\(.author.login)] \(.body[0:2000])"] | join("\n\n")) + "\n"' \
             > .claude-review-history.md || echo "::warning::Could not read earlier review threads."
       - if: steps.token.outputs.present == 'true'
-        uses: anthropics/claude-code-action@8a29bc6f0ae11a363721054b6739feba6adabe57 # v1
+        uses: anthropics/claude-code-action@e5812cd75691ca7bbfc57c0ecf4441db3a1ab7dd # v1
         with:
           claude_code_oauth_token: ${{ secrets[format('CLAUDE_CODE_OAUTH_TOKEN_{0}', github.event.pull_request.user.login)] }}
           # Tag mode: the action opens the Claude comment the summary is written into.
